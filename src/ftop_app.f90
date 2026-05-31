@@ -43,7 +43,10 @@ module ftop_app
 
   integer, parameter :: DEFAULT_ROWS = 24
   integer, parameter :: DEFAULT_COLUMNS = 80
-  integer, parameter :: REFRESH_TIMEOUT_MS = 100
+  integer, parameter :: DEFAULT_REFRESH_MS = 1000
+  integer, parameter :: MIN_REFRESH_MS = 100
+  integer, parameter :: MAX_REFRESH_MS = 60000
+  character(len=*), parameter :: DEBUG_LOG_PATH = "ftop-debug.log"
 
   type :: terminal_session
     type(termios_guard) :: guard
@@ -51,19 +54,27 @@ module ftop_app
     type(screen_buffer) :: previous
     type(key_decoder_state) :: decoder
     character(len=:), allocatable :: status_text
+    integer :: refresh_ms = DEFAULT_REFRESH_MS
+    integer :: frame_count = 0
+    integer :: last_refresh_count = 0
+    integer :: clock_rate = 0
     logical :: guard_bound = .false.
     logical :: terminal_started = .false.
     logical :: running = .true.
     logical :: needs_full_render = .true.
+    logical :: dirty = .true.
   end type terminal_session
 
   public :: run_ftop
 
 contains
 
-  integer function run_ftop() result(status)
+  integer function run_ftop(refresh_ms) result(status)
+    integer, intent(in), optional :: refresh_ms
     type(terminal_session) :: session
     type(terminal_read_result) :: input
+
+    if (present(refresh_ms)) session%refresh_ms = bounded_refresh_ms(refresh_ms)
 
     status = start_terminal_session(session)
     if (status /= 0) then
@@ -76,7 +87,7 @@ contains
       call handle_pending_signals(session)
       if (.not. session%running) exit
 
-      input = read_terminal_input(REFRESH_TIMEOUT_MS)
+      input = read_terminal_input(poll_timeout_ms(session))
       if (input%failed) then
         call set_status(session, "input read failed: errno=" // integer_text(input%error_code))
         session%running = .false.
@@ -85,7 +96,8 @@ contains
       end if
 
       call handle_pending_signals(session)
-      call render_session(session)
+      if (refresh_due(session)) call mark_refresh(session)
+      if (session%dirty) call render_session(session)
     end do
 
     call stop_terminal_session(session)
@@ -97,6 +109,7 @@ contains
     status = 0
     session%decoder = clear_decoder_state()
     call set_status(session, "ready")
+    call initialize_refresh_timer(session)
 
     call bind_guard(session%guard)
     if (session%guard%last_error_code /= FGOF_TERMIOS_ERR_NONE) then
@@ -152,6 +165,7 @@ contains
 
     call write_terminal_output(output)
     session%previous = session%current
+    session%dirty = .false.
   end subroutine render_session
 
   subroutine draw_frame(session)
@@ -163,6 +177,7 @@ contains
     integer :: height
     integer :: title_col
     integer :: body_row
+    character(len=:), allocatable :: refresh_text
 
     width = session%current%size%width
     height = session%current%size%height
@@ -200,6 +215,8 @@ contains
                   "q/Ctrl+C quit", dim_style)
     call put_text(session%current, body_row + 2, centered_col(width, "Ctrl+Z suspend"), &
                   "Ctrl+Z suspend", dim_style)
+    refresh_text = "refresh " // integer_text(session%refresh_ms) // "ms frame " // integer_text(session%frame_count)
+    call put_text(session%current, height - 2, 3, refresh_text, dim_style)
     call put_text(session%current, height - 1, 3, session%status_text, dim_style)
   end subroutine draw_frame
 
@@ -289,14 +306,20 @@ contains
     type(terminal_session), intent(inout) :: session
     character(len=*), intent(in) :: bytes
     type(key_event) :: event
+    character(len=:), allocatable :: input_bytes
     character(len=:), allocatable :: mouse_message
+    character(len=:), allocatable :: remaining_bytes
 
-    if (describe_sgr_mouse(bytes, mouse_message)) then
+    input_bytes = bytes
+    do while (len(input_bytes) > 0)
+      if (.not. describe_sgr_mouse(input_bytes, mouse_message, remaining_bytes)) exit
+      call log_debug(mouse_message)
       call set_status(session, mouse_message)
-      return
-    end if
+      input_bytes = remaining_bytes
+    end do
+    if (len(input_bytes) == 0) return
 
-    call buffer_input(session%decoder, bytes)
+    call buffer_input(session%decoder, input_bytes)
     do while (has_pending_input(session%decoder))
       event = decode_next_event(session%decoder)
       if (event%incomplete) exit
@@ -418,6 +441,7 @@ contains
     session%current = allocate_screen(columns, rows)
     session%previous = allocate_screen(columns, rows)
     session%needs_full_render = .true.
+    session%dirty = .true.
   end subroutine resize_session_to_terminal
 
   subroutine set_status(session, message)
@@ -425,7 +449,74 @@ contains
     character(len=*), intent(in) :: message
 
     session%status_text = trim(message)
+    session%dirty = .true.
   end subroutine set_status
+
+  subroutine initialize_refresh_timer(session)
+    type(terminal_session), intent(inout) :: session
+
+    call system_clock(session%last_refresh_count, session%clock_rate)
+    session%frame_count = 0
+  end subroutine initialize_refresh_timer
+
+  logical function refresh_due(session) result(due)
+    type(terminal_session), intent(in) :: session
+
+    due = elapsed_since_refresh_ms(session) >= session%refresh_ms
+  end function refresh_due
+
+  subroutine mark_refresh(session)
+    type(terminal_session), intent(inout) :: session
+
+    session%frame_count = session%frame_count + 1
+    call system_clock(session%last_refresh_count)
+    session%dirty = .true.
+  end subroutine mark_refresh
+
+  integer function poll_timeout_ms(session) result(timeout_ms)
+    type(terminal_session), intent(in) :: session
+
+    integer :: remaining_ms
+
+    if (session%dirty) then
+      timeout_ms = 0
+      return
+    end if
+
+    remaining_ms = session%refresh_ms - elapsed_since_refresh_ms(session)
+    timeout_ms = max(0, remaining_ms)
+  end function poll_timeout_ms
+
+  integer function elapsed_since_refresh_ms(session) result(elapsed_ms)
+    type(terminal_session), intent(in) :: session
+    integer :: now_count
+
+    if (session%clock_rate <= 0) then
+      elapsed_ms = session%refresh_ms
+      return
+    end if
+
+    call system_clock(now_count)
+    elapsed_ms = int((real(now_count - session%last_refresh_count) / real(session%clock_rate)) * 1000.0)
+    elapsed_ms = max(0, elapsed_ms)
+  end function elapsed_since_refresh_ms
+
+  integer function bounded_refresh_ms(refresh_ms) result(bounded)
+    integer, intent(in) :: refresh_ms
+
+    bounded = max(MIN_REFRESH_MS, min(MAX_REFRESH_MS, refresh_ms))
+  end function bounded_refresh_ms
+
+  subroutine log_debug(message)
+    character(len=*), intent(in) :: message
+    integer :: unit
+    integer :: status
+
+    open(newunit=unit, file=DEBUG_LOG_PATH, status="unknown", position="append", action="write", iostat=status)
+    if (status /= 0) return
+    write(unit, '(a)', iostat=status) trim(message)
+    close(unit)
+  end subroutine log_debug
 
   subroutine print_terminal_error(prefix, message)
     character(len=*), intent(in) :: prefix
@@ -438,9 +529,10 @@ contains
     end if
   end subroutine print_terminal_error
 
-  logical function describe_sgr_mouse(bytes, message) result(found)
+  logical function describe_sgr_mouse(bytes, message, remaining) result(found)
     character(len=*), intent(in) :: bytes
     character(len=:), allocatable, intent(out) :: message
+    character(len=:), allocatable, intent(out) :: remaining
     integer :: start_index
     integer :: end_index
     integer :: i
@@ -453,6 +545,7 @@ contains
 
     found = .false.
     message = ""
+    remaining = bytes
     start_index = index(bytes, achar(27) // "[<")
     if (start_index == 0) return
 
@@ -471,6 +564,7 @@ contains
 
     pressed = bytes(end_index:end_index) == "M"
     message = mouse_event_text(code, row, col, pressed)
+    remaining = bytes(:start_index - 1) // bytes(end_index + 1:)
     found = .true.
   end function describe_sgr_mouse
 

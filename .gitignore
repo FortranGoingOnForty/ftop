@@ -25,3 +25,6 @@
 # Local agent instructions
 /AGENTS.md
 /CLAUDE.md
+
+# Runtime debug logs
+/ftop-debug.log

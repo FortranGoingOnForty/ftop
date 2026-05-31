@@ -13,9 +13,9 @@ A running main loop that enters raw mode, clears the screen, draws a bordered bo
   - [x] Enable alternate screen buffer (`\e[?1049h`)
   - [x] Hide cursor (`\e[?25l`)
   - [x] Enable mouse tracking (`\e[?1000h` / `\e[?1006h` SGR mouse mode)
-- [ ] Main event loop skeleton
+- [x] Main event loop skeleton
   - [x] Non-blocking input read with timeout (select/poll via C shim or fgof-termios)
-  - [ ] Timer-driven refresh (configurable interval, default 1000ms)
+  - [x] Timer-driven refresh (configurable interval, default 1000ms)
   - [x] SIGWINCH handler for terminal resize
   - [x] SIGINT/SIGTERM handler for clean exit
   - [x] Clean shutdown sequence (restore terminal, show cursor, exit alternate screen)
@@ -28,11 +28,11 @@ A running main loop that enters raw mode, clears the screen, draws a bordered bo
   - [x] Decode key events from raw bytes
   - [x] Handle basic keys: q (quit), arrow keys, Enter, Escape
   - [x] Handle Ctrl+C as clean exit
-- [ ] Mouse input
+- [x] Mouse input
   - [x] Parse SGR mouse events from terminal
   - [x] Decode button, position, modifiers
-  - [ ] Log mouse events (for debugging; wiring to widgets comes later)
-- [ ] Basic ANSI rendering primitives
+  - [x] Log mouse events (for debugging; wiring to widgets comes later)
+- [x] Basic ANSI rendering primitives
   - [x] Box drawing (single-line and double-line Unicode borders)
   - [x] Foreground/background color setting (truecolor: `\e[38;2;r;g;bm`)
   - [x] Text positioning (`\e[row;colH`)
@@ -76,5 +76,6 @@ A running main loop that enters raw mode, clears the screen, draws a bordered bo
 - fgof-keys already handles CSI/SS3 decoding. Extend it if needed for mouse events rather than writing a separate parser.
 - SIGTSTP/SIGCONT handling is critical for a well-behaved TUI. btop handles this; htop handles this. We must too.
 - Unicode box drawing is part of Sprint 01, not deferred; fgof-screen now preserves UTF-8 cell glyphs for box characters.
-- Mouse events are decoded into the status line for now; add a real debug log before checking the logging target.
+- Mouse events are decoded into the status line and appended to `ftop-debug.log` for debugging.
 - Truecolor foreground/background and common style attributes are supported in fgof-screen and used by the Sprint 01 frame.
+- Refresh cadence defaults to 1000ms and can be changed with `--refresh-ms N`.
