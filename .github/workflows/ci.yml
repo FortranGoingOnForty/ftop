@@ -1,0 +1,169 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - trunk
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  FGOF_DEPENDENCIES: >-
+    fgof-temp fgof-pty fgof-screen fgof-termios fgof-keys fgof-lineedit
+    fgof-fs fgof-process fgof-watch fgof-state fgof-cache fgof-expect
+
+jobs:
+  linux:
+    name: Linux gfortran-${{ matrix.gfortran }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        gfortran:
+          - "12"
+          - latest
+
+    steps:
+      - name: Check out ftop
+        uses: actions/checkout@v4
+        with:
+          path: ftop
+
+      - name: Check out fgof dependencies
+        run: |
+          set -eu
+          dependency_ref="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
+          for repo in ${FGOF_DEPENDENCIES}; do
+            url="https://github.com/${GITHUB_REPOSITORY_OWNER}/${repo}.git"
+            if git ls-remote --exit-code --heads "${url}" "${dependency_ref}" >/dev/null 2>&1; then
+              ref="${dependency_ref}"
+            else
+              ref="trunk"
+            fi
+            git clone --depth 1 --branch "${ref}" "${url}" "${repo}"
+          done
+
+      - name: Set up Fortran toolchain
+        uses: fortran-lang/setup-fortran@v1
+        with:
+          compiler: gcc
+          version: ${{ matrix.gfortran }}
+
+      - name: Show tool versions
+        run: |
+          cmake --version
+          "${FC}" --version
+          "${CC}" --version
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DFTOP_FGOF_ROOT="${GITHUB_WORKSPACE}"
+        working-directory: ftop
+
+      - name: Build
+        run: cmake --build build
+        working-directory: ftop
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+        working-directory: ftop
+
+      - name: Smoke run
+        run: ./build/bin/ftop --version
+        working-directory: ftop
+
+  macos:
+    name: macOS gfortran-latest
+    runs-on: macos-latest
+
+    steps:
+      - name: Check out ftop
+        uses: actions/checkout@v4
+        with:
+          path: ftop
+
+      - name: Check out fgof dependencies
+        run: |
+          set -eu
+          dependency_ref="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
+          for repo in ${FGOF_DEPENDENCIES}; do
+            url="https://github.com/${GITHUB_REPOSITORY_OWNER}/${repo}.git"
+            if git ls-remote --exit-code --heads "${url}" "${dependency_ref}" >/dev/null 2>&1; then
+              ref="${dependency_ref}"
+            else
+              ref="trunk"
+            fi
+            git clone --depth 1 --branch "${ref}" "${url}" "${repo}"
+          done
+
+      - name: Set up Fortran toolchain
+        uses: fortran-lang/setup-fortran@v1
+        with:
+          compiler: gcc
+          version: latest
+
+      - name: Show tool versions
+        run: |
+          cmake --version
+          "${FC}" --version
+          "${CC}" --version
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DFTOP_FGOF_ROOT="${GITHUB_WORKSPACE}"
+        working-directory: ftop
+
+      - name: Build
+        run: cmake --build build
+        working-directory: ftop
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+        working-directory: ftop
+
+      - name: Smoke run
+        run: ./build/bin/ftop --version
+        working-directory: ftop
+
+  freebsd:
+    name: FreeBSD gfortran
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out ftop
+        uses: actions/checkout@v4
+        with:
+          path: ftop
+
+      - name: Check out fgof dependencies
+        run: |
+          set -eu
+          dependency_ref="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
+          for repo in ${FGOF_DEPENDENCIES}; do
+            url="https://github.com/${GITHUB_REPOSITORY_OWNER}/${repo}.git"
+            if git ls-remote --exit-code --heads "${url}" "${dependency_ref}" >/dev/null 2>&1; then
+              ref="${dependency_ref}"
+            else
+              ref="trunk"
+            fi
+            git clone --depth 1 --branch "${ref}" "${url}" "${repo}"
+          done
+
+      - name: Build and test on FreeBSD
+        uses: vmactions/freebsd-vm@v1
+        with:
+          usesh: true
+          prepare: |
+            pkg install -y cmake gcc git
+          run: |
+            set -eu
+            export FC="$(command -v gfortran || command -v gfortran15 || command -v gfortran14 || command -v gfortran13 || command -v gfortran12)"
+            export CC="$(command -v gcc || command -v gcc15 || command -v gcc14 || command -v gcc13 || command -v gcc12)"
+            cmake --version
+            "${FC}" --version
+            "${CC}" --version
+            cd "${GITHUB_WORKSPACE}/ftop"
+            cmake -B build -DCMAKE_BUILD_TYPE=Release -DFTOP_FGOF_ROOT="${GITHUB_WORKSPACE}"
+            cmake --build build
+            ctest --test-dir build --output-on-failure
+            ./build/bin/ftop --version
