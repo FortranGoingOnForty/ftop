@@ -18,6 +18,7 @@ program test_graph
   call test_area_fill_rendering()
   call test_gradient_style()
   call test_axis_and_grid_rendering()
+  call test_empty_series_rendering()
   call test_graph_widget_type()
 
 contains
@@ -88,6 +89,18 @@ contains
     call require_glyph(buffer, 1, 7, "│", "graph axis line mismatch")
     call require(buffer%cells(1, 9)%style%dim, "graph grid style must be dim")
   end subroutine test_axis_and_grid_rendering
+
+  subroutine test_empty_series_rendering()
+    type(screen_buffer) :: buffer
+    type(graph_series) :: series(1)
+
+    buffer = allocate_screen(2, 1)
+    allocate(series(1)%values(0))
+    call render_graph_series(buffer, widget_rect(row=1, col=1, width=2, height=1), series)
+
+    call require_glyph(buffer, 1, 1, " ", "empty graph series first cell mismatch")
+    call require_glyph(buffer, 1, 2, " ", "empty graph series second cell mismatch")
+  end subroutine test_empty_series_rendering
 
   subroutine test_graph_widget_type()
     type(graph_series) :: series(2)

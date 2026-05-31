@@ -29,6 +29,7 @@ program test_widgets
   call test_text_rendering()
   call test_text_widget_type()
   call test_box_rendering()
+  call test_tiny_box_rendering()
   call test_box_helpers()
 
 contains
@@ -139,6 +140,19 @@ contains
     call require_glyph(buffer, 1, 5, "I", "right-aligned title first glyph mismatch")
     call require_glyph(buffer, 1, 6, "O", "right-aligned title final glyph mismatch")
   end subroutine test_box_rendering
+
+  subroutine test_tiny_box_rendering()
+    type(screen_buffer) :: buffer
+
+    buffer = allocate_screen(1, 1)
+    call draw_box(buffer, widget_rect(row=1, col=1, width=1, height=1), BOX_STYLE_ROUNDED)
+    call require_glyph(buffer, 1, 1, "─", "single-cell box glyph mismatch")
+
+    buffer = allocate_screen(1, 3)
+    call draw_box(buffer, widget_rect(row=1, col=1, width=1, height=3), BOX_STYLE_ROUNDED)
+    call require_glyph(buffer, 1, 1, "│", "single-column box top glyph mismatch")
+    call require_glyph(buffer, 3, 1, "│", "single-column box bottom glyph mismatch")
+  end subroutine test_tiny_box_rendering
 
   subroutine test_box_helpers()
     type(box_widget) :: box

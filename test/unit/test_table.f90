@@ -23,6 +23,7 @@ program test_table
 
   call test_width_calculation()
   call test_header_and_alignment_rendering()
+  call test_zero_width_column_rendering()
   call test_scroll_selection_and_striping()
   call test_sorting_rows()
   call test_table_widget_type()
@@ -87,6 +88,32 @@ contains
     call require_glyph(buffer, 2, 9, "4", "table right-aligned cell first glyph mismatch")
     call require_glyph(buffer, 2, 10, "2", "table right-aligned cell final glyph mismatch")
   end subroutine test_header_and_alignment_rendering
+
+  subroutine test_zero_width_column_rendering()
+    type(screen_buffer) :: buffer
+    type(table_cell), allocatable :: cells(:, :)
+    type(table_column) :: columns(2)
+    integer, allocatable :: widths(:)
+
+    buffer = allocate_screen(2, 1)
+    columns(1)%name = "Hidden"
+    columns(1)%width_mode = TABLE_WIDTH_FIXED
+    columns(1)%width = 0
+    columns(2)%name = "B"
+    columns(2)%width_mode = TABLE_WIDTH_FIXED
+    columns(2)%width = 1
+
+    allocate(cells(1, 2))
+    cells(1, 1) = make_table_cell("skip")
+    cells(1, 2) = make_table_cell("x")
+
+    call calculate_column_widths(columns, cells, 2, TABLE_SEPARATOR_THIN, widths)
+    call require(all(widths == [0, 1]), "zero-width table column calculation mismatch")
+    call render_table(buffer, widget_rect(row=1, col=1, width=2, height=1), columns, cells, &
+                      separator=TABLE_SEPARATOR_THIN)
+    call require_glyph(buffer, 1, 1, "│", "zero-width table separator mismatch")
+    call require_glyph(buffer, 1, 2, "B", "zero-width table visible header mismatch")
+  end subroutine test_zero_width_column_rendering
 
   subroutine test_scroll_selection_and_striping()
     type(screen_buffer) :: buffer

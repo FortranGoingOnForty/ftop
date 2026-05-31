@@ -1,7 +1,7 @@
 module ftop_sparkline
   use fgof_screen, only : clear_screen_style, put_glyph
   use fgof_screen_types, only : screen_buffer, screen_style
-  use ftop_color, only : color_gradient, gradient_color
+  use ftop_color, only : color_gradient, style_with_gradient
   use ftop_widgets, only : widget, widget_rect, widget_size
   implicit none
   private
@@ -59,7 +59,7 @@ contains
       glyph = sparkline_glyph(normalized)
       active_style = clear_screen_style()
       if (present(style)) active_style = style
-      if (present(gradient)) call apply_gradient(active_style, gradient, normalized)
+      if (present(gradient)) active_style = style_with_gradient(active_style, gradient, normalized)
       call put_glyph(buffer, rect%row, rect%col + i - 1, glyph, active_style)
     end do
   end subroutine render_sparkline
@@ -129,18 +129,6 @@ contains
       size_value%width = 1
     end if
   end function sparkline_widget_min_size
-
-  subroutine apply_gradient(style, gradient, value)
-    type(screen_style), intent(inout) :: style
-    type(color_gradient), intent(in) :: gradient
-    real, intent(in) :: value
-
-    if (.not. allocated(gradient%stops)) return
-    style%fg_truecolor = .true.
-    associate(color => gradient_color(gradient, value))
-      style%fg_rgb = [color%r, color%g, color%b]
-    end associate
-  end subroutine apply_gradient
 
   real function normalized_value(value, min_value, max_value) result(normalized)
     real, intent(in) :: value

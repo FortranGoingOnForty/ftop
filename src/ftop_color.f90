@@ -48,6 +48,7 @@ module ftop_color
   public :: rgb
   public :: rgb_to_ansi256
   public :: style_from_rgb
+  public :: style_with_gradient
 
 contains
 
@@ -172,6 +173,20 @@ contains
     end if
     if (present(bold)) style%bold = bold
   end function style_from_rgb
+
+  function style_with_gradient(base_style, gradient, value) result(style)
+    type(screen_style), intent(in) :: base_style
+    type(color_gradient), intent(in) :: gradient
+    real, intent(in) :: value
+    type(screen_style) :: style
+
+    style = base_style
+    if (.not. allocated(gradient%stops)) return
+    associate(color => gradient_color(gradient, value))
+      style%fg_truecolor = .true.
+      style%fg_rgb = [color%r, color%g, color%b]
+    end associate
+  end function style_with_gradient
 
   elemental integer function clamp_channel(value) result(clamped)
     integer, intent(in) :: value

@@ -1,7 +1,7 @@
 module ftop_meter
   use fgof_screen, only : clear_screen_style, put_glyph
   use fgof_screen_types, only : screen_buffer, screen_style
-  use ftop_color, only : color_gradient, gradient_color
+  use ftop_color, only : color_gradient, style_with_gradient
   use ftop_text, only : TEXT_ALIGN_CENTER, render_text
   use ftop_widgets, only : widget, widget_rect, widget_size
   implicit none
@@ -73,7 +73,7 @@ contains
     if (present(fill_style)) active_fill_style = fill_style
     if (present(empty_style)) active_empty_style = empty_style
     if (present(label_style)) active_label_style = label_style
-    if (present(gradient)) call apply_gradient(active_fill_style, gradient, clamped_value)
+    if (present(gradient)) active_fill_style = style_with_gradient(active_fill_style, gradient, clamped_value)
 
     bar_col = rect%col
     bar_width = rect%width
@@ -174,18 +174,6 @@ contains
       size_value%width = max(2, label_width + 2)
     end if
   end function meter_widget_min_size
-
-  subroutine apply_gradient(style, gradient, value)
-    type(screen_style), intent(inout) :: style
-    type(color_gradient), intent(in) :: gradient
-    real, intent(in) :: value
-
-    if (.not. allocated(gradient%stops)) return
-    style%fg_truecolor = .true.
-    associate(color => gradient_color(gradient, value))
-      style%fg_rgb = [color%r, color%g, color%b]
-    end associate
-  end subroutine apply_gradient
 
   real function shaded_cell_fraction(value, cell_index, width) result(fraction)
     real, intent(in) :: value

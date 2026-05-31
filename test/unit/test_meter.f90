@@ -16,6 +16,7 @@ program test_meter
   call test_block_meter_rendering()
   call test_shaded_meter_rendering()
   call test_label_overlay()
+  call test_tiny_meter_edges()
   call test_meter_widget_type()
 
 contains
@@ -84,6 +85,21 @@ contains
     call require_glyph(buffer, 1, 5, "%", "meter label third glyph mismatch")
     call require(buffer%cells(1, 3)%style%underline, "meter label style must be applied")
   end subroutine test_label_overlay
+
+  subroutine test_tiny_meter_edges()
+    type(screen_buffer) :: buffer
+
+    buffer = allocate_screen(1, 1)
+    call render_meter(buffer, widget_rect(row=1, col=1, width=1, height=1), 1.0, compact=.false.)
+    call require_glyph(buffer, 1, 1, "█", "single-cell meter must render fill")
+
+    buffer = allocate_screen(1, 1)
+    call render_meter(buffer, widget_rect(row=1, col=1, width=0, height=1), 1.0)
+    call require_glyph(buffer, 1, 1, " ", "zero-width meter must not render")
+
+    call render_meter(buffer, widget_rect(row=1, col=1, width=1, height=0), 1.0)
+    call require_glyph(buffer, 1, 1, " ", "zero-height meter must not render")
+  end subroutine test_tiny_meter_edges
 
   subroutine test_meter_widget_type()
     type(screen_buffer) :: buffer

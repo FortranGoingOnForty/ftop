@@ -14,7 +14,8 @@ program test_color
     rgb, &
     rgb_color, &
     rgb_to_ansi256, &
-    style_from_rgb
+    style_from_rgb, &
+    style_with_gradient
   implicit none
 
   call test_rgb_clamps_channels()
@@ -23,6 +24,7 @@ program test_color
   call test_gradient_presets()
   call test_ansi256_mapping()
   call test_style_from_rgb()
+  call test_style_with_gradient()
   call test_named_colors()
 
 contains
@@ -94,6 +96,20 @@ contains
     call require(all(style%bg_rgb == [4, 5, 6]), "style background RGB mismatch")
     call require(style%bold, "style bold flag mismatch")
   end subroutine test_style_from_rgb
+
+  subroutine test_style_with_gradient()
+    type(color_gradient) :: gradient
+    type(screen_style) :: base_style
+    type(screen_style) :: style
+
+    base_style%bold = .true.
+    gradient = gradient_green_yellow_red()
+    style = style_with_gradient(base_style, gradient, 0.50)
+
+    call require(style%bold, "gradient style must preserve base style")
+    call require(style%fg_truecolor, "gradient style must set truecolor foreground")
+    call require(all(style%fg_rgb == [241, 196, 15]), "gradient style RGB mismatch")
+  end subroutine test_style_with_gradient
 
   subroutine test_named_colors()
     call require_color(COLOR_BRIGHT_WHITE, 255, 255, 255, "bright white mismatch")

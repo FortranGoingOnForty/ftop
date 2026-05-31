@@ -1,7 +1,7 @@
 module ftop_graph
   use fgof_screen, only : clear_screen_style, put_glyph
   use fgof_screen_types, only : screen_buffer, screen_style
-  use ftop_color, only : color_gradient, gradient_color
+  use ftop_color, only : color_gradient, style_with_gradient
   use ftop_text, only : TEXT_ALIGN_RIGHT, render_text
   use ftop_widgets, only : widget, widget_rect, widget_size
   implicit none
@@ -334,10 +334,7 @@ contains
     else
       vertical_position = 1.0 - real(cell_row - 1) / real(height - 1)
     end if
-    associate(color => gradient_color(series%gradient, vertical_position))
-      style%fg_truecolor = .true.
-      style%fg_rgb = [color%r, color%g, color%b]
-    end associate
+    style = style_with_gradient(style, series%gradient, vertical_position)
   end function graph_cell_style
 
   subroutine draw_y_axis(buffer, rect, min_value, max_value, style)
