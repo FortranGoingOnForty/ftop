@@ -216,6 +216,8 @@ contains
       info%valid = .true.
       info%total_bytes = int(total_bytes, int64)
       info%available_bytes = int(max(0_c_long_long, min(total_bytes, available_bytes)), int64)
+      info%used_bytes = max(0_int64, info%total_bytes - info%available_bytes)
+      info%free_bytes = info%available_bytes
     end if
   end function freebsd_get_memory_info
 

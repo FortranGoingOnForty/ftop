@@ -17,7 +17,13 @@ module ftop_platform_types
   type :: memory_info
     logical :: valid = .false.
     integer(int64) :: total_bytes = 0_int64
+    integer(int64) :: used_bytes = 0_int64
+    integer(int64) :: free_bytes = 0_int64
     integer(int64) :: available_bytes = 0_int64
+    integer(int64) :: cached_bytes = 0_int64
+    integer(int64) :: buffers_bytes = 0_int64
+    integer(int64) :: swap_total_bytes = 0_int64
+    integer(int64) :: swap_used_bytes = 0_int64
   end type memory_info
 
   type, abstract :: platform_backend

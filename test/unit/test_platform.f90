@@ -35,8 +35,17 @@ program test_platform
   memory = backend%get_memory_info()
   if (.not. memory%valid) error stop "memory info must be valid"
   if (memory%total_bytes <= 0) error stop "total memory must be positive"
+  if (memory%used_bytes < 0) error stop "used memory must not be negative"
+  if (memory%free_bytes < 0) error stop "free memory must not be negative"
   if (memory%available_bytes < 0) error stop "available memory must not be negative"
+  if (memory%cached_bytes < 0) error stop "cached memory must not be negative"
+  if (memory%buffers_bytes < 0) error stop "buffer memory must not be negative"
+  if (memory%swap_total_bytes < 0) error stop "swap total memory must not be negative"
+  if (memory%swap_used_bytes < 0) error stop "swap used memory must not be negative"
+  if (memory%used_bytes > memory%total_bytes) error stop "used memory must not exceed total"
+  if (memory%free_bytes > memory%total_bytes) error stop "free memory must not exceed total"
   if (memory%available_bytes > memory%total_bytes) error stop "available memory must not exceed total"
+  if (memory%swap_used_bytes > memory%swap_total_bytes) error stop "swap used memory must not exceed swap total"
 
 contains
 

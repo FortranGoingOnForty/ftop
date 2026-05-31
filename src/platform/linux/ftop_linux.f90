@@ -142,7 +142,13 @@ contains
     if (linux_memory_snapshot(metric_memory) .and. metric_memory%valid) then
       info%valid = .true.
       info%total_bytes = metric_memory%total_bytes
+      info%used_bytes = metric_memory%used_bytes
+      info%free_bytes = metric_memory%free_bytes
       info%available_bytes = metric_memory%available_bytes
+      info%cached_bytes = metric_memory%cached_bytes
+      info%buffers_bytes = metric_memory%buffers_bytes
+      info%swap_total_bytes = metric_memory%swap_total_bytes
+      info%swap_used_bytes = metric_memory%swap_used_bytes
     end if
   end function linux_get_memory_info
 

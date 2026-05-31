@@ -44,7 +44,13 @@ module ftop_collector
     real(c_double) :: cpu_usage_percent
     integer(c_int) :: memory_valid
     integer(c_long_long) :: memory_total_bytes
+    integer(c_long_long) :: memory_used_bytes
+    integer(c_long_long) :: memory_free_bytes
     integer(c_long_long) :: memory_available_bytes
+    integer(c_long_long) :: memory_cached_bytes
+    integer(c_long_long) :: memory_buffers_bytes
+    integer(c_long_long) :: memory_swap_total_bytes
+    integer(c_long_long) :: memory_swap_used_bytes
     integer(c_int) :: history_start
     integer(c_int) :: history_count
     real(c_double) :: cpu_usage_history(FTOP_COLLECTOR_HISTORY_CAPACITY)
@@ -188,9 +194,13 @@ contains
     snapshot%cpu_total%thread_count = int(self%state%cpu_count)
     snapshot%memory%valid = self%state%memory_valid /= 0_c_int
     snapshot%memory%total_bytes = int(self%state%memory_total_bytes, int64)
+    snapshot%memory%used_bytes = int(self%state%memory_used_bytes, int64)
+    snapshot%memory%free_bytes = int(self%state%memory_free_bytes, int64)
     snapshot%memory%available_bytes = int(self%state%memory_available_bytes, int64)
-    snapshot%memory%used_bytes = max(0_int64, snapshot%memory%total_bytes - snapshot%memory%available_bytes)
-    snapshot%memory%free_bytes = snapshot%memory%available_bytes
+    snapshot%memory%cached_bytes = int(self%state%memory_cached_bytes, int64)
+    snapshot%memory%buffers_bytes = int(self%state%memory_buffers_bytes, int64)
+    snapshot%memory%swap_total_bytes = int(self%state%memory_swap_total_bytes, int64)
+    snapshot%memory%swap_used_bytes = int(self%state%memory_swap_used_bytes, int64)
     if (.not. copy_history(self%state, snapshot)) then
       call clear_snapshot(snapshot)
       call ignore_mutex_unlock(self%mutex)
@@ -282,7 +292,13 @@ contains
     state%cpu_usage_percent = 0.0_c_double
     state%memory_valid = 0_c_int
     state%memory_total_bytes = 0_c_long_long
+    state%memory_used_bytes = 0_c_long_long
+    state%memory_free_bytes = 0_c_long_long
     state%memory_available_bytes = 0_c_long_long
+    state%memory_cached_bytes = 0_c_long_long
+    state%memory_buffers_bytes = 0_c_long_long
+    state%memory_swap_total_bytes = 0_c_long_long
+    state%memory_swap_used_bytes = 0_c_long_long
     state%history_start = 1_c_int
     state%history_count = 0_c_int
     state%cpu_usage_history = 0.0_c_double
@@ -300,7 +316,13 @@ contains
     state%cpu_usage_percent = 0.0_c_double
     state%memory_valid = 0_c_int
     state%memory_total_bytes = 0_c_long_long
+    state%memory_used_bytes = 0_c_long_long
+    state%memory_free_bytes = 0_c_long_long
     state%memory_available_bytes = 0_c_long_long
+    state%memory_cached_bytes = 0_c_long_long
+    state%memory_buffers_bytes = 0_c_long_long
+    state%memory_swap_total_bytes = 0_c_long_long
+    state%memory_swap_used_bytes = 0_c_long_long
     state%history_start = 1_c_int
     state%history_count = 0_c_int
     state%cpu_usage_history = 0.0_c_double
@@ -458,7 +480,13 @@ contains
     state%sample_count = state%sample_count + 1_c_int
     state%memory_valid = merge(1_c_int, 0_c_int, memory%valid)
     state%memory_total_bytes = int(max(0_int64, memory%total_bytes), c_long_long)
+    state%memory_used_bytes = int(clamp_memory_value(memory%used_bytes, memory%total_bytes), c_long_long)
+    state%memory_free_bytes = int(clamp_memory_value(memory%free_bytes, memory%total_bytes), c_long_long)
     state%memory_available_bytes = int(max(0_int64, min(memory%total_bytes, memory%available_bytes)), c_long_long)
+    state%memory_cached_bytes = int(clamp_memory_value(memory%cached_bytes, memory%total_bytes), c_long_long)
+    state%memory_buffers_bytes = int(clamp_memory_value(memory%buffers_bytes, memory%total_bytes), c_long_long)
+    state%memory_swap_total_bytes = int(max(0_int64, memory%swap_total_bytes), c_long_long)
+    state%memory_swap_used_bytes = int(clamp_memory_value(memory%swap_used_bytes, memory%swap_total_bytes), c_long_long)
     call append_history(state, real(state%cpu_usage_percent, real64), memory_usage_percent(memory))
 
     if (.not. ftop_mutex_unlock(mutex)) return
@@ -489,10 +517,17 @@ contains
     usage_percent = 0.0_real64
     if (.not. memory%valid) return
     if (memory%total_bytes <= 0_int64) return
-    used_bytes = max(0_int64, memory%total_bytes - memory%available_bytes)
+    used_bytes = clamp_memory_value(memory%used_bytes, memory%total_bytes)
     usage_percent = 100.0_real64 * real(used_bytes, real64) / real(memory%total_bytes, real64)
     usage_percent = max(0.0_real64, min(100.0_real64, usage_percent))
   end function memory_usage_percent
+
+  integer(int64) function clamp_memory_value(value, limit) result(clamped)
+    integer(int64), intent(in) :: value
+    integer(int64), intent(in) :: limit
+
+    clamped = max(0_int64, min(max(0_int64, limit), value))
+  end function clamp_memory_value
 
   subroutine ignore_mutex_unlock(mutex)
     type(ftop_mutex_handle), intent(in) :: mutex
