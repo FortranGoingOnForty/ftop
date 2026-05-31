@@ -20,7 +20,7 @@ module ftop_platform_types
     integer(int64) :: available_bytes = 0_int64
   end type memory_info
 
-  type, abstract, public :: platform_backend
+  type, abstract :: platform_backend
   contains
     procedure(get_cpu_count_interface), deferred :: get_cpu_count
     procedure(get_cpu_sample_interface), deferred :: get_cpu_sample

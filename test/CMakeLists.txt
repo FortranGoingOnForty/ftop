@@ -38,6 +38,20 @@ if(FTOP_PLATFORM STREQUAL "freebsd")
   add_test(NAME ftop_freebsd_devstat COMMAND ftop_freebsd_devstat_test)
 endif()
 
+if(FTOP_PLATFORM STREQUAL "linux")
+  add_executable(ftop_linux_platform_test unit/test_linux_platform.f90)
+  target_link_libraries(ftop_linux_platform_test PRIVATE ftop_core)
+
+  add_test(NAME ftop_linux_platform COMMAND ftop_linux_platform_test)
+endif()
+
+if(FTOP_PLATFORM STREQUAL "macos")
+  add_executable(ftop_macos_platform_test unit/test_macos_platform.f90)
+  target_link_libraries(ftop_macos_platform_test PRIVATE ftop_core)
+
+  add_test(NAME ftop_macos_platform COMMAND ftop_macos_platform_test)
+endif()
+
 add_executable(ftop_threaded_platform_test unit/test_threaded_platform.f90)
 target_link_libraries(ftop_threaded_platform_test PRIVATE ftop_core)
 

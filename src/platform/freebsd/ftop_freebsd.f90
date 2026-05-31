@@ -161,7 +161,7 @@ contains
   function create_platform() result(backend)
     class(platform_backend), allocatable :: backend
 
-    allocate(freebsd_backend :: backend)
+    allocate(backend, source=freebsd_backend())
   end function create_platform
 
   integer function freebsd_get_cpu_count(self) result(count)
