@@ -28,6 +28,12 @@ target_link_libraries(ftop_dl_test PRIVATE ftop_core)
 
 add_test(NAME ftop_dl COMMAND ftop_dl_test $<TARGET_FILE:ftop_dl_fixture>)
 
+add_executable(ftop_signal_test unit/test_signal.f90)
+target_link_libraries(ftop_signal_test PRIVATE ftop_core)
+
+add_test(NAME ftop_signal COMMAND ftop_signal_test)
+set_tests_properties(ftop_signal PROPERTIES TIMEOUT 5)
+
 file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/test-runtime")
 
 add_executable(

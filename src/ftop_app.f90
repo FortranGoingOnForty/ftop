@@ -25,18 +25,19 @@ module ftop_app
   use fgof_screen_types, only : screen_buffer, screen_style
   use fgof_termios, only : bind_guard, enter_raw_mode, get_terminal_size, restore_guard
   use fgof_termios_types, only : FGOF_TERMIOS_ERR_NONE, terminal_size, termios_guard
-  use ftop_terminal_io, only : &
+  use ftop_signal, only : &
     FTOP_SIGNAL_CONT, &
     FTOP_SIGNAL_INT, &
     FTOP_SIGNAL_TERM, &
     FTOP_SIGNAL_TSTP, &
     FTOP_SIGNAL_WINCH, &
+    terminal_signal_clear => ftop_signal_clear, &
+    terminal_signal_pending => ftop_signal_check, &
+    terminal_signal_setup => ftop_signal_setup, &
+    terminal_signal_suspend_self => ftop_signal_suspend_self
+  use ftop_terminal_io, only : &
     read_terminal_input, &
     terminal_read_result, &
-    terminal_signal_clear, &
-    terminal_signal_pending, &
-    terminal_signal_setup, &
-    terminal_signal_suspend_self, &
     write_terminal_output
   implicit none
   private

@@ -3,11 +3,6 @@ module ftop_terminal_io
   implicit none
   private
 
-  integer, parameter, public :: FTOP_SIGNAL_WINCH = 1
-  integer, parameter, public :: FTOP_SIGNAL_INT = 2
-  integer, parameter, public :: FTOP_SIGNAL_TERM = 3
-  integer, parameter, public :: FTOP_SIGNAL_TSTP = 4
-  integer, parameter, public :: FTOP_SIGNAL_CONT = 5
   integer, parameter :: INPUT_BUFFER_SIZE = 4096
 
   type, public :: terminal_read_result
@@ -19,31 +14,9 @@ module ftop_terminal_io
   end type terminal_read_result
 
   public :: read_terminal_input
-  public :: terminal_signal_clear
-  public :: terminal_signal_pending
-  public :: terminal_signal_setup
-  public :: terminal_signal_suspend_self
   public :: write_terminal_output
 
   interface
-    integer(c_int) function c_ftop_signal_setup() bind(C, name="ftop_signal_setup")
-      import :: c_int
-    end function c_ftop_signal_setup
-
-    integer(c_int) function c_ftop_signal_pending(signal_id) bind(C, name="ftop_signal_pending")
-      import :: c_int
-      integer(c_int), value :: signal_id
-    end function c_ftop_signal_pending
-
-    subroutine c_ftop_signal_clear(signal_id) bind(C, name="ftop_signal_clear")
-      import :: c_int
-      integer(c_int), value :: signal_id
-    end subroutine c_ftop_signal_clear
-
-    integer(c_int) function c_ftop_signal_suspend_self() bind(C, name="ftop_signal_suspend_self")
-      import :: c_int
-    end function c_ftop_signal_suspend_self
-
     integer(c_int) function c_ftop_poll_stdin(timeout_ms, sys_errno) bind(C, name="ftop_poll_stdin")
       import :: c_int
       integer(c_int), value :: timeout_ms
@@ -118,24 +91,6 @@ contains
       read_result%error_code = int(sys_errno)
     end select
   end subroutine fill_read_result
-
-  logical function terminal_signal_setup() result(success)
-    success = c_ftop_signal_setup() == 0_c_int
-  end function terminal_signal_setup
-
-  logical function terminal_signal_pending(signal_id) result(pending)
-    integer, intent(in) :: signal_id
-    pending = c_ftop_signal_pending(int(signal_id, c_int)) /= 0_c_int
-  end function terminal_signal_pending
-
-  subroutine terminal_signal_clear(signal_id)
-    integer, intent(in) :: signal_id
-    call c_ftop_signal_clear(int(signal_id, c_int))
-  end subroutine terminal_signal_clear
-
-  logical function terminal_signal_suspend_self() result(success)
-    success = c_ftop_signal_suspend_self() == 0_c_int
-  end function terminal_signal_suspend_self
 
   subroutine write_terminal_output(text)
     character(len=*), intent(in) :: text
