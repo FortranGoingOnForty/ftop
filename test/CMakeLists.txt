@@ -21,6 +21,12 @@ target_link_libraries(ftop_platform_test PRIVATE ftop_core)
 
 add_test(NAME ftop_platform COMMAND ftop_platform_test)
 
+add_executable(ftop_threaded_platform_test unit/test_threaded_platform.f90)
+target_link_libraries(ftop_threaded_platform_test PRIVATE ftop_core)
+
+add_test(NAME ftop_threaded_platform COMMAND ftop_threaded_platform_test)
+set_tests_properties(ftop_threaded_platform PROPERTIES TIMEOUT 5)
+
 add_library(ftop_dl_fixture SHARED unit/ftop_dl_fixture.c)
 
 add_executable(ftop_dl_test unit/test_dl.f90)
