@@ -1,7 +1,7 @@
 module ftop_platform
-  use, intrinsic :: iso_c_binding, only : c_char, c_int, c_long_long, c_null_char, c_size_t
-  use, intrinsic :: iso_fortran_env, only : int64
-  use ftop_platform_types, only : cpu_tick_sample, cpu_usage_percent, memory_info, platform_backend
+  use, intrinsic :: iso_c_binding, only : c_char, c_double, c_int, c_long_long, c_null_char, c_size_t
+  use, intrinsic :: iso_fortran_env, only : int64, real64
+  use ftop_platform_types, only : cpu_tick_sample, cpu_usage_percent, load_average_info, memory_info, platform_backend
   implicit none
   private
 
@@ -17,11 +17,13 @@ module ftop_platform
     procedure :: get_cpu_count => macos_get_cpu_count
     procedure :: get_cpu_sample => macos_get_cpu_sample
     procedure :: get_memory_info => macos_get_memory_info
+    procedure :: get_load_average => macos_get_load_average
   end type macos_backend
 
   public :: create_platform
   public :: cpu_tick_sample
   public :: cpu_usage_percent
+  public :: load_average_info
   public :: macos_iokit_disk_count
   public :: macos_iokit_gpu_count
   public :: macos_processor_tick_samples
@@ -54,6 +56,12 @@ module ftop_platform
       integer(c_long_long), intent(out) :: available_bytes
       integer(c_int), intent(out) :: sys_errno
     end function c_ftop_macos_memory_info
+
+    integer(c_int) function c_ftop_macos_load_average(loads, sys_errno) bind(C, name="ftop_macos_load_average")
+      import :: c_double, c_int
+      real(c_double), intent(out) :: loads(3)
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_macos_load_average
 
     integer(c_int) function c_ftop_macos_processor_ticks(ticks, capacity, processor_count, sys_errno) &
         bind(C, name="ftop_macos_processor_ticks")
@@ -177,6 +185,23 @@ contains
       info%free_bytes = info%available_bytes
     end if
   end function macos_get_memory_info
+
+  function macos_get_load_average(self) result(info)
+    class(macos_backend), intent(in) :: self
+    type(load_average_info) :: info
+    real(c_double) :: loads(3)
+    integer(c_int) :: sys_errno
+    integer(c_int) :: rc
+
+    associate(unused => self)
+    end associate
+
+    rc = c_ftop_macos_load_average(loads, sys_errno)
+    if (rc == 0_c_int .and. all(loads >= 0.0_c_double)) then
+      info%valid = .true.
+      info%values = real(loads, real64)
+    end if
+  end function macos_get_load_average
 
   logical function macos_processor_tick_samples(ticks, processor_count, error_code) result(success)
     type(macos_processor_ticks), intent(out) :: ticks(:)

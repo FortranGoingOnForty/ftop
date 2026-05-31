@@ -2,6 +2,7 @@ module ftop_platform
   use, intrinsic :: iso_c_binding, only : &
     c_associated, &
     c_char, &
+    c_double, &
     c_int, &
     c_long, &
     c_long_long, &
@@ -9,8 +10,8 @@ module ftop_platform
     c_null_ptr, &
     c_ptr, &
     c_size_t
-  use, intrinsic :: iso_fortran_env, only : int64
-  use ftop_platform_types, only : cpu_tick_sample, cpu_usage_percent, memory_info, platform_backend
+  use, intrinsic :: iso_fortran_env, only : int64, real64
+  use ftop_platform_types, only : cpu_tick_sample, cpu_usage_percent, load_average_info, memory_info, platform_backend
   implicit none
   private
 
@@ -49,6 +50,7 @@ module ftop_platform
     procedure :: get_cpu_count => freebsd_get_cpu_count
     procedure :: get_cpu_sample => freebsd_get_cpu_sample
     procedure :: get_memory_info => freebsd_get_memory_info
+    procedure :: get_load_average => freebsd_get_load_average
   end type freebsd_backend
 
   public :: create_platform
@@ -62,6 +64,7 @@ module ftop_platform
   public :: freebsd_sysctl_int
   public :: freebsd_sysctl_long
   public :: freebsd_sysctl_string
+  public :: load_average_info
   public :: memory_info
   public :: platform_backend
 
@@ -87,6 +90,12 @@ module ftop_platform
       integer(c_long_long), intent(out) :: available_bytes
       integer(c_int), intent(out) :: sys_errno
     end function c_ftop_freebsd_memory_info
+
+    integer(c_int) function c_ftop_freebsd_load_average(loads, sys_errno) bind(C, name="ftop_freebsd_load_average")
+      import :: c_double, c_int
+      real(c_double), intent(out) :: loads(3)
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_freebsd_load_average
 
     integer(c_int) function c_ftop_freebsd_sysctl_int(name, value, sys_errno) &
         bind(C, name="ftop_freebsd_sysctl_int")
@@ -220,6 +229,23 @@ contains
       info%free_bytes = info%available_bytes
     end if
   end function freebsd_get_memory_info
+
+  function freebsd_get_load_average(self) result(info)
+    class(freebsd_backend), intent(in) :: self
+    type(load_average_info) :: info
+    real(c_double) :: loads(3)
+    integer(c_int) :: sys_errno
+    integer(c_int) :: rc
+
+    associate(unused => self)
+    end associate
+
+    rc = c_ftop_freebsd_load_average(loads, sys_errno)
+    if (rc == 0_c_int .and. all(loads >= 0.0_c_double)) then
+      info%valid = .true.
+      info%values = real(loads, real64)
+    end if
+  end function freebsd_get_load_average
 
   logical function freebsd_sysctl_int(name, value, error_code) result(success)
     character(len=*), intent(in) :: name

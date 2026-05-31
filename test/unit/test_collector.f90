@@ -49,6 +49,8 @@ contains
       call require(snapshot%cpu_total%usage_percent >= 0.0_real64, "collector CPU usage must not be negative")
       call require(snapshot%cpu_total%usage_percent <= 100.0_real64, "collector CPU usage must not exceed 100")
     end if
+    call require(snapshot%cpu_total%load_valid, "collector load average must be valid")
+    call require(all(snapshot%cpu_total%load_avg >= 0.0_real64), "collector load average must not be negative")
 
     call require(metrics%stop(), "collector stop failed")
     call require(.not. metrics%running(), "collector must stop running")

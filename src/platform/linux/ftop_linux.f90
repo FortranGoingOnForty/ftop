@@ -2,15 +2,17 @@ module ftop_platform
   use, intrinsic :: iso_c_binding, only : c_char, c_int, c_null_char, c_size_t
   use, intrinsic :: iso_fortran_env, only : int64
   use ftop_cpu_data, only : cpu_state_ticks, cpu_state_total_ticks
+  use ftop_linux_loadavg, only : linux_loadavg_parse
   use ftop_linux_meminfo, only : linux_meminfo_parse
   use ftop_linux_proc_stat, only : linux_proc_stat_parse
   use ftop_mem_data, only : metric_memory_info => memory_info
-  use ftop_platform_types, only : cpu_tick_sample, cpu_usage_percent, memory_info, platform_backend
+  use ftop_platform_types, only : cpu_tick_sample, cpu_usage_percent, load_average_info, memory_info, platform_backend
   implicit none
   private
 
   integer, parameter :: LINUX_PROC_STAT_BUFFER_LEN = 1048576
   integer, parameter :: LINUX_PROC_MEMINFO_BUFFER_LEN = 65536
+  integer, parameter :: LINUX_PROC_LOADAVG_BUFFER_LEN = 256
   integer, parameter, public :: LINUX_HWMON_NAME_LEN = 128
   integer, parameter, public :: LINUX_HWMON_PATH_LEN = 256
 
@@ -24,6 +26,7 @@ module ftop_platform
     procedure :: get_cpu_count => linux_get_cpu_count
     procedure :: get_cpu_sample => linux_get_cpu_sample
     procedure :: get_memory_info => linux_get_memory_info
+    procedure :: get_load_average => linux_get_load_average
   end type linux_backend
 
   public :: create_platform
@@ -33,7 +36,9 @@ module ftop_platform
   public :: linux_cpuinfo_field_count
   public :: linux_cpu_state_snapshot
   public :: linux_hwmon_discover
+  public :: linux_load_average_snapshot
   public :: linux_memory_snapshot
+  public :: load_average_info
   public :: memory_info
   public :: platform_backend
 
@@ -61,6 +66,15 @@ module ftop_platform
       integer(c_size_t), intent(out) :: value_len
       integer(c_int), intent(out) :: sys_errno
     end function c_ftop_linux_read_proc_meminfo
+
+    integer(c_int) function c_ftop_linux_read_proc_loadavg(buffer, buffer_capacity, value_len, sys_errno) &
+        bind(C, name="ftop_linux_read_proc_loadavg")
+      import :: c_char, c_int, c_size_t
+      character(kind=c_char), intent(out) :: buffer(*)
+      integer(c_size_t), value :: buffer_capacity
+      integer(c_size_t), intent(out) :: value_len
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_linux_read_proc_loadavg
 
     integer(c_int) function c_ftop_linux_cpuinfo_field(name, value, value_capacity, value_len, sys_errno) &
         bind(C, name="ftop_linux_cpuinfo_field")
@@ -152,6 +166,16 @@ contains
     end if
   end function linux_get_memory_info
 
+  function linux_get_load_average(self) result(info)
+    class(linux_backend), intent(in) :: self
+    type(load_average_info) :: info
+
+    associate(unused => self)
+    end associate
+
+    if (.not. linux_load_average_snapshot(info)) info = load_average_info()
+  end function linux_get_load_average
+
   logical function linux_cpu_state_snapshot(total, cores, error_code) result(success)
     type(cpu_state_ticks), intent(out) :: total
     type(cpu_state_ticks), allocatable, intent(out) :: cores(:)
@@ -193,6 +217,26 @@ contains
     end if
     call assign_error(error_code, sys_errno)
   end function linux_memory_snapshot
+
+  logical function linux_load_average_snapshot(info, error_code) result(success)
+    type(load_average_info), intent(out) :: info
+    integer, intent(out), optional :: error_code
+    character(kind=c_char), allocatable :: c_buffer(:)
+    character(len=:), allocatable :: buffer
+    integer(c_size_t) :: value_len
+    integer(c_int) :: sys_errno
+    integer(c_int) :: rc
+
+    info = load_average_info()
+    allocate(c_buffer(LINUX_PROC_LOADAVG_BUFFER_LEN))
+    rc = c_ftop_linux_read_proc_loadavg(c_buffer, int(size(c_buffer), c_size_t), value_len, sys_errno)
+    success = rc == 0_c_int
+    if (success) then
+      call c_chars_to_string(c_buffer, int(value_len), buffer)
+      success = linux_loadavg_parse(buffer, info)
+    end if
+    call assign_error(error_code, sys_errno)
+  end function linux_load_average_snapshot
 
   logical function linux_cpuinfo_field(name, value, value_len, error_code) result(success)
     character(len=*), intent(in) :: name

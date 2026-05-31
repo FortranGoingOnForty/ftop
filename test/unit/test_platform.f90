@@ -4,6 +4,7 @@ program test_platform
     cpu_tick_sample, &
     cpu_usage_percent, &
     create_platform, &
+    load_average_info, &
     memory_info, &
     platform_backend
   implicit none
@@ -12,6 +13,7 @@ program test_platform
   type(cpu_tick_sample) :: first_sample
   type(cpu_tick_sample) :: second_sample
   type(memory_info) :: memory
+  type(load_average_info) :: load_average
   integer :: cpu_count
   real(real64) :: usage
 
@@ -46,6 +48,10 @@ program test_platform
   if (memory%free_bytes > memory%total_bytes) error stop "free memory must not exceed total"
   if (memory%available_bytes > memory%total_bytes) error stop "available memory must not exceed total"
   if (memory%swap_used_bytes > memory%swap_total_bytes) error stop "swap used memory must not exceed swap total"
+
+  load_average = backend%get_load_average()
+  if (.not. load_average%valid) error stop "load average info must be valid"
+  if (any(load_average%values < 0.0_real64)) error stop "load averages must not be negative"
 
 contains
 

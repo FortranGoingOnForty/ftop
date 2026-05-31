@@ -5,6 +5,7 @@ module ftop_platform_types
 
   public :: cpu_tick_sample
   public :: cpu_usage_percent
+  public :: load_average_info
   public :: memory_info
   public :: platform_backend
 
@@ -26,11 +27,17 @@ module ftop_platform_types
     integer(int64) :: swap_used_bytes = 0_int64
   end type memory_info
 
+  type :: load_average_info
+    logical :: valid = .false.
+    real(real64) :: values(3) = 0.0_real64
+  end type load_average_info
+
   type, abstract :: platform_backend
   contains
     procedure(get_cpu_count_interface), deferred :: get_cpu_count
     procedure(get_cpu_sample_interface), deferred :: get_cpu_sample
     procedure(get_memory_info_interface), deferred :: get_memory_info
+    procedure(get_load_average_interface), deferred :: get_load_average
   end type platform_backend
 
   abstract interface
@@ -50,6 +57,12 @@ module ftop_platform_types
       class(platform_backend), intent(in) :: self
       type(memory_info) :: info
     end function get_memory_info_interface
+
+    function get_load_average_interface(self) result(info)
+      import :: load_average_info, platform_backend
+      class(platform_backend), intent(in) :: self
+      type(load_average_info) :: info
+    end function get_load_average_interface
   end interface
 
 contains

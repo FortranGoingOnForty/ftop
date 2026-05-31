@@ -15,6 +15,7 @@ module ftop_collector
     cpu_tick_sample, &
     cpu_usage_percent, &
     create_platform, &
+    load_average_info, &
     platform_backend, &
     platform_memory_info => memory_info
   use ftop_pthread, only : &
@@ -42,6 +43,8 @@ module ftop_collector
     integer(c_int) :: interval_ms
     integer(c_int) :: cpu_count
     real(c_double) :: cpu_usage_percent
+    integer(c_int) :: load_valid
+    real(c_double) :: load_average(3)
     integer(c_int) :: memory_valid
     integer(c_long_long) :: memory_total_bytes
     integer(c_long_long) :: memory_used_bytes
@@ -190,6 +193,8 @@ contains
     snapshot%sample_count = int(self%state%sample_count)
     snapshot%cpu_total%valid = snapshot%sample_count > 0 .and. .not. snapshot%warming_up
     snapshot%cpu_total%usage_percent = real(self%state%cpu_usage_percent, real64)
+    snapshot%cpu_total%load_valid = self%state%load_valid /= 0_c_int
+    snapshot%cpu_total%load_avg = real(self%state%load_average, real64)
     snapshot%cpu_total%core_count = int(self%state%cpu_count)
     snapshot%cpu_total%thread_count = int(self%state%cpu_count)
     snapshot%memory%valid = self%state%memory_valid /= 0_c_int
@@ -243,6 +248,7 @@ contains
     type(cpu_tick_sample) :: previous_cpu
     type(cpu_tick_sample) :: current_cpu
     type(platform_memory_info) :: memory
+    type(load_average_info) :: load_average
     integer(c_long_long) :: deadline_ms
     real(real64) :: usage_percent
     logical :: warming_up
@@ -255,7 +261,8 @@ contains
     backend = create_platform()
     previous_cpu = backend%get_cpu_sample()
     memory = backend%get_memory_info()
-    call publish_sample(state, backend%get_cpu_count(), 0.0_real64, .true., memory)
+    load_average = backend%get_load_average()
+    call publish_sample(state, backend%get_cpu_count(), 0.0_real64, .true., memory, load_average)
 
     deadline_ms = monotonic_ms()
     do
@@ -264,6 +271,7 @@ contains
 
       current_cpu = backend%get_cpu_sample()
       memory = backend%get_memory_info()
+      load_average = backend%get_load_average()
       warming_up = .true.
       usage_percent = 0.0_real64
       if (previous_cpu%valid .and. current_cpu%valid .and. current_cpu%total > previous_cpu%total) then
@@ -272,7 +280,7 @@ contains
       end if
       if (current_cpu%valid) previous_cpu = current_cpu
 
-      call publish_sample(state, backend%get_cpu_count(), usage_percent, warming_up, memory)
+      call publish_sample(state, backend%get_cpu_count(), usage_percent, warming_up, memory, load_average)
       if (should_stop(state)) exit
     end do
 
@@ -290,6 +298,8 @@ contains
     state%interval_ms = int(interval_ms, c_int)
     state%cpu_count = 0_c_int
     state%cpu_usage_percent = 0.0_c_double
+    state%load_valid = 0_c_int
+    state%load_average = 0.0_c_double
     state%memory_valid = 0_c_int
     state%memory_total_bytes = 0_c_long_long
     state%memory_used_bytes = 0_c_long_long
@@ -314,6 +324,8 @@ contains
     state%sample_count = 0_c_int
     state%cpu_count = 0_c_int
     state%cpu_usage_percent = 0.0_c_double
+    state%load_valid = 0_c_int
+    state%load_average = 0.0_c_double
     state%memory_valid = 0_c_int
     state%memory_total_bytes = 0_c_long_long
     state%memory_used_bytes = 0_c_long_long
@@ -463,12 +475,13 @@ contains
     if (.not. ftop_mutex_unlock(mutex)) stop_requested = .true.
   end function should_stop
 
-  subroutine publish_sample(state, cpu_count, usage_percent, warming_up, memory)
+  subroutine publish_sample(state, cpu_count, usage_percent, warming_up, memory, load_average)
     type(collector_shared_state), intent(inout) :: state
     integer, intent(in) :: cpu_count
     real(real64), intent(in) :: usage_percent
     logical, intent(in) :: warming_up
     type(platform_memory_info), intent(in) :: memory
+    type(load_average_info), intent(in) :: load_average
     type(ftop_mutex_handle) :: mutex
 
     mutex%handle = state%mutex
@@ -476,6 +489,8 @@ contains
 
     state%cpu_count = int(max(0, cpu_count), c_int)
     state%cpu_usage_percent = real(max(0.0_real64, min(100.0_real64, usage_percent)), c_double)
+    state%load_valid = merge(1_c_int, 0_c_int, load_average%valid)
+    state%load_average = real(max(0.0_real64, load_average%values), c_double)
     state%warming_up = merge(1_c_int, 0_c_int, warming_up)
     state%sample_count = state%sample_count + 1_c_int
     state%memory_valid = merge(1_c_int, 0_c_int, memory%valid)

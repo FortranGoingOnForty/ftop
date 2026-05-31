@@ -372,3 +372,21 @@ int ftop_freebsd_memory_info(long long *total_bytes, long long *available_bytes,
 
   return 0;
 }
+
+int ftop_freebsd_load_average(double *loads, int *sys_errno) {
+  int count;
+
+  if (loads == NULL || sys_errno == NULL) return -1;
+
+  loads[0] = 0.0;
+  loads[1] = 0.0;
+  loads[2] = 0.0;
+  *sys_errno = 0;
+  count = getloadavg(loads, 3);
+  if (count < 3) {
+    *sys_errno = errno != 0 ? errno : EINVAL;
+    return -1;
+  }
+
+  return 0;
+}

@@ -9,12 +9,15 @@ program test_linux_platform
     linux_cpu_state_snapshot, &
     linux_hwmon_discover, &
     linux_hwmon_sensor, &
+    load_average_info, &
+    linux_load_average_snapshot, &
     linux_memory_snapshot
   implicit none
 
   type(linux_hwmon_sensor), allocatable :: sensors(:)
   type(cpu_state_ticks) :: total_cpu
   type(cpu_state_ticks), allocatable :: cores(:)
+  type(load_average_info) :: load_average
   type(metric_memory_info) :: memory
   character(len=128) :: processor_id
   integer :: i
@@ -55,4 +58,8 @@ program test_linux_platform
   if (memory%used_bytes > memory%total_bytes) error stop "Linux used memory must not exceed total"
   if (memory_usage_percent(memory) < 0.0_real64) error stop "Linux memory usage must not be negative"
   if (memory_usage_percent(memory) > 100.0_real64) error stop "Linux memory usage must not exceed 100"
+
+  if (.not. linux_load_average_snapshot(load_average)) error stop "Linux load average snapshot failed"
+  if (.not. load_average%valid) error stop "Linux load average snapshot must be valid"
+  if (any(load_average%values < 0.0_real64)) error stop "Linux load averages must not be negative"
 end program test_linux_platform

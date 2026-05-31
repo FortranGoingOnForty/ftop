@@ -36,6 +36,11 @@ target_link_libraries(ftop_linux_meminfo_test PRIVATE ftop_core)
 
 add_test(NAME ftop_linux_meminfo COMMAND ftop_linux_meminfo_test)
 
+add_executable(ftop_linux_loadavg_test unit/test_linux_loadavg.f90)
+target_link_libraries(ftop_linux_loadavg_test PRIVATE ftop_core)
+
+add_test(NAME ftop_linux_loadavg COMMAND ftop_linux_loadavg_test)
+
 add_executable(ftop_collector_test unit/test_collector.f90)
 target_link_libraries(ftop_collector_test PRIVATE ftop_core)
 ftop_avoid_linux_gfortran_callback_pie_warning(ftop_collector_test)
