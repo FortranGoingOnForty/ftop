@@ -16,6 +16,16 @@ target_link_libraries(ftop_terminal_frame PRIVATE ftop_core)
 
 add_test(NAME ftop_terminal_frame COMMAND ftop_terminal_frame)
 
+add_executable(ftop_ring_buffer_test unit/test_ring_buffer.f90)
+target_link_libraries(ftop_ring_buffer_test PRIVATE ftop_core)
+
+add_test(NAME ftop_ring_buffer COMMAND ftop_ring_buffer_test)
+
+add_executable(ftop_metric_data_test unit/test_metric_data.f90)
+target_link_libraries(ftop_metric_data_test PRIVATE ftop_core)
+
+add_test(NAME ftop_metric_data COMMAND ftop_metric_data_test)
+
 add_executable(ftop_pthread_test unit/test_pthread.f90)
 target_link_libraries(ftop_pthread_test PRIVATE ftop_core)
 ftop_avoid_linux_gfortran_callback_pie_warning(ftop_pthread_test)

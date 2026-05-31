@@ -79,6 +79,9 @@ endif()
 
 add_library(
   ftop_core STATIC
+  src/collect/ftop_cpu_data.f90
+  src/collect/ftop_mem_data.f90
+  src/collect/ftop_ring_buffer.f90
   src/shim/ftop_dl.f90
   src/shim/ftop_pthread.f90
   src/shim/ftop_signal.f90
