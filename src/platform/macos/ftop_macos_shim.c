@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <sys/sysctl.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 int ftop_macos_cpu_count(int *count, int *sys_errno) {
   int value;
@@ -61,6 +62,49 @@ int ftop_macos_cpu_ticks(long long *total_ticks, long long *idle_ticks, int *sys
     *sys_errno = EINVAL;
     return -1;
   }
+
+  return 0;
+}
+
+int ftop_macos_memory_info(long long *total_bytes, long long *available_bytes, int *sys_errno) {
+  vm_statistics64_data_t vm_info;
+  mach_msg_type_number_t count;
+  unsigned long long total;
+  size_t total_len;
+  kern_return_t rc;
+  long long page_size;
+  long long available_pages;
+
+  if (total_bytes == NULL || available_bytes == NULL || sys_errno == NULL) return -1;
+
+  *total_bytes = 0;
+  *available_bytes = 0;
+  *sys_errno = 0;
+  total = 0ULL;
+  total_len = sizeof(total);
+  if (sysctlbyname("hw.memsize", &total, &total_len, NULL, 0) != 0) {
+    *sys_errno = errno;
+    return -1;
+  }
+
+  count = HOST_VM_INFO64_COUNT;
+  rc = host_statistics64(mach_host_self(), HOST_VM_INFO64, (host_info64_t)&vm_info, &count);
+  if (rc != KERN_SUCCESS) {
+    *sys_errno = (int)rc;
+    return -1;
+  }
+
+  page_size = (long long)sysconf(_SC_PAGESIZE);
+  available_pages = (long long)vm_info.free_count + (long long)vm_info.inactive_count;
+  available_pages += (long long)vm_info.speculative_count;
+
+  *total_bytes = (long long)total;
+  *available_bytes = available_pages * page_size;
+  if (*total_bytes <= 0) {
+    *sys_errno = EINVAL;
+    return -1;
+  }
+  if (*available_bytes > *total_bytes) *available_bytes = *total_bytes;
 
   return 0;
 }

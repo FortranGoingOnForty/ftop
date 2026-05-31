@@ -5,6 +5,7 @@ module ftop_platform_types
 
   public :: cpu_tick_sample
   public :: cpu_usage_percent
+  public :: memory_info
   public :: platform_backend
 
   type :: cpu_tick_sample
@@ -13,10 +14,17 @@ module ftop_platform_types
     integer(int64) :: idle = 0_int64
   end type cpu_tick_sample
 
+  type :: memory_info
+    logical :: valid = .false.
+    integer(int64) :: total_bytes = 0_int64
+    integer(int64) :: available_bytes = 0_int64
+  end type memory_info
+
   type, abstract, public :: platform_backend
   contains
     procedure(get_cpu_count_interface), deferred :: get_cpu_count
     procedure(get_cpu_sample_interface), deferred :: get_cpu_sample
+    procedure(get_memory_info_interface), deferred :: get_memory_info
   end type platform_backend
 
   abstract interface
@@ -30,6 +38,12 @@ module ftop_platform_types
       class(platform_backend), intent(in) :: self
       type(cpu_tick_sample) :: sample
     end function get_cpu_sample_interface
+
+    function get_memory_info_interface(self) result(info)
+      import :: memory_info, platform_backend
+      class(platform_backend), intent(in) :: self
+      type(memory_info) :: info
+    end function get_memory_info_interface
   end interface
 
 contains

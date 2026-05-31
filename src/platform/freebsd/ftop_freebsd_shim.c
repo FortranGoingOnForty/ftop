@@ -3,6 +3,7 @@
 #include <sys/resource.h>
 #include <sys/sysctl.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 #ifndef CPUSTATES
 #define CPUSTATES 5
@@ -65,5 +66,69 @@ int ftop_freebsd_cpu_ticks(long long *total_ticks, long long *idle_ticks, int *s
 
   *total_ticks = total;
   *idle_ticks = cpu_time[CP_IDLE] > 0 ? (long long)cpu_time[CP_IDLE] : 0;
+  return 0;
+}
+
+static int ftop_sysctl_ulong(const char *name, unsigned long *value) {
+  size_t value_len;
+
+  value_len = sizeof(*value);
+  *value = 0UL;
+  return sysctlbyname(name, value, &value_len, NULL, 0);
+}
+
+static int ftop_sysctl_uint(const char *name, unsigned int *value) {
+  size_t value_len;
+
+  value_len = sizeof(*value);
+  *value = 0U;
+  return sysctlbyname(name, value, &value_len, NULL, 0);
+}
+
+static unsigned int ftop_optional_sysctl_uint(const char *name) {
+  unsigned int value;
+
+  if (ftop_sysctl_uint(name, &value) != 0) return 0U;
+  return value;
+}
+
+int ftop_freebsd_memory_info(long long *total_bytes, long long *available_bytes, int *sys_errno) {
+  unsigned long physical_memory;
+  unsigned int free_pages;
+  unsigned int inactive_pages;
+  unsigned int available_pages;
+  long long page_size;
+
+  if (total_bytes == NULL || available_bytes == NULL || sys_errno == NULL) return -1;
+
+  *total_bytes = 0;
+  *available_bytes = 0;
+  *sys_errno = 0;
+  if (ftop_sysctl_ulong("hw.physmem", &physical_memory) != 0) {
+    *sys_errno = errno;
+    return -1;
+  }
+  if (ftop_sysctl_uint("vm.stats.vm.v_free_count", &free_pages) != 0) {
+    *sys_errno = errno;
+    return -1;
+  }
+  if (ftop_sysctl_uint("vm.stats.vm.v_inactive_count", &inactive_pages) != 0) {
+    *sys_errno = errno;
+    return -1;
+  }
+
+  page_size = (long long)getpagesize();
+  available_pages = free_pages + inactive_pages;
+  available_pages += ftop_optional_sysctl_uint("vm.stats.vm.v_cache_count");
+  available_pages += ftop_optional_sysctl_uint("vm.stats.vm.v_laundry_count");
+
+  *total_bytes = (long long)physical_memory;
+  *available_bytes = (long long)available_pages * page_size;
+  if (*total_bytes <= 0) {
+    *sys_errno = EINVAL;
+    return -1;
+  }
+  if (*available_bytes > *total_bytes) *available_bytes = *total_bytes;
+
   return 0;
 }

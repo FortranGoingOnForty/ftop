@@ -4,12 +4,14 @@ program test_platform
     cpu_tick_sample, &
     cpu_usage_percent, &
     create_platform, &
+    memory_info, &
     platform_backend
   implicit none
 
   class(platform_backend), allocatable :: backend
   type(cpu_tick_sample) :: first_sample
   type(cpu_tick_sample) :: second_sample
+  type(memory_info) :: memory
   integer :: cpu_count
   real(real64) :: usage
 
@@ -29,6 +31,12 @@ program test_platform
 
   usage = cpu_usage_percent(first_sample, second_sample)
   if (usage < 0.0_real64 .or. usage > 100.0_real64) error stop "CPU usage must be in range"
+
+  memory = backend%get_memory_info()
+  if (.not. memory%valid) error stop "memory info must be valid"
+  if (memory%total_bytes <= 0) error stop "total memory must be positive"
+  if (memory%available_bytes < 0) error stop "available memory must not be negative"
+  if (memory%available_bytes > memory%total_bytes) error stop "available memory must not exceed total"
 
 contains
 
