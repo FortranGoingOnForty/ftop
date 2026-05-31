@@ -24,7 +24,10 @@ contains
 
     snapshot = wait_for_snapshot(metrics)
     call require(snapshot%sample_count > 0, "collector must publish at least one sample")
-    call require(snapshot%cpu_total%core_count > 0, "collector CPU count must be positive")
+    call require(snapshot%cpu_total%core_count > 0, "collector CPU core count must be positive")
+    call require(snapshot%cpu_total%thread_count > 0, "collector CPU thread count must be positive")
+    call require(snapshot%cpu_total%core_count <= snapshot%cpu_total%thread_count, &
+                 "collector CPU core count must not exceed threads")
     call require(snapshot%cpu_total%valid, "collector CPU total must be valid")
     call require(allocated(snapshot%cpu_cores), "collector CPU cores must be allocated")
     call require(size(snapshot%cpu_cores) > 0, "collector must publish CPU cores")

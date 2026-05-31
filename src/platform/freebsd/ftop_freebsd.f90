@@ -12,7 +12,8 @@ module ftop_platform
     c_size_t
   use, intrinsic :: iso_fortran_env, only : int64, real64
   use ftop_cpu_data, only : cpu_core_info, cpu_state_ticks, cpu_state_total_ticks
-  use ftop_platform_types, only : cpu_tick_sample, cpu_usage_percent, load_average_info, memory_info, platform_backend
+  use ftop_platform_types, only : cpu_tick_sample, cpu_topology_info, cpu_usage_percent, load_average_info, memory_info, &
+                                  platform_backend
   implicit none
   private
 
@@ -57,6 +58,7 @@ module ftop_platform
   type, extends(platform_backend) :: freebsd_backend
   contains
     procedure :: get_cpu_count => freebsd_get_cpu_count
+    procedure :: get_cpu_topology => freebsd_get_cpu_topology
     procedure :: get_cpu_sample => freebsd_get_cpu_sample
     procedure :: get_cpu_state_snapshot => freebsd_get_cpu_state_snapshot
     procedure :: get_cpu_metadata => freebsd_get_cpu_metadata
@@ -66,6 +68,7 @@ module ftop_platform
 
   public :: create_platform
   public :: cpu_tick_sample
+  public :: cpu_topology_info
   public :: cpu_usage_percent
   public :: freebsd_devstat_getdevs
   public :: freebsd_kvm_close
@@ -235,6 +238,30 @@ contains
       count = 0
     end if
   end function freebsd_get_cpu_count
+
+  function freebsd_get_cpu_topology(self) result(info)
+    class(freebsd_backend), intent(in) :: self
+    type(cpu_topology_info) :: info
+    integer :: core_count
+    integer :: thread_count
+    integer :: threads_per_core
+
+    thread_count = freebsd_get_cpu_count(self)
+    if (thread_count <= 0) return
+
+    core_count = thread_count
+    if (.not. freebsd_sysctl_int("kern.smp.cores", core_count) .or. core_count <= 0) then
+      if (freebsd_sysctl_int("kern.smp.threads_per_core", threads_per_core) .and. threads_per_core > 0) then
+        core_count = max(1, (thread_count + threads_per_core - 1) / threads_per_core)
+      else
+        core_count = thread_count
+      end if
+    end if
+
+    info%valid = .true.
+    info%thread_count = thread_count
+    info%core_count = max(1, min(thread_count, core_count))
+  end function freebsd_get_cpu_topology
 
   function freebsd_get_cpu_sample(self) result(sample)
     class(freebsd_backend), intent(in) :: self

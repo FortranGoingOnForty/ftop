@@ -17,6 +17,7 @@ module ftop_collector
   use ftop_mem_data, only : metric_memory_info => memory_info
   use ftop_platform, only : &
     create_platform, &
+    cpu_topology_info, &
     load_average_info, &
     platform_backend, &
     platform_memory_info => memory_info
@@ -45,6 +46,7 @@ module ftop_collector
     integer(c_int) :: sample_count
     integer(c_int) :: interval_ms
     integer(c_int) :: cpu_count
+    integer(c_int) :: cpu_physical_core_count
     integer(c_int) :: cpu_valid
     real(c_double) :: cpu_usage_percent
     real(c_double) :: cpu_user_percent
@@ -218,7 +220,7 @@ contains
     snapshot%cpu_total%iowait_percent = real(self%state%cpu_iowait_percent, real64)
     snapshot%cpu_total%load_valid = self%state%load_valid /= 0_c_int
     snapshot%cpu_total%load_avg = real(self%state%load_average, real64)
-    snapshot%cpu_total%core_count = int(self%state%cpu_count)
+    snapshot%cpu_total%core_count = int(self%state%cpu_physical_core_count)
     snapshot%cpu_total%thread_count = int(self%state%cpu_count)
     snapshot%memory%valid = self%state%memory_valid /= 0_c_int
     snapshot%memory%total_bytes = int(self%state%memory_total_bytes, int64)
@@ -280,6 +282,7 @@ contains
     type(cpu_core_info) :: total_cpu
     type(cpu_core_info), allocatable :: core_cpus(:)
     type(cpu_core_info), allocatable :: cpu_metadata(:)
+    type(cpu_topology_info) :: topology
     type(platform_memory_info) :: memory
     type(load_average_info) :: load_average
     integer(c_long_long) :: deadline_ms
@@ -299,9 +302,10 @@ contains
     call make_invalid_cpu_infos(size(previous_core_cpus), total_cpu, core_cpus)
     if (.not. backend%get_cpu_metadata(cpu_metadata)) allocate(cpu_metadata(0))
     call merge_cpu_metadata(core_cpus, cpu_metadata)
+    topology = backend%get_cpu_topology()
     memory = backend%get_memory_info()
     load_average = backend%get_load_average()
-    call publish_sample(state, backend%get_cpu_count(), total_cpu, core_cpus, .true., memory, load_average)
+    call publish_sample(state, topology, total_cpu, core_cpus, .true., memory, load_average)
 
     deadline_ms = monotonic_ms()
     metadata_refresh_ms = deadline_ms + 1000_c_long_long
@@ -311,6 +315,7 @@ contains
 
       memory = backend%get_memory_info()
       load_average = backend%get_load_average()
+      topology = backend%get_cpu_topology()
       warming_up = .true.
       call make_invalid_cpu_infos(size(previous_core_cpus), total_cpu, core_cpus)
       if (backend%get_cpu_state_snapshot(current_total_cpu, current_core_cpus)) then
@@ -333,7 +338,7 @@ contains
       end if
       call merge_cpu_metadata(core_cpus, cpu_metadata)
 
-      call publish_sample(state, backend%get_cpu_count(), total_cpu, core_cpus, warming_up, memory, load_average)
+      call publish_sample(state, topology, total_cpu, core_cpus, warming_up, memory, load_average)
       if (should_stop(state)) exit
     end do
 
@@ -390,6 +395,7 @@ contains
     state%sample_count = 0_c_int
     state%interval_ms = int(interval_ms, c_int)
     state%cpu_count = 0_c_int
+    state%cpu_physical_core_count = 0_c_int
     state%cpu_valid = 0_c_int
     state%cpu_usage_percent = 0.0_c_double
     state%cpu_user_percent = 0.0_c_double
@@ -431,6 +437,7 @@ contains
     state%warming_up = 1_c_int
     state%sample_count = 0_c_int
     state%cpu_count = 0_c_int
+    state%cpu_physical_core_count = 0_c_int
     state%cpu_valid = 0_c_int
     state%cpu_usage_percent = 0.0_c_double
     state%cpu_user_percent = 0.0_c_double
@@ -643,9 +650,9 @@ contains
     if (.not. ftop_mutex_unlock(mutex)) stop_requested = .true.
   end function should_stop
 
-  subroutine publish_sample(state, cpu_count, total_cpu, core_cpus, warming_up, memory, load_average)
+  subroutine publish_sample(state, topology, total_cpu, core_cpus, warming_up, memory, load_average)
     type(collector_shared_state), intent(inout) :: state
-    integer, intent(in) :: cpu_count
+    type(cpu_topology_info), intent(in) :: topology
     type(cpu_core_info), intent(in) :: total_cpu
     type(cpu_core_info), intent(in) :: core_cpus(:)
     logical, intent(in) :: warming_up
@@ -653,11 +660,20 @@ contains
     type(load_average_info), intent(in) :: load_average
     type(ftop_mutex_handle) :: mutex
     integer :: core_count
+    integer :: physical_core_count
+    integer :: thread_count
 
     mutex%handle = state%mutex
     if (.not. ftop_mutex_lock(mutex)) return
 
-    state%cpu_count = int(max(0, cpu_count), c_int)
+    thread_count = max(0, topology%thread_count)
+    if (.not. topology%valid .or. thread_count <= 0) thread_count = bounded_core_count(size(core_cpus))
+    physical_core_count = max(0, topology%core_count)
+    if (.not. topology%valid .or. physical_core_count <= 0) physical_core_count = thread_count
+    if (thread_count > 0) physical_core_count = min(physical_core_count, thread_count)
+
+    state%cpu_count = int(thread_count, c_int)
+    state%cpu_physical_core_count = int(physical_core_count, c_int)
     state%cpu_valid = merge(1_c_int, 0_c_int, total_cpu%valid .and. .not. warming_up)
     state%cpu_usage_percent = real(clamp_percent(total_cpu%usage_percent), c_double)
     state%cpu_user_percent = real(clamp_percent(total_cpu%user_percent), c_double)

@@ -3,6 +3,7 @@ program test_platform
   use ftop_cpu_data, only : cpu_core_info, cpu_state_ticks, cpu_state_total_ticks
   use ftop_platform, only : &
     cpu_tick_sample, &
+    cpu_topology_info, &
     cpu_usage_percent, &
     create_platform, &
     load_average_info, &
@@ -13,6 +14,7 @@ program test_platform
   class(platform_backend), allocatable :: backend
   type(cpu_tick_sample) :: first_sample
   type(cpu_tick_sample) :: second_sample
+  type(cpu_topology_info) :: topology
   type(cpu_state_ticks) :: total_cpu_state
   type(cpu_state_ticks), allocatable :: core_cpu_states(:)
   type(cpu_core_info), allocatable :: cpu_metadata(:)
@@ -26,6 +28,13 @@ program test_platform
 
   cpu_count = backend%get_cpu_count()
   if (cpu_count <= 0) error stop "platform CPU count must be positive"
+
+  topology = backend%get_cpu_topology()
+  if (.not. topology%valid) error stop "platform CPU topology must be valid"
+  if (topology%core_count <= 0) error stop "platform CPU topology core count must be positive"
+  if (topology%thread_count <= 0) error stop "platform CPU topology thread count must be positive"
+  if (topology%core_count > topology%thread_count) error stop "platform CPU topology core count exceeds threads"
+  if (topology%thread_count /= cpu_count) error stop "platform CPU topology thread count mismatch"
 
   first_sample = backend%get_cpu_sample()
   if (.not. first_sample%valid) error stop "first CPU tick sample must be valid"

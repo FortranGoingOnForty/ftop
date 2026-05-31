@@ -5,6 +5,7 @@ module ftop_platform_types
   private
 
   public :: cpu_tick_sample
+  public :: cpu_topology_info
   public :: cpu_usage_percent
   public :: load_average_info
   public :: memory_info
@@ -15,6 +16,12 @@ module ftop_platform_types
     integer(int64) :: total = 0_int64
     integer(int64) :: idle = 0_int64
   end type cpu_tick_sample
+
+  type :: cpu_topology_info
+    logical :: valid = .false.
+    integer :: core_count = 0
+    integer :: thread_count = 0
+  end type cpu_topology_info
 
   type :: memory_info
     logical :: valid = .false.
@@ -36,6 +43,7 @@ module ftop_platform_types
   type, abstract :: platform_backend
   contains
     procedure(get_cpu_count_interface), deferred :: get_cpu_count
+    procedure(get_cpu_topology_interface), deferred :: get_cpu_topology
     procedure(get_cpu_sample_interface), deferred :: get_cpu_sample
     procedure(get_cpu_state_snapshot_interface), deferred :: get_cpu_state_snapshot
     procedure(get_cpu_metadata_interface), deferred :: get_cpu_metadata
@@ -48,6 +56,12 @@ module ftop_platform_types
       import :: platform_backend
       class(platform_backend), intent(in) :: self
     end function get_cpu_count_interface
+
+    function get_cpu_topology_interface(self) result(info)
+      import :: cpu_topology_info, platform_backend
+      class(platform_backend), intent(in) :: self
+      type(cpu_topology_info) :: info
+    end function get_cpu_topology_interface
 
     function get_cpu_sample_interface(self) result(sample)
       import :: cpu_tick_sample, platform_backend

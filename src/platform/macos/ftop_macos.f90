@@ -2,7 +2,8 @@ module ftop_platform
   use, intrinsic :: iso_c_binding, only : c_char, c_double, c_int, c_long_long, c_null_char, c_size_t
   use, intrinsic :: iso_fortran_env, only : int64, real64
   use ftop_cpu_data, only : cpu_core_info, cpu_state_ticks, cpu_state_total_ticks
-  use ftop_platform_types, only : cpu_tick_sample, cpu_usage_percent, load_average_info, memory_info, platform_backend
+  use ftop_platform_types, only : cpu_tick_sample, cpu_topology_info, cpu_usage_percent, load_average_info, memory_info, &
+                                  platform_backend
   implicit none
   private
 
@@ -16,6 +17,7 @@ module ftop_platform
   type, extends(platform_backend) :: macos_backend
   contains
     procedure :: get_cpu_count => macos_get_cpu_count
+    procedure :: get_cpu_topology => macos_get_cpu_topology
     procedure :: get_cpu_sample => macos_get_cpu_sample
     procedure :: get_cpu_state_snapshot => macos_get_cpu_state_snapshot
     procedure :: get_cpu_metadata => macos_get_cpu_metadata
@@ -25,6 +27,7 @@ module ftop_platform
 
   public :: create_platform
   public :: cpu_tick_sample
+  public :: cpu_topology_info
   public :: cpu_usage_percent
   public :: load_average_info
   public :: macos_iokit_disk_count
@@ -153,6 +156,25 @@ contains
       count = 0
     end if
   end function macos_get_cpu_count
+
+  function macos_get_cpu_topology(self) result(info)
+    class(macos_backend), intent(in) :: self
+    type(cpu_topology_info) :: info
+    integer :: core_count
+    integer :: thread_count
+
+    thread_count = macos_get_cpu_count(self)
+    if (thread_count <= 0) return
+
+    core_count = thread_count
+    if (.not. macos_sysctl_int("hw.physicalcpu", core_count) .or. core_count <= 0) then
+      core_count = thread_count
+    end if
+
+    info%valid = .true.
+    info%thread_count = thread_count
+    info%core_count = max(1, min(thread_count, core_count))
+  end function macos_get_cpu_topology
 
   function macos_get_cpu_sample(self) result(sample)
     class(macos_backend), intent(in) :: self

@@ -6,7 +6,8 @@ module ftop_platform
   use ftop_linux_meminfo, only : linux_meminfo_parse
   use ftop_linux_proc_stat, only : linux_proc_stat_parse
   use ftop_mem_data, only : metric_memory_info => memory_info
-  use ftop_platform_types, only : cpu_tick_sample, cpu_usage_percent, load_average_info, memory_info, platform_backend
+  use ftop_platform_types, only : cpu_tick_sample, cpu_topology_info, cpu_usage_percent, load_average_info, memory_info, &
+                                  platform_backend
   implicit none
   private
 
@@ -25,6 +26,7 @@ module ftop_platform
   type, extends(platform_backend) :: linux_backend
   contains
     procedure :: get_cpu_count => linux_get_cpu_count
+    procedure :: get_cpu_topology => linux_get_cpu_topology
     procedure :: get_cpu_sample => linux_get_cpu_sample
     procedure :: get_cpu_state_snapshot => linux_get_cpu_state_snapshot
     procedure :: get_cpu_metadata => linux_get_cpu_metadata
@@ -34,6 +36,7 @@ module ftop_platform
 
   public :: create_platform
   public :: cpu_tick_sample
+  public :: cpu_topology_info
   public :: cpu_usage_percent
   public :: linux_cpuinfo_field
   public :: linux_cpuinfo_field_count
@@ -148,6 +151,33 @@ contains
       count = 0
     end if
   end function linux_get_cpu_count
+
+  function linux_get_cpu_topology(self) result(info)
+    class(linux_backend), intent(in) :: self
+    type(cpu_topology_info) :: info
+    integer :: core_count
+    integer :: cores_per_package
+    integer :: package_count
+    integer :: siblings_per_package
+    integer :: thread_count
+
+    thread_count = linux_get_cpu_count(self)
+    if (thread_count <= 0) return
+
+    core_count = thread_count
+    if (linux_cpuinfo_int_field("cpu cores", cores_per_package) .and. cores_per_package > 0) then
+      if (linux_cpuinfo_int_field("siblings", siblings_per_package) .and. siblings_per_package > 0) then
+        package_count = max(1, (thread_count + siblings_per_package - 1) / siblings_per_package)
+        core_count = cores_per_package * package_count
+      else
+        core_count = cores_per_package
+      end if
+    end if
+
+    info%valid = .true.
+    info%thread_count = thread_count
+    info%core_count = max(1, min(thread_count, core_count))
+  end function linux_get_cpu_topology
 
   function linux_get_cpu_sample(self) result(sample)
     class(linux_backend), intent(in) :: self
@@ -264,6 +294,25 @@ contains
     end if
     call assign_error(error_code, sys_errno)
   end function linux_cpu_state_snapshot
+
+  logical function linux_cpuinfo_int_field(name, value) result(success)
+    character(len=*), intent(in) :: name
+    integer, intent(out) :: value
+    character(len=64) :: buffer
+    integer :: read_status
+    integer :: value_len
+
+    value = 0
+    success = linux_cpuinfo_field(name, buffer, value_len)
+    if (.not. success .or. value_len <= 0) then
+      success = .false.
+      return
+    end if
+
+    read(buffer(1:value_len), *, iostat=read_status) value
+    success = read_status == 0
+    if (.not. success) value = 0
+  end function linux_cpuinfo_int_field
 
   logical function linux_memory_snapshot(info, error_code) result(success)
     type(metric_memory_info), intent(out) :: info
