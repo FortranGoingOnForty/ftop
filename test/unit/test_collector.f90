@@ -22,6 +22,10 @@ contains
     snapshot = wait_for_snapshot(metrics)
     call require(snapshot%sample_count > 0, "collector must publish at least one sample")
     call require(snapshot%cpu_total%core_count > 0, "collector CPU count must be positive")
+    call require(snapshot%cpu_total%valid, "collector CPU total must be valid")
+    call require(allocated(snapshot%cpu_cores), "collector CPU cores must be allocated")
+    call require(size(snapshot%cpu_cores) > 0, "collector must publish CPU cores")
+    call require(all(snapshot%cpu_cores%valid), "collector CPU cores must be valid")
     call require(snapshot%memory%valid, "collector memory snapshot must be valid")
     call require(snapshot%memory%total_bytes > 0, "collector memory total must be positive")
     call require(snapshot%memory%used_bytes >= 0, "collector used memory must not be negative")
@@ -38,17 +42,30 @@ contains
     call require(snapshot%memory%swap_used_bytes <= snapshot%memory%swap_total_bytes, &
                  "collector swap used must not exceed swap total")
     call require(allocated(snapshot%cpu_usage_history), "collector CPU history must be allocated")
+    call require(allocated(snapshot%cpu_core_usage_history), "collector CPU core history must be allocated")
     call require(allocated(snapshot%memory_usage_history), "collector memory history must be allocated")
     call require(size(snapshot%cpu_usage_history) == snapshot%sample_count, "collector CPU history size mismatch")
+    call require(size(snapshot%cpu_core_usage_history, 1) == size(snapshot%cpu_cores), &
+                 "collector CPU core history core size mismatch")
+    call require(size(snapshot%cpu_core_usage_history, 2) == snapshot%sample_count, &
+                 "collector CPU core history sample size mismatch")
     call require(size(snapshot%memory_usage_history) == snapshot%sample_count, "collector memory history size mismatch")
     call require(all(snapshot%cpu_usage_history >= 0.0_real64), "collector CPU history must not be negative")
     call require(all(snapshot%cpu_usage_history <= 100.0_real64), "collector CPU history must not exceed 100")
+    call require(all(snapshot%cpu_core_usage_history >= 0.0_real64), "collector CPU core history must not be negative")
+    call require(all(snapshot%cpu_core_usage_history <= 100.0_real64), "collector CPU core history must not exceed 100")
     call require(all(snapshot%memory_usage_history >= 0.0_real64), "collector memory history must not be negative")
     call require(all(snapshot%memory_usage_history <= 100.0_real64), "collector memory history must not exceed 100")
-    if (snapshot%cpu_total%valid) then
-      call require(snapshot%cpu_total%usage_percent >= 0.0_real64, "collector CPU usage must not be negative")
-      call require(snapshot%cpu_total%usage_percent <= 100.0_real64, "collector CPU usage must not exceed 100")
-    end if
+    call require(snapshot%cpu_total%usage_percent >= 0.0_real64, "collector CPU usage must not be negative")
+    call require(snapshot%cpu_total%usage_percent <= 100.0_real64, "collector CPU usage must not exceed 100")
+    call require(snapshot%cpu_total%user_percent >= 0.0_real64, "collector CPU user must not be negative")
+    call require(snapshot%cpu_total%system_percent >= 0.0_real64, "collector CPU system must not be negative")
+    call require(snapshot%cpu_total%iowait_percent >= 0.0_real64, "collector CPU iowait must not be negative")
+    call require(all(snapshot%cpu_cores%usage_percent >= 0.0_real64), "collector core usage must not be negative")
+    call require(all(snapshot%cpu_cores%usage_percent <= 100.0_real64), "collector core usage must not exceed 100")
+    call require(all(snapshot%cpu_cores%user_percent >= 0.0_real64), "collector core user must not be negative")
+    call require(all(snapshot%cpu_cores%system_percent >= 0.0_real64), "collector core system must not be negative")
+    call require(all(snapshot%cpu_cores%iowait_percent >= 0.0_real64), "collector core iowait must not be negative")
     call require(snapshot%cpu_total%load_valid, "collector load average must be valid")
     call require(all(snapshot%cpu_total%load_avg >= 0.0_real64), "collector load average must not be negative")
 
@@ -72,6 +89,8 @@ contains
     call require(size(snapshot%cpu_usage_history) == first_history_size, "collector snapshot history must be deep copied")
     call require(later_snapshot%sample_count > snapshot%sample_count, "collector did not publish a later snapshot")
     call require(size(later_snapshot%cpu_usage_history) > first_history_size, "collector CPU history did not grow")
+    call require(size(later_snapshot%cpu_core_usage_history, 2) > first_history_size, &
+                 "collector CPU core history did not grow")
     call require(size(later_snapshot%memory_usage_history) > first_history_size, "collector memory history did not grow")
     call require(metrics%stop(), "collector initial stop failed")
     call require(.not. metrics%running(), "collector still running after initial stop")
@@ -80,6 +99,8 @@ contains
     snapshot = wait_for_snapshot(metrics)
     call require(snapshot%sample_count > 0, "collector restarted run did not publish")
     call require(size(snapshot%cpu_usage_history) == snapshot%sample_count, "collector CPU history did not reset on restart")
+    call require(size(snapshot%cpu_core_usage_history, 2) == snapshot%sample_count, &
+                 "collector CPU core history did not reset on restart")
     call require(size(snapshot%memory_usage_history) == snapshot%sample_count, "collector memory history did not reset on restart")
     call require(metrics%stop(), "collector restarted stop failed")
     call require(metrics%destroy(), "collector restarted destroy failed")
@@ -94,10 +115,14 @@ contains
     call require(snapshot%sample_count >= FTOP_COLLECTOR_HISTORY_CAPACITY, "collector did not reach history capacity")
     call require(size(snapshot%cpu_usage_history) == FTOP_COLLECTOR_HISTORY_CAPACITY, &
                  "collector CPU history must cap at configured depth")
+    call require(size(snapshot%cpu_core_usage_history, 2) == FTOP_COLLECTOR_HISTORY_CAPACITY, &
+                 "collector CPU core history must cap at configured depth")
     call require(size(snapshot%memory_usage_history) == FTOP_COLLECTOR_HISTORY_CAPACITY, &
                  "collector memory history must cap at configured depth")
     call require(all(snapshot%cpu_usage_history >= 0.0_real64), "capped CPU history must not be negative")
     call require(all(snapshot%cpu_usage_history <= 100.0_real64), "capped CPU history must not exceed 100")
+    call require(all(snapshot%cpu_core_usage_history >= 0.0_real64), "capped CPU core history must not be negative")
+    call require(all(snapshot%cpu_core_usage_history <= 100.0_real64), "capped CPU core history must not exceed 100")
     call require(all(snapshot%memory_usage_history >= 0.0_real64), "capped memory history must not be negative")
     call require(all(snapshot%memory_usage_history <= 100.0_real64), "capped memory history must not exceed 100")
     call require(metrics%stop(), "collector capacity stop failed")
@@ -115,7 +140,7 @@ contains
     call system_clock(start_count, rate)
     do
       snapshot = metrics%snapshot()
-      if (snapshot%memory%valid .and. snapshot%sample_count >= 2) return
+      if (snapshot%memory%valid .and. snapshot%cpu_total%valid .and. snapshot%sample_count >= 2) return
 
       call system_clock(current_count)
       if (rate <= 0) return

@@ -19,6 +19,9 @@ module ftop_cpu_data
   type, public :: cpu_total_info
     logical :: valid = .false.
     real(real64) :: usage_percent = 0.0_real64
+    real(real64) :: user_percent = 0.0_real64
+    real(real64) :: system_percent = 0.0_real64
+    real(real64) :: iowait_percent = 0.0_real64
     real(real64) :: load_avg(3) = 0.0_real64
     logical :: load_valid = .false.
     integer :: core_count = 0

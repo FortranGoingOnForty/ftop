@@ -25,6 +25,9 @@ contains
 
     call require(.not. total%valid, "CPU total must default invalid")
     call require_close(total%usage_percent, 0.0_real64, "CPU total usage default mismatch")
+    call require_close(total%user_percent, 0.0_real64, "CPU total user default mismatch")
+    call require_close(total%system_percent, 0.0_real64, "CPU total system default mismatch")
+    call require_close(total%iowait_percent, 0.0_real64, "CPU total iowait default mismatch")
     call require_close(total%load_avg(1), 0.0_real64, "CPU load average default mismatch")
     call require(.not. total%load_valid, "CPU load must default invalid")
     call require(total%core_count == 0, "CPU total core count default mismatch")

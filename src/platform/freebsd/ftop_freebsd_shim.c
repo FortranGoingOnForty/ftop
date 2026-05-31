@@ -42,9 +42,33 @@ struct ftop_freebsd_devstat_info {
 #define CPUSTATES 5
 #endif
 
+#ifndef CP_USER
+#define CP_USER 0
+#endif
+
+#ifndef CP_NICE
+#define CP_NICE 1
+#endif
+
+#ifndef CP_SYS
+#define CP_SYS 2
+#endif
+
+#ifndef CP_INTR
+#define CP_INTR 3
+#endif
+
 #ifndef CP_IDLE
 #define CP_IDLE 4
 #endif
+
+struct ftop_freebsd_cpu_state_ticks {
+  long long user;
+  long long nice;
+  long long system;
+  long long idle;
+  long long irq;
+};
 
 int ftop_freebsd_cpu_count(int *count, int *sys_errno) {
   int value;
@@ -99,6 +123,65 @@ int ftop_freebsd_cpu_ticks(long long *total_ticks, long long *idle_ticks, int *s
 
   *total_ticks = total;
   *idle_ticks = cpu_time[CP_IDLE] > 0 ? (long long)cpu_time[CP_IDLE] : 0;
+  return 0;
+}
+
+static long long ftop_nonnegative_long_tick(long value) {
+  return value > 0 ? (long long)value : 0;
+}
+
+int ftop_freebsd_cpu_state_ticks(
+    struct ftop_freebsd_cpu_state_ticks *buffer, size_t capacity, size_t *cpu_count, int *sys_errno) {
+  long *cpu_times;
+  size_t cpu_times_len;
+  size_t available_cpus;
+  size_t copy_count;
+  size_t i;
+
+  if (buffer == NULL || cpu_count == NULL || sys_errno == NULL || capacity == 0) return -1;
+
+  *cpu_count = 0U;
+  *sys_errno = 0;
+  cpu_times = NULL;
+  cpu_times_len = 0U;
+  if (sysctlbyname("kern.cp_times", NULL, &cpu_times_len, NULL, 0) != 0) {
+    *sys_errno = errno;
+    return -1;
+  }
+  if (cpu_times_len < sizeof(long) * CPUSTATES) {
+    *sys_errno = EINVAL;
+    return -1;
+  }
+
+  cpu_times = (long *)malloc(cpu_times_len);
+  if (cpu_times == NULL) {
+    *sys_errno = ENOMEM;
+    return -1;
+  }
+
+  if (sysctlbyname("kern.cp_times", cpu_times, &cpu_times_len, NULL, 0) != 0) {
+    *sys_errno = errno;
+    free(cpu_times);
+    return -1;
+  }
+
+  available_cpus = cpu_times_len / (sizeof(long) * CPUSTATES);
+  copy_count = available_cpus < capacity ? available_cpus : capacity;
+  for (i = 0U; i < copy_count; ++i) {
+    long *cpu = &cpu_times[i * CPUSTATES];
+    buffer[i].user = ftop_nonnegative_long_tick(cpu[CP_USER]);
+    buffer[i].nice = ftop_nonnegative_long_tick(cpu[CP_NICE]);
+    buffer[i].system = ftop_nonnegative_long_tick(cpu[CP_SYS]);
+    buffer[i].idle = ftop_nonnegative_long_tick(cpu[CP_IDLE]);
+    buffer[i].irq = ftop_nonnegative_long_tick(cpu[CP_INTR]);
+  }
+
+  free(cpu_times);
+  if (copy_count == 0U) {
+    *sys_errno = EINVAL;
+    return -1;
+  }
+  *cpu_count = copy_count;
   return 0;
 }
 

@@ -1,6 +1,7 @@
 module ftop_platform
   use, intrinsic :: iso_c_binding, only : c_char, c_double, c_int, c_long_long, c_null_char, c_size_t
   use, intrinsic :: iso_fortran_env, only : int64, real64
+  use ftop_cpu_data, only : cpu_state_ticks, cpu_state_total_ticks
   use ftop_platform_types, only : cpu_tick_sample, cpu_usage_percent, load_average_info, memory_info, platform_backend
   implicit none
   private
@@ -16,6 +17,7 @@ module ftop_platform
   contains
     procedure :: get_cpu_count => macos_get_cpu_count
     procedure :: get_cpu_sample => macos_get_cpu_sample
+    procedure :: get_cpu_state_snapshot => macos_get_cpu_state_snapshot
     procedure :: get_memory_info => macos_get_memory_info
     procedure :: get_load_average => macos_get_load_average
   end type macos_backend
@@ -165,6 +167,35 @@ contains
     end if
   end function macos_get_cpu_sample
 
+  logical function macos_get_cpu_state_snapshot(self, total, cores) result(success)
+    class(macos_backend), intent(in) :: self
+    type(cpu_state_ticks), intent(out) :: total
+    type(cpu_state_ticks), allocatable, intent(out) :: cores(:)
+    type(macos_processor_ticks), allocatable :: c_ticks(:)
+    integer :: capacity
+    integer :: processor_count
+    integer :: i
+
+    total = cpu_state_ticks()
+    if (allocated(cores)) deallocate(cores)
+    capacity = max(1, macos_get_cpu_count(self))
+    allocate(c_ticks(capacity))
+
+    success = macos_processor_tick_samples(c_ticks, processor_count)
+    if (.not. success .or. processor_count <= 0) then
+      allocate(cores(0))
+      success = .false.
+      return
+    end if
+
+    allocate(cores(processor_count))
+    do i = 1, size(cores)
+      cores(i) = macos_cpu_state_from_c(c_ticks(i))
+      call add_cpu_state(total, cores(i))
+    end do
+    total%valid = cpu_state_total_ticks(total) > 0_int64
+  end function macos_get_cpu_state_snapshot
+
   function macos_get_memory_info(self) result(info)
     class(macos_backend), intent(in) :: self
     type(memory_info) :: info
@@ -202,6 +233,32 @@ contains
       info%values = real(loads, real64)
     end if
   end function macos_get_load_average
+
+  function macos_cpu_state_from_c(c_ticks) result(ticks)
+    type(macos_processor_ticks), intent(in) :: c_ticks
+    type(cpu_state_ticks) :: ticks
+
+    ticks%user = int(max(0_c_long_long, c_ticks%user), int64)
+    ticks%nice = int(max(0_c_long_long, c_ticks%nice), int64)
+    ticks%system = int(max(0_c_long_long, c_ticks%system), int64)
+    ticks%idle = int(max(0_c_long_long, c_ticks%idle), int64)
+    ticks%valid = cpu_state_total_ticks(ticks) > 0_int64
+  end function macos_cpu_state_from_c
+
+  subroutine add_cpu_state(total, core)
+    type(cpu_state_ticks), intent(inout) :: total
+    type(cpu_state_ticks), intent(in) :: core
+
+    if (.not. core%valid) return
+    total%user = total%user + core%user
+    total%nice = total%nice + core%nice
+    total%system = total%system + core%system
+    total%idle = total%idle + core%idle
+    total%iowait = total%iowait + core%iowait
+    total%irq = total%irq + core%irq
+    total%softirq = total%softirq + core%softirq
+    total%steal = total%steal + core%steal
+  end subroutine add_cpu_state
 
   logical function macos_processor_tick_samples(ticks, processor_count, error_code) result(success)
     type(macos_processor_ticks), intent(out) :: ticks(:)

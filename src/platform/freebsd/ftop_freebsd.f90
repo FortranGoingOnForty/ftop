@@ -11,6 +11,7 @@ module ftop_platform
     c_ptr, &
     c_size_t
   use, intrinsic :: iso_fortran_env, only : int64, real64
+  use ftop_cpu_data, only : cpu_state_ticks, cpu_state_total_ticks
   use ftop_platform_types, only : cpu_tick_sample, cpu_usage_percent, load_average_info, memory_info, platform_backend
   implicit none
   private
@@ -45,10 +46,19 @@ module ftop_platform
     character(kind=c_char) :: name(FREEBSD_DEVSTAT_NAME_LEN)
   end type freebsd_devstat_info
 
+  type, bind(C) :: freebsd_cpu_state_tick_sample
+    integer(c_long_long) :: user
+    integer(c_long_long) :: nice
+    integer(c_long_long) :: system
+    integer(c_long_long) :: idle
+    integer(c_long_long) :: irq
+  end type freebsd_cpu_state_tick_sample
+
   type, extends(platform_backend) :: freebsd_backend
   contains
     procedure :: get_cpu_count => freebsd_get_cpu_count
     procedure :: get_cpu_sample => freebsd_get_cpu_sample
+    procedure :: get_cpu_state_snapshot => freebsd_get_cpu_state_snapshot
     procedure :: get_memory_info => freebsd_get_memory_info
     procedure :: get_load_average => freebsd_get_load_average
   end type freebsd_backend
@@ -82,6 +92,15 @@ module ftop_platform
       integer(c_long_long), intent(out) :: idle_ticks
       integer(c_int), intent(out) :: sys_errno
     end function c_ftop_freebsd_cpu_ticks
+
+    integer(c_int) function c_ftop_freebsd_cpu_state_ticks(ticks, capacity, cpu_count, sys_errno) &
+        bind(C, name="ftop_freebsd_cpu_state_ticks")
+      import :: c_int, c_size_t, freebsd_cpu_state_tick_sample
+      type(freebsd_cpu_state_tick_sample), intent(out) :: ticks(*)
+      integer(c_size_t), value :: capacity
+      integer(c_size_t), intent(out) :: cpu_count
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_freebsd_cpu_state_ticks
 
     integer(c_int) function c_ftop_freebsd_memory_info(total_bytes, available_bytes, sys_errno) &
         bind(C, name="ftop_freebsd_memory_info")
@@ -209,6 +228,37 @@ contains
     end if
   end function freebsd_get_cpu_sample
 
+  logical function freebsd_get_cpu_state_snapshot(self, total, cores) result(success)
+    class(freebsd_backend), intent(in) :: self
+    type(cpu_state_ticks), intent(out) :: total
+    type(cpu_state_ticks), allocatable, intent(out) :: cores(:)
+    type(freebsd_cpu_state_tick_sample), allocatable :: c_ticks(:)
+    integer(c_size_t) :: cpu_count
+    integer(c_int) :: sys_errno
+    integer(c_int) :: rc
+    integer :: capacity
+    integer :: i
+
+    total = cpu_state_ticks()
+    if (allocated(cores)) deallocate(cores)
+    capacity = max(1, freebsd_get_cpu_count(self))
+    allocate(c_ticks(capacity))
+
+    rc = c_ftop_freebsd_cpu_state_ticks(c_ticks, int(size(c_ticks), c_size_t), cpu_count, sys_errno)
+    success = rc == 0_c_int .and. cpu_count > 0_c_size_t
+    if (.not. success) then
+      allocate(cores(0))
+      return
+    end if
+
+    allocate(cores(int(cpu_count)))
+    do i = 1, size(cores)
+      cores(i) = freebsd_cpu_state_from_c(c_ticks(i))
+      call add_cpu_state(total, cores(i))
+    end do
+    total%valid = cpu_state_total_ticks(total) > 0_int64
+  end function freebsd_get_cpu_state_snapshot
+
   function freebsd_get_memory_info(self) result(info)
     class(freebsd_backend), intent(in) :: self
     type(memory_info) :: info
@@ -246,6 +296,33 @@ contains
       info%values = real(loads, real64)
     end if
   end function freebsd_get_load_average
+
+  function freebsd_cpu_state_from_c(c_ticks) result(ticks)
+    type(freebsd_cpu_state_tick_sample), intent(in) :: c_ticks
+    type(cpu_state_ticks) :: ticks
+
+    ticks%user = int(max(0_c_long_long, c_ticks%user), int64)
+    ticks%nice = int(max(0_c_long_long, c_ticks%nice), int64)
+    ticks%system = int(max(0_c_long_long, c_ticks%system), int64)
+    ticks%idle = int(max(0_c_long_long, c_ticks%idle), int64)
+    ticks%irq = int(max(0_c_long_long, c_ticks%irq), int64)
+    ticks%valid = cpu_state_total_ticks(ticks) > 0_int64
+  end function freebsd_cpu_state_from_c
+
+  subroutine add_cpu_state(total, core)
+    type(cpu_state_ticks), intent(inout) :: total
+    type(cpu_state_ticks), intent(in) :: core
+
+    if (.not. core%valid) return
+    total%user = total%user + core%user
+    total%nice = total%nice + core%nice
+    total%system = total%system + core%system
+    total%idle = total%idle + core%idle
+    total%iowait = total%iowait + core%iowait
+    total%irq = total%irq + core%irq
+    total%softirq = total%softirq + core%softirq
+    total%steal = total%steal + core%steal
+  end subroutine add_cpu_state
 
   logical function freebsd_sysctl_int(name, value, error_code) result(success)
     character(len=*), intent(in) :: name

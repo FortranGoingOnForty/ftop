@@ -25,6 +25,7 @@ module ftop_platform
   contains
     procedure :: get_cpu_count => linux_get_cpu_count
     procedure :: get_cpu_sample => linux_get_cpu_sample
+    procedure :: get_cpu_state_snapshot => linux_get_cpu_state_snapshot
     procedure :: get_memory_info => linux_get_memory_info
     procedure :: get_load_average => linux_get_load_average
   end type linux_backend
@@ -144,6 +145,17 @@ contains
       sample%idle = max(0_int64, total%idle + total%iowait)
     end if
   end function linux_get_cpu_sample
+
+  logical function linux_get_cpu_state_snapshot(self, total, cores) result(success)
+    class(linux_backend), intent(in) :: self
+    type(cpu_state_ticks), intent(out) :: total
+    type(cpu_state_ticks), allocatable, intent(out) :: cores(:)
+
+    associate(unused => self)
+    end associate
+
+    success = linux_cpu_state_snapshot(total, cores)
+  end function linux_get_cpu_state_snapshot
 
   function linux_get_memory_info(self) result(info)
     class(linux_backend), intent(in) :: self

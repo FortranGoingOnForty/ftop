@@ -1,5 +1,6 @@
 program test_platform
   use, intrinsic :: iso_fortran_env, only : real64
+  use ftop_cpu_data, only : cpu_state_ticks, cpu_state_total_ticks
   use ftop_platform, only : &
     cpu_tick_sample, &
     cpu_usage_percent, &
@@ -12,6 +13,8 @@ program test_platform
   class(platform_backend), allocatable :: backend
   type(cpu_tick_sample) :: first_sample
   type(cpu_tick_sample) :: second_sample
+  type(cpu_state_ticks) :: total_cpu_state
+  type(cpu_state_ticks), allocatable :: core_cpu_states(:)
   type(memory_info) :: memory
   type(load_average_info) :: load_average
   integer :: cpu_count
@@ -33,6 +36,13 @@ program test_platform
 
   usage = cpu_usage_percent(first_sample, second_sample)
   if (usage < 0.0_real64 .or. usage > 100.0_real64) error stop "CPU usage must be in range"
+
+  if (.not. backend%get_cpu_state_snapshot(total_cpu_state, core_cpu_states)) error stop "CPU state snapshot failed"
+  if (.not. total_cpu_state%valid) error stop "total CPU state must be valid"
+  if (size(core_cpu_states) <= 0) error stop "CPU state snapshot must include cores"
+  if (.not. core_cpu_states(1)%valid) error stop "first CPU core state must be valid"
+  if (cpu_state_total_ticks(total_cpu_state) <= 0) error stop "total CPU state ticks must be positive"
+  if (cpu_state_total_ticks(core_cpu_states(1)) <= 0) error stop "first CPU core ticks must be positive"
 
   memory = backend%get_memory_info()
   if (.not. memory%valid) error stop "memory info must be valid"

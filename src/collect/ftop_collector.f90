@@ -9,11 +9,13 @@ module ftop_collector
     c_null_ptr, &
     c_ptr
   use, intrinsic :: iso_fortran_env, only : int64, real64
-  use ftop_cpu_data, only : cpu_total_info
+  use ftop_cpu_data, only : &
+    cpu_core_info, &
+    cpu_state_delta_info, &
+    cpu_state_ticks, &
+    cpu_total_info
   use ftop_mem_data, only : metric_memory_info => memory_info
   use ftop_platform, only : &
-    cpu_tick_sample, &
-    cpu_usage_percent, &
     create_platform, &
     load_average_info, &
     platform_backend, &
@@ -34,6 +36,7 @@ module ftop_collector
   integer, parameter, public :: FTOP_COLLECTOR_MIN_INTERVAL_MS = 1
   integer, parameter, public :: FTOP_COLLECTOR_MAX_INTERVAL_MS = 60000
   integer, parameter, public :: FTOP_COLLECTOR_HISTORY_CAPACITY = 300
+  integer, parameter, public :: FTOP_COLLECTOR_MAX_CPU_CORES = 512
 
   type, bind(C) :: collector_shared_state
     integer(c_int) :: stop_requested
@@ -42,7 +45,17 @@ module ftop_collector
     integer(c_int) :: sample_count
     integer(c_int) :: interval_ms
     integer(c_int) :: cpu_count
+    integer(c_int) :: cpu_valid
     real(c_double) :: cpu_usage_percent
+    real(c_double) :: cpu_user_percent
+    real(c_double) :: cpu_system_percent
+    real(c_double) :: cpu_iowait_percent
+    integer(c_int) :: cpu_core_count
+    integer(c_int) :: cpu_core_valid(FTOP_COLLECTOR_MAX_CPU_CORES)
+    real(c_double) :: cpu_core_usage_percent(FTOP_COLLECTOR_MAX_CPU_CORES)
+    real(c_double) :: cpu_core_user_percent(FTOP_COLLECTOR_MAX_CPU_CORES)
+    real(c_double) :: cpu_core_system_percent(FTOP_COLLECTOR_MAX_CPU_CORES)
+    real(c_double) :: cpu_core_iowait_percent(FTOP_COLLECTOR_MAX_CPU_CORES)
     integer(c_int) :: load_valid
     real(c_double) :: load_average(3)
     integer(c_int) :: memory_valid
@@ -57,6 +70,7 @@ module ftop_collector
     integer(c_int) :: history_start
     integer(c_int) :: history_count
     real(c_double) :: cpu_usage_history(FTOP_COLLECTOR_HISTORY_CAPACITY)
+    real(c_double) :: cpu_core_usage_history(FTOP_COLLECTOR_MAX_CPU_CORES, FTOP_COLLECTOR_HISTORY_CAPACITY)
     real(c_double) :: memory_usage_history(FTOP_COLLECTOR_HISTORY_CAPACITY)
     type(c_ptr) :: mutex
   end type collector_shared_state
@@ -66,8 +80,10 @@ module ftop_collector
     logical :: warming_up = .true.
     integer :: sample_count = 0
     type(cpu_total_info) :: cpu_total
+    type(cpu_core_info), allocatable :: cpu_cores(:)
     type(metric_memory_info) :: memory
     real(real64), allocatable :: cpu_usage_history(:)
+    real(real64), allocatable :: cpu_core_usage_history(:, :)
     real(real64), allocatable :: memory_usage_history(:)
   end type collector_snapshot
 
@@ -191,8 +207,11 @@ contains
     snapshot%running = self%state%running /= 0_c_int
     snapshot%warming_up = self%state%warming_up /= 0_c_int
     snapshot%sample_count = int(self%state%sample_count)
-    snapshot%cpu_total%valid = snapshot%sample_count > 0 .and. .not. snapshot%warming_up
+    snapshot%cpu_total%valid = self%state%cpu_valid /= 0_c_int
     snapshot%cpu_total%usage_percent = real(self%state%cpu_usage_percent, real64)
+    snapshot%cpu_total%user_percent = real(self%state%cpu_user_percent, real64)
+    snapshot%cpu_total%system_percent = real(self%state%cpu_system_percent, real64)
+    snapshot%cpu_total%iowait_percent = real(self%state%cpu_iowait_percent, real64)
     snapshot%cpu_total%load_valid = self%state%load_valid /= 0_c_int
     snapshot%cpu_total%load_avg = real(self%state%load_average, real64)
     snapshot%cpu_total%core_count = int(self%state%cpu_count)
@@ -206,6 +225,11 @@ contains
     snapshot%memory%buffers_bytes = int(self%state%memory_buffers_bytes, int64)
     snapshot%memory%swap_total_bytes = int(self%state%memory_swap_total_bytes, int64)
     snapshot%memory%swap_used_bytes = int(self%state%memory_swap_used_bytes, int64)
+    if (.not. copy_cpu_cores(self%state, snapshot)) then
+      call clear_snapshot(snapshot)
+      call ignore_mutex_unlock(self%mutex)
+      return
+    end if
     if (.not. copy_history(self%state, snapshot)) then
       call clear_snapshot(snapshot)
       call ignore_mutex_unlock(self%mutex)
@@ -245,12 +269,15 @@ contains
     type(c_ptr) :: result
     type(collector_shared_state), pointer :: state
     class(platform_backend), allocatable :: backend
-    type(cpu_tick_sample) :: previous_cpu
-    type(cpu_tick_sample) :: current_cpu
+    type(cpu_state_ticks) :: previous_total_cpu
+    type(cpu_state_ticks) :: current_total_cpu
+    type(cpu_state_ticks), allocatable :: previous_core_cpus(:)
+    type(cpu_state_ticks), allocatable :: current_core_cpus(:)
+    type(cpu_core_info) :: total_cpu
+    type(cpu_core_info), allocatable :: core_cpus(:)
     type(platform_memory_info) :: memory
     type(load_average_info) :: load_average
     integer(c_long_long) :: deadline_ms
-    real(real64) :: usage_percent
     logical :: warming_up
 
     result = c_null_ptr
@@ -259,33 +286,69 @@ contains
     if (.not. associated(state)) return
 
     backend = create_platform()
-    previous_cpu = backend%get_cpu_sample()
+    if (.not. backend%get_cpu_state_snapshot(previous_total_cpu, previous_core_cpus)) then
+      previous_total_cpu = cpu_state_ticks()
+      allocate(previous_core_cpus(0))
+    end if
+    call make_invalid_cpu_infos(size(previous_core_cpus), total_cpu, core_cpus)
     memory = backend%get_memory_info()
     load_average = backend%get_load_average()
-    call publish_sample(state, backend%get_cpu_count(), 0.0_real64, .true., memory, load_average)
+    call publish_sample(state, backend%get_cpu_count(), total_cpu, core_cpus, .true., memory, load_average)
 
     deadline_ms = monotonic_ms()
     do
       if (sleep_until_or_stop(state, deadline_ms + interval_ms(state))) exit
       deadline_ms = deadline_ms + interval_ms(state)
 
-      current_cpu = backend%get_cpu_sample()
       memory = backend%get_memory_info()
       load_average = backend%get_load_average()
       warming_up = .true.
-      usage_percent = 0.0_real64
-      if (previous_cpu%valid .and. current_cpu%valid .and. current_cpu%total > previous_cpu%total) then
-        usage_percent = cpu_usage_percent(previous_cpu, current_cpu)
-        warming_up = .false.
+      call make_invalid_cpu_infos(size(previous_core_cpus), total_cpu, core_cpus)
+      if (backend%get_cpu_state_snapshot(current_total_cpu, current_core_cpus)) then
+        call make_cpu_delta_infos(previous_total_cpu, previous_core_cpus, current_total_cpu, current_core_cpus, &
+                                  total_cpu, core_cpus)
+        warming_up = .not. total_cpu%valid
+        if (current_total_cpu%valid) then
+          previous_total_cpu = current_total_cpu
+          if (allocated(previous_core_cpus)) deallocate(previous_core_cpus)
+          allocate(previous_core_cpus(size(current_core_cpus)))
+          previous_core_cpus = current_core_cpus
+        end if
       end if
-      if (current_cpu%valid) previous_cpu = current_cpu
 
-      call publish_sample(state, backend%get_cpu_count(), usage_percent, warming_up, memory, load_average)
+      call publish_sample(state, backend%get_cpu_count(), total_cpu, core_cpus, warming_up, memory, load_average)
       if (should_stop(state)) exit
     end do
 
     call mark_not_running(state)
   end function collector_thread_main
+
+  subroutine make_invalid_cpu_infos(core_count, total_cpu, core_cpus)
+    integer, intent(in) :: core_count
+    type(cpu_core_info), intent(out) :: total_cpu
+    type(cpu_core_info), allocatable, intent(out) :: core_cpus(:)
+
+    total_cpu = cpu_core_info()
+    allocate(core_cpus(bounded_core_count(core_count)))
+  end subroutine make_invalid_cpu_infos
+
+  subroutine make_cpu_delta_infos(previous_total, previous_cores, current_total, current_cores, total_cpu, core_cpus)
+    type(cpu_state_ticks), intent(in) :: previous_total
+    type(cpu_state_ticks), intent(in) :: previous_cores(:)
+    type(cpu_state_ticks), intent(in) :: current_total
+    type(cpu_state_ticks), intent(in) :: current_cores(:)
+    type(cpu_core_info), intent(out) :: total_cpu
+    type(cpu_core_info), allocatable, intent(out) :: core_cpus(:)
+    integer :: core_count
+    integer :: core_index
+
+    total_cpu = cpu_state_delta_info(previous_total, current_total)
+    core_count = bounded_core_count(size(current_cores))
+    allocate(core_cpus(core_count))
+    do core_index = 1, min(core_count, size(previous_cores))
+      core_cpus(core_index) = cpu_state_delta_info(previous_cores(core_index), current_cores(core_index))
+    end do
+  end subroutine make_cpu_delta_infos
 
   subroutine clear_state(state, interval_ms)
     type(collector_shared_state), intent(out) :: state
@@ -297,7 +360,17 @@ contains
     state%sample_count = 0_c_int
     state%interval_ms = int(interval_ms, c_int)
     state%cpu_count = 0_c_int
+    state%cpu_valid = 0_c_int
     state%cpu_usage_percent = 0.0_c_double
+    state%cpu_user_percent = 0.0_c_double
+    state%cpu_system_percent = 0.0_c_double
+    state%cpu_iowait_percent = 0.0_c_double
+    state%cpu_core_count = 0_c_int
+    state%cpu_core_valid = 0_c_int
+    state%cpu_core_usage_percent = 0.0_c_double
+    state%cpu_core_user_percent = 0.0_c_double
+    state%cpu_core_system_percent = 0.0_c_double
+    state%cpu_core_iowait_percent = 0.0_c_double
     state%load_valid = 0_c_int
     state%load_average = 0.0_c_double
     state%memory_valid = 0_c_int
@@ -312,6 +385,7 @@ contains
     state%history_start = 1_c_int
     state%history_count = 0_c_int
     state%cpu_usage_history = 0.0_c_double
+    state%cpu_core_usage_history = 0.0_c_double
     state%memory_usage_history = 0.0_c_double
     state%mutex = c_null_ptr
   end subroutine clear_state
@@ -323,7 +397,17 @@ contains
     state%warming_up = 1_c_int
     state%sample_count = 0_c_int
     state%cpu_count = 0_c_int
+    state%cpu_valid = 0_c_int
     state%cpu_usage_percent = 0.0_c_double
+    state%cpu_user_percent = 0.0_c_double
+    state%cpu_system_percent = 0.0_c_double
+    state%cpu_iowait_percent = 0.0_c_double
+    state%cpu_core_count = 0_c_int
+    state%cpu_core_valid = 0_c_int
+    state%cpu_core_usage_percent = 0.0_c_double
+    state%cpu_core_user_percent = 0.0_c_double
+    state%cpu_core_system_percent = 0.0_c_double
+    state%cpu_core_iowait_percent = 0.0_c_double
     state%load_valid = 0_c_int
     state%load_average = 0.0_c_double
     state%memory_valid = 0_c_int
@@ -338,6 +422,7 @@ contains
     state%history_start = 1_c_int
     state%history_count = 0_c_int
     state%cpu_usage_history = 0.0_c_double
+    state%cpu_core_usage_history = 0.0_c_double
     state%memory_usage_history = 0.0_c_double
   end subroutine clear_runtime_state
 
@@ -349,6 +434,9 @@ contains
     snapshot%sample_count = 0
     snapshot%cpu_total%valid = .false.
     snapshot%cpu_total%usage_percent = 0.0_real64
+    snapshot%cpu_total%user_percent = 0.0_real64
+    snapshot%cpu_total%system_percent = 0.0_real64
+    snapshot%cpu_total%iowait_percent = 0.0_real64
     snapshot%cpu_total%load_avg = 0.0_real64
     snapshot%cpu_total%load_valid = .false.
     snapshot%cpu_total%core_count = 0
@@ -364,17 +452,45 @@ contains
     snapshot%memory%swap_used_bytes = 0_int64
   end subroutine clear_snapshot
 
+  logical function copy_cpu_cores(state, snapshot) result(success)
+    type(collector_shared_state), intent(in) :: state
+    type(collector_snapshot), intent(inout) :: snapshot
+    integer :: allocation_status
+    integer :: core_count
+    integer :: core_index
+
+    success = .false.
+    core_count = bounded_core_count(int(state%cpu_core_count))
+    allocate(snapshot%cpu_cores(core_count), stat=allocation_status)
+    if (allocation_status /= 0) return
+
+    do core_index = 1, core_count
+      snapshot%cpu_cores(core_index)%valid = state%cpu_core_valid(core_index) /= 0_c_int
+      snapshot%cpu_cores(core_index)%usage_percent = real(state%cpu_core_usage_percent(core_index), real64)
+      snapshot%cpu_cores(core_index)%user_percent = real(state%cpu_core_user_percent(core_index), real64)
+      snapshot%cpu_cores(core_index)%system_percent = real(state%cpu_core_system_percent(core_index), real64)
+      snapshot%cpu_cores(core_index)%iowait_percent = real(state%cpu_core_iowait_percent(core_index), real64)
+    end do
+
+    success = .true.
+  end function copy_cpu_cores
+
   logical function copy_history(state, snapshot) result(success)
     type(collector_shared_state), intent(in) :: state
     type(collector_snapshot), intent(inout) :: snapshot
     integer :: allocation_status
+    integer :: core_count
+    integer :: core_index
     integer :: item_index
     integer :: source_index
     integer :: history_count
 
     success = .false.
     history_count = max(0, min(int(state%history_count), FTOP_COLLECTOR_HISTORY_CAPACITY))
+    core_count = bounded_core_count(int(state%cpu_core_count))
     allocate(snapshot%cpu_usage_history(history_count), stat=allocation_status)
+    if (allocation_status /= 0) return
+    allocate(snapshot%cpu_core_usage_history(core_count, history_count), stat=allocation_status)
     if (allocation_status /= 0) return
     allocate(snapshot%memory_usage_history(history_count), stat=allocation_status)
     if (allocation_status /= 0) return
@@ -382,6 +498,10 @@ contains
     do item_index = 1, history_count
       source_index = history_index(state, item_index)
       snapshot%cpu_usage_history(item_index) = real(state%cpu_usage_history(source_index), real64)
+      do core_index = 1, core_count
+        snapshot%cpu_core_usage_history(core_index, item_index) = &
+          real(state%cpu_core_usage_history(core_index, source_index), real64)
+      end do
       snapshot%memory_usage_history(item_index) = real(state%memory_usage_history(source_index), real64)
     end do
 
@@ -394,6 +514,12 @@ contains
 
     index = modulo(int(state%history_start) + item_index - 2, FTOP_COLLECTOR_HISTORY_CAPACITY) + 1
   end function history_index
+
+  integer function bounded_core_count(core_count) result(bounded)
+    integer, intent(in) :: core_count
+
+    bounded = max(0, min(FTOP_COLLECTOR_MAX_CPU_CORES, core_count))
+  end function bounded_core_count
 
   integer function bounded_interval_ms(interval_ms) result(bounded)
     integer, intent(in), optional :: interval_ms
@@ -475,20 +601,29 @@ contains
     if (.not. ftop_mutex_unlock(mutex)) stop_requested = .true.
   end function should_stop
 
-  subroutine publish_sample(state, cpu_count, usage_percent, warming_up, memory, load_average)
+  subroutine publish_sample(state, cpu_count, total_cpu, core_cpus, warming_up, memory, load_average)
     type(collector_shared_state), intent(inout) :: state
     integer, intent(in) :: cpu_count
-    real(real64), intent(in) :: usage_percent
+    type(cpu_core_info), intent(in) :: total_cpu
+    type(cpu_core_info), intent(in) :: core_cpus(:)
     logical, intent(in) :: warming_up
     type(platform_memory_info), intent(in) :: memory
     type(load_average_info), intent(in) :: load_average
     type(ftop_mutex_handle) :: mutex
+    integer :: core_count
 
     mutex%handle = state%mutex
     if (.not. ftop_mutex_lock(mutex)) return
 
     state%cpu_count = int(max(0, cpu_count), c_int)
-    state%cpu_usage_percent = real(max(0.0_real64, min(100.0_real64, usage_percent)), c_double)
+    state%cpu_valid = merge(1_c_int, 0_c_int, total_cpu%valid .and. .not. warming_up)
+    state%cpu_usage_percent = real(clamp_percent(total_cpu%usage_percent), c_double)
+    state%cpu_user_percent = real(clamp_percent(total_cpu%user_percent), c_double)
+    state%cpu_system_percent = real(clamp_percent(total_cpu%system_percent), c_double)
+    state%cpu_iowait_percent = real(clamp_percent(total_cpu%iowait_percent), c_double)
+    core_count = bounded_core_count(size(core_cpus))
+    state%cpu_core_count = int(core_count, c_int)
+    call publish_cpu_cores(state, core_cpus, core_count, warming_up)
     state%load_valid = merge(1_c_int, 0_c_int, load_average%valid)
     state%load_average = real(max(0.0_real64, load_average%values), c_double)
     state%warming_up = merge(1_c_int, 0_c_int, warming_up)
@@ -502,15 +637,39 @@ contains
     state%memory_buffers_bytes = int(clamp_memory_value(memory%buffers_bytes, memory%total_bytes), c_long_long)
     state%memory_swap_total_bytes = int(max(0_int64, memory%swap_total_bytes), c_long_long)
     state%memory_swap_used_bytes = int(clamp_memory_value(memory%swap_used_bytes, memory%swap_total_bytes), c_long_long)
-    call append_history(state, real(state%cpu_usage_percent, real64), memory_usage_percent(memory))
+    call append_history(state, real(state%cpu_usage_percent, real64), memory_usage_percent(memory), core_cpus, core_count)
 
     if (.not. ftop_mutex_unlock(mutex)) return
   end subroutine publish_sample
 
-  subroutine append_history(state, cpu_usage_percent, memory_usage_percent)
+  subroutine publish_cpu_cores(state, core_cpus, core_count, warming_up)
+    type(collector_shared_state), intent(inout) :: state
+    type(cpu_core_info), intent(in) :: core_cpus(:)
+    integer, intent(in) :: core_count
+    logical, intent(in) :: warming_up
+    integer :: core_index
+
+    state%cpu_core_valid = 0_c_int
+    state%cpu_core_usage_percent = 0.0_c_double
+    state%cpu_core_user_percent = 0.0_c_double
+    state%cpu_core_system_percent = 0.0_c_double
+    state%cpu_core_iowait_percent = 0.0_c_double
+    do core_index = 1, core_count
+      state%cpu_core_valid(core_index) = merge(1_c_int, 0_c_int, core_cpus(core_index)%valid .and. .not. warming_up)
+      state%cpu_core_usage_percent(core_index) = real(clamp_percent(core_cpus(core_index)%usage_percent), c_double)
+      state%cpu_core_user_percent(core_index) = real(clamp_percent(core_cpus(core_index)%user_percent), c_double)
+      state%cpu_core_system_percent(core_index) = real(clamp_percent(core_cpus(core_index)%system_percent), c_double)
+      state%cpu_core_iowait_percent(core_index) = real(clamp_percent(core_cpus(core_index)%iowait_percent), c_double)
+    end do
+  end subroutine publish_cpu_cores
+
+  subroutine append_history(state, cpu_usage_percent, memory_usage_percent, core_cpus, core_count)
     type(collector_shared_state), intent(inout) :: state
     real(real64), intent(in) :: cpu_usage_percent
     real(real64), intent(in) :: memory_usage_percent
+    type(cpu_core_info), intent(in) :: core_cpus(:)
+    integer, intent(in) :: core_count
+    integer :: core_index
     integer :: index
 
     if (state%history_count < FTOP_COLLECTOR_HISTORY_CAPACITY) then
@@ -521,9 +680,19 @@ contains
       state%history_start = int(modulo(int(state%history_start), FTOP_COLLECTOR_HISTORY_CAPACITY) + 1, c_int)
     end if
 
-    state%cpu_usage_history(index) = real(max(0.0_real64, min(100.0_real64, cpu_usage_percent)), c_double)
-    state%memory_usage_history(index) = real(max(0.0_real64, min(100.0_real64, memory_usage_percent)), c_double)
+    state%cpu_usage_history(index) = real(clamp_percent(cpu_usage_percent), c_double)
+    state%cpu_core_usage_history(:, index) = 0.0_c_double
+    do core_index = 1, core_count
+      state%cpu_core_usage_history(core_index, index) = real(clamp_percent(core_cpus(core_index)%usage_percent), c_double)
+    end do
+    state%memory_usage_history(index) = real(clamp_percent(memory_usage_percent), c_double)
   end subroutine append_history
+
+  pure real(real64) function clamp_percent(value) result(clamped)
+    real(real64), intent(in) :: value
+
+    clamped = max(0.0_real64, min(100.0_real64, value))
+  end function clamp_percent
 
   real(real64) function memory_usage_percent(memory) result(usage_percent)
     type(platform_memory_info), intent(in) :: memory

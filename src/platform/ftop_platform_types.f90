@@ -1,5 +1,6 @@
 module ftop_platform_types
   use, intrinsic :: iso_fortran_env, only : int64, real64
+  use ftop_cpu_data, only : cpu_state_ticks
   implicit none
   private
 
@@ -36,6 +37,7 @@ module ftop_platform_types
   contains
     procedure(get_cpu_count_interface), deferred :: get_cpu_count
     procedure(get_cpu_sample_interface), deferred :: get_cpu_sample
+    procedure(get_cpu_state_snapshot_interface), deferred :: get_cpu_state_snapshot
     procedure(get_memory_info_interface), deferred :: get_memory_info
     procedure(get_load_average_interface), deferred :: get_load_average
   end type platform_backend
@@ -51,6 +53,13 @@ module ftop_platform_types
       class(platform_backend), intent(in) :: self
       type(cpu_tick_sample) :: sample
     end function get_cpu_sample_interface
+
+    logical function get_cpu_state_snapshot_interface(self, total, cores) result(success)
+      import :: cpu_state_ticks, platform_backend
+      class(platform_backend), intent(in) :: self
+      type(cpu_state_ticks), intent(out) :: total
+      type(cpu_state_ticks), allocatable, intent(out) :: cores(:)
+    end function get_cpu_state_snapshot_interface
 
     function get_memory_info_interface(self) result(info)
       import :: memory_info, platform_backend
