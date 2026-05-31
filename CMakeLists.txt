@@ -96,6 +96,8 @@ add_library(
   src/ftop_app.f90
   src/widgets/ftop_text.f90
   src/widgets/ftop_box.f90
+  src/widgets/ftop_meter.f90
+  src/widgets/ftop_sparkline.f90
   src/shim/ftop_dl.c
   src/shim/ftop_pthread.c
   src/shim/ftop_signal.c

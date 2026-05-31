@@ -36,6 +36,16 @@ target_link_libraries(ftop_widgets_test PRIVATE ftop_core)
 
 add_test(NAME ftop_widgets COMMAND ftop_widgets_test)
 
+add_executable(ftop_meter_test unit/test_meter.f90)
+target_link_libraries(ftop_meter_test PRIVATE ftop_core)
+
+add_test(NAME ftop_meter COMMAND ftop_meter_test)
+
+add_executable(ftop_sparkline_test unit/test_sparkline.f90)
+target_link_libraries(ftop_sparkline_test PRIVATE ftop_core)
+
+add_test(NAME ftop_sparkline COMMAND ftop_sparkline_test)
+
 add_executable(ftop_linux_proc_stat_test unit/test_linux_proc_stat.f90)
 target_link_libraries(ftop_linux_proc_stat_test PRIVATE ftop_core)
 

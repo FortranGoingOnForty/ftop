@@ -33,20 +33,20 @@ A complete set of reusable rendering widgets built on fgof-screen: boxes, text l
   - [x] Printf-style formatting for numbers (e.g., "47.3%", "1.2 GiB")
 
 ### Bar Meter Widget
-- [ ] `src/widgets/ftop_meter.f90`
-  - [ ] Horizontal bar: `[████████░░░░░░░░]` style
-  - [ ] Fill characters: block (`█`), gradient blocks (`░▒▓█`)
-  - [ ] Color gradient applied to fill (green at 0% -> red at 100%)
-  - [ ] Label overlay (e.g., "47%" centered on bar)
-  - [ ] Compact mode: single-line, no border
+- [x] `src/widgets/ftop_meter.f90`
+  - [x] Horizontal bar: `[████████░░░░░░░░]` style
+  - [x] Fill characters: block (`█`), gradient blocks (`░▒▓█`)
+  - [x] Color gradient applied to fill (green at 0% -> red at 100%)
+  - [x] Label overlay (e.g., "47%" centered on bar)
+  - [x] Compact mode: single-line, no border
 
 ### Sparkline Widget
-- [ ] `src/widgets/ftop_sparkline.f90`
-  - [ ] Single-row spark using block characters: `▁▂▃▄▅▆▇█`
-  - [ ] Maps values array to block height (0.0-1.0 normalized)
-  - [ ] Color gradient applied per character
-  - [ ] Configurable width (number of recent samples shown)
-  - [ ] Min/max auto-scaling or fixed range
+- [x] `src/widgets/ftop_sparkline.f90`
+  - [x] Single-row spark using block characters: `▁▂▃▄▅▆▇█`
+  - [x] Maps values array to block height (0.0-1.0 normalized)
+  - [x] Color gradient applied per character
+  - [x] Configurable width (number of recent samples shown)
+  - [x] Min/max auto-scaling or fixed range
 
 ### Braille Graph Widget
 - [ ] `src/widgets/ftop_graph.f90`
@@ -110,6 +110,7 @@ A complete set of reusable rendering widgets built on fgof-screen: boxes, text l
 (none yet)
 
 ## Notes
+- 2026-05-31: Meter and sparkline widgets implemented and verified on FreeBSD, Linux, and macOS. Remaining Sprint 04 widgets: braille graph, table, and golden snapshot coverage.
 - 2026-05-31: Foundation slice implemented: color system, widget base, text widget, and box widget. Verified on FreeBSD, Linux, and macOS. Remaining Sprint 04 widgets: meter, sparkline, braille graph, table, and golden snapshot coverage.
 - The widget library should be general enough to eventually extract into its own fgof library (fgof-widgets or fgof-tui). Design accordingly — no ftop-specific logic in widget implementations.
 - btop's graph rendering in `btop_draw.cpp` is a good reference for braille graph implementation. Study how it maps values to braille dot positions.
