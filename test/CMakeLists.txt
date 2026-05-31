@@ -26,6 +26,11 @@ target_link_libraries(ftop_metric_data_test PRIVATE ftop_core)
 
 add_test(NAME ftop_metric_data COMMAND ftop_metric_data_test)
 
+add_executable(ftop_linux_proc_stat_test unit/test_linux_proc_stat.f90)
+target_link_libraries(ftop_linux_proc_stat_test PRIVATE ftop_core)
+
+add_test(NAME ftop_linux_proc_stat COMMAND ftop_linux_proc_stat_test)
+
 add_executable(ftop_collector_test unit/test_collector.f90)
 target_link_libraries(ftop_collector_test PRIVATE ftop_core)
 ftop_avoid_linux_gfortran_callback_pie_warning(ftop_collector_test)

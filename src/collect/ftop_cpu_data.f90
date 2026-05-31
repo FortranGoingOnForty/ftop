@@ -1,5 +1,5 @@
 module ftop_cpu_data
-  use, intrinsic :: iso_fortran_env, only : real64
+  use, intrinsic :: iso_fortran_env, only : int64, real64
   use ftop_ring_buffer, only : ring_buffer
   implicit none
   private
@@ -25,6 +25,18 @@ module ftop_cpu_data
     integer :: thread_count = 0
   end type cpu_total_info
 
+  type, public :: cpu_state_ticks
+    logical :: valid = .false.
+    integer(int64) :: user = 0_int64
+    integer(int64) :: nice = 0_int64
+    integer(int64) :: system = 0_int64
+    integer(int64) :: idle = 0_int64
+    integer(int64) :: iowait = 0_int64
+    integer(int64) :: irq = 0_int64
+    integer(int64) :: softirq = 0_int64
+    integer(int64) :: steal = 0_int64
+  end type cpu_state_ticks
+
   type, public :: cpu_history
     private
     type(ring_buffer) :: total_usage
@@ -44,7 +56,45 @@ module ftop_cpu_data
     final :: cpu_history_finalize
   end type cpu_history
 
+  public :: cpu_state_delta_info
+  public :: cpu_state_total_ticks
+
 contains
+
+  function cpu_state_delta_info(previous, current) result(info)
+    type(cpu_state_ticks), intent(in) :: previous
+    type(cpu_state_ticks), intent(in) :: current
+    type(cpu_core_info) :: info
+    integer(int64) :: total_delta
+    integer(int64) :: idle_delta
+    integer(int64) :: iowait_delta
+    integer(int64) :: user_delta
+    integer(int64) :: system_delta
+
+    if (.not. previous%valid .or. .not. current%valid) return
+    if (cpu_state_rolled_over(previous, current)) return
+
+    total_delta = cpu_state_total_ticks(current) - cpu_state_total_ticks(previous)
+    if (total_delta <= 0_int64) return
+
+    idle_delta = current%idle - previous%idle
+    iowait_delta = current%iowait - previous%iowait
+    user_delta = current%user - previous%user + current%nice - previous%nice
+    system_delta = current%system - previous%system + current%irq - previous%irq + current%softirq - previous%softirq
+
+    info%valid = .true.
+    info%usage_percent = percent_from_delta(total_delta - idle_delta - iowait_delta, total_delta)
+    info%user_percent = percent_from_delta(user_delta, total_delta)
+    info%system_percent = percent_from_delta(system_delta, total_delta)
+    info%iowait_percent = percent_from_delta(iowait_delta, total_delta)
+  end function cpu_state_delta_info
+
+  integer(int64) function cpu_state_total_ticks(sample) result(total_ticks)
+    type(cpu_state_ticks), intent(in) :: sample
+
+    total_ticks = sample%user + sample%nice + sample%system + sample%idle + sample%iowait + &
+                  sample%irq + sample%softirq + sample%steal
+  end function cpu_state_total_ticks
 
   logical function cpu_history_init(self, core_count, history_capacity) result(success)
     class(cpu_history), intent(inout) :: self
@@ -179,5 +229,29 @@ contains
 
     clamped = max(0.0_real64, min(100.0_real64, value))
   end function clamp_percent
+
+  logical function cpu_state_rolled_over(previous, current) result(rolled_over)
+    type(cpu_state_ticks), intent(in) :: previous
+    type(cpu_state_ticks), intent(in) :: current
+
+    rolled_over = current%user < previous%user .or. &
+                  current%nice < previous%nice .or. &
+                  current%system < previous%system .or. &
+                  current%idle < previous%idle .or. &
+                  current%iowait < previous%iowait .or. &
+                  current%irq < previous%irq .or. &
+                  current%softirq < previous%softirq .or. &
+                  current%steal < previous%steal
+  end function cpu_state_rolled_over
+
+  real(real64) function percent_from_delta(delta, total_delta) result(percent)
+    integer(int64), intent(in) :: delta
+    integer(int64), intent(in) :: total_delta
+
+    percent = 0.0_real64
+    if (total_delta <= 0_int64) return
+    percent = 100.0_real64 * real(max(0_int64, delta), real64) / real(total_delta, real64)
+    percent = clamp_percent(percent)
+  end function percent_from_delta
 
 end module ftop_cpu_data
