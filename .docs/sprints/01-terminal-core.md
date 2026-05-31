@@ -3,45 +3,45 @@
 ## Goal
 A running main loop that enters raw mode, clears the screen, draws a bordered box with "ftop" centered, handles keyboard input (q to quit), responds to terminal resize, and exits cleanly restoring terminal state. Mouse click events decoded and logged. This is the skeleton everything else hangs on.
 
-## Status: NOT STARTED
+## Status: IN PROGRESS
 
 ## Targets
 
-- [ ] Terminal initialization sequence
-  - [ ] Enter raw mode via fgof-termios
-  - [ ] Query terminal size
-  - [ ] Enable alternate screen buffer (`\e[?1049h`)
-  - [ ] Hide cursor (`\e[?25l`)
-  - [ ] Enable mouse tracking (`\e[?1000h` / `\e[?1006h` SGR mouse mode)
+- [x] Terminal initialization sequence
+  - [x] Enter raw mode via fgof-termios
+  - [x] Query terminal size
+  - [x] Enable alternate screen buffer (`\e[?1049h`)
+  - [x] Hide cursor (`\e[?25l`)
+  - [x] Enable mouse tracking (`\e[?1000h` / `\e[?1006h` SGR mouse mode)
 - [ ] Main event loop skeleton
-  - [ ] Non-blocking input read with timeout (select/poll via C shim or fgof-termios)
+  - [x] Non-blocking input read with timeout (select/poll via C shim or fgof-termios)
   - [ ] Timer-driven refresh (configurable interval, default 1000ms)
-  - [ ] SIGWINCH handler for terminal resize
-  - [ ] SIGINT/SIGTERM handler for clean exit
-  - [ ] Clean shutdown sequence (restore terminal, show cursor, exit alternate screen)
-- [ ] Screen buffer integration (fgof-screen)
-  - [ ] Initialize screen buffer to terminal dimensions
-  - [ ] Resize buffer on SIGWINCH
-  - [ ] Write cells to buffer
-  - [ ] Flush buffer to terminal (full-frame initially, diff-based later)
-- [ ] Key input integration (fgof-keys)
-  - [ ] Decode key events from raw bytes
-  - [ ] Handle basic keys: q (quit), arrow keys, Enter, Escape
-  - [ ] Handle Ctrl+C as clean exit
+  - [x] SIGWINCH handler for terminal resize
+  - [x] SIGINT/SIGTERM handler for clean exit
+  - [x] Clean shutdown sequence (restore terminal, show cursor, exit alternate screen)
+- [x] Screen buffer integration (fgof-screen)
+  - [x] Initialize screen buffer to terminal dimensions
+  - [x] Resize buffer on SIGWINCH
+  - [x] Write cells to buffer
+  - [x] Flush buffer to terminal (full-frame initially, diff-based later)
+- [x] Key input integration (fgof-keys)
+  - [x] Decode key events from raw bytes
+  - [x] Handle basic keys: q (quit), arrow keys, Enter, Escape
+  - [x] Handle Ctrl+C as clean exit
 - [ ] Mouse input
-  - [ ] Parse SGR mouse events from terminal
-  - [ ] Decode button, position, modifiers
+  - [x] Parse SGR mouse events from terminal
+  - [x] Decode button, position, modifiers
   - [ ] Log mouse events (for debugging; wiring to widgets comes later)
 - [ ] Basic ANSI rendering primitives
-  - [ ] Box drawing (single-line and double-line Unicode borders)
+  - [x] Box drawing (single-line and double-line Unicode borders)
   - [ ] Foreground/background color setting (truecolor: `\e[38;2;r;g;bm`)
-  - [ ] Text positioning (`\e[row;colH`)
+  - [x] Text positioning (`\e[row;colH`)
   - [ ] Style attributes (bold, dim, underline, italic, reverse, strikethrough)
-  - [ ] Style reset (`\e[0m`)
-- [ ] Signal handling via C shim
-  - [ ] SIGWINCH -> set resize flag (checked in main loop)
-  - [ ] SIGINT/SIGTERM -> set exit flag
-  - [ ] SIGTSTP (Ctrl+Z) -> suspend properly, restore terminal on resume (SIGCONT)
+  - [x] Style reset (`\e[0m`)
+- [x] Signal handling via C shim
+  - [x] SIGWINCH -> set resize flag (checked in main loop)
+  - [x] SIGINT/SIGTERM -> set exit flag
+  - [x] SIGTSTP (Ctrl+Z) -> suspend properly, restore terminal on resume (SIGCONT)
 
 ## Definition of Done
 - Launch ftop: screen clears, bordered box appears with "ftop" text
@@ -75,3 +75,6 @@ A running main loop that enters raw mode, clears the screen, draws a bordered bo
 - The fgof-screen library already provides diff-based redraw. Leverage this early — don't write our own double-buffering.
 - fgof-keys already handles CSI/SS3 decoding. Extend it if needed for mouse events rather than writing a separate parser.
 - SIGTSTP/SIGCONT handling is critical for a well-behaved TUI. btop handles this; htop handles this. We must too.
+- Unicode box drawing is part of Sprint 01, not deferred; fgof-screen now preserves UTF-8 cell glyphs for box characters.
+- Mouse events are decoded into the status line for now; add a real debug log before checking the logging target.
+- Truecolor-specific primitive coverage remains pending; fgof-screen currently emits 256-color SGR styles.

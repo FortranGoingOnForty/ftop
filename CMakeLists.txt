@@ -59,7 +59,14 @@ else()
   message(FATAL_ERROR "Unsupported platform: ${CMAKE_SYSTEM_NAME}")
 endif()
 
-add_executable(ftop src/ftop.f90 ${FTOP_PLATFORM_SOURCES})
+add_executable(
+  ftop
+  src/shim/ftop_terminal_io.f90
+  src/ftop_app.f90
+  src/ftop.f90
+  src/shim/ftop_terminal_posix.c
+  ${FTOP_PLATFORM_SOURCES}
+)
 
 target_link_libraries(
   ftop

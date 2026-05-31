@@ -1,22 +1,15 @@
 program ftop
-  use fgof_cache, only : cache_backend_name
-  use fgof_expect, only : expect_backend_name
-  use fgof_fs, only : path_exists
-  use fgof_keys, only : clear_decoder_state
-  use fgof_lineedit, only : init_lineedit
-  use fgof_process, only : command
-  use fgof_screen, only : screen_buffer
-  use fgof_state, only : state_backend_name
-  use fgof_termios, only : get_terminal_size
-  use fgof_watch, only : reset_watch
+  use ftop_app, only : run_ftop
   use, intrinsic :: iso_fortran_env, only : error_unit
   implicit none
 
   character(len=*), parameter :: version = "0.1.0"
   character(len=256) :: argument
+  integer :: status
 
   if (command_argument_count() == 0) then
-    print '(a)', "ftop"
+    status = run_ftop()
+    if (status /= 0) stop status
     stop
   end if
 
