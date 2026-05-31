@@ -86,6 +86,11 @@ contains
     call require_glyph(buffer, 1, 2, ".", "truncated text first dot mismatch")
     call require_glyph(buffer, 1, 3, ".", "truncated text second dot mismatch")
     call require_glyph(buffer, 1, 4, ".", "truncated text third dot mismatch")
+
+    buffer = allocate_screen(2, 1)
+    call render_text(buffer, widget_rect(row=1, col=1, width=2, height=1), "A▲")
+    call require_glyph(buffer, 1, 1, "A", "UTF-8 text first glyph mismatch")
+    call require_glyph(buffer, 1, 2, "▲", "UTF-8 text second glyph mismatch")
   end subroutine test_text_rendering
 
   subroutine test_text_widget_type()

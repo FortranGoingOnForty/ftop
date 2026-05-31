@@ -51,6 +51,11 @@ target_link_libraries(ftop_graph_test PRIVATE ftop_core)
 
 add_test(NAME ftop_graph COMMAND ftop_graph_test)
 
+add_executable(ftop_table_test unit/test_table.f90)
+target_link_libraries(ftop_table_test PRIVATE ftop_core)
+
+add_test(NAME ftop_table COMMAND ftop_table_test)
+
 add_executable(ftop_linux_proc_stat_test unit/test_linux_proc_stat.f90)
 target_link_libraries(ftop_linux_proc_stat_test PRIVATE ftop_core)
 
