@@ -76,9 +76,11 @@ endif()
 
 add_library(
   ftop_core STATIC
+  src/shim/ftop_dl.f90
   src/shim/ftop_pthread.f90
   src/shim/ftop_terminal_io.f90
   src/ftop_app.f90
+  src/shim/ftop_dl.c
   src/shim/ftop_pthread.c
   src/shim/ftop_terminal_posix.c
   ${FTOP_PLATFORM_SOURCES}
@@ -96,6 +98,7 @@ target_link_libraries(
   ftop_core
   PUBLIC
     Threads::Threads
+    ${CMAKE_DL_LIBS}
     fgof::screen
     fgof::termios
     fgof::keys

@@ -21,6 +21,13 @@ target_link_libraries(ftop_platform_test PRIVATE ftop_core)
 
 add_test(NAME ftop_platform COMMAND ftop_platform_test)
 
+add_library(ftop_dl_fixture SHARED unit/ftop_dl_fixture.c)
+
+add_executable(ftop_dl_test unit/test_dl.f90)
+target_link_libraries(ftop_dl_test PRIVATE ftop_core)
+
+add_test(NAME ftop_dl COMMAND ftop_dl_test $<TARGET_FILE:ftop_dl_fixture>)
+
 file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/test-runtime")
 
 add_executable(
