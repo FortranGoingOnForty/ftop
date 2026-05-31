@@ -73,6 +73,7 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     src/platform/macos/ftop_macos.f90
     src/platform/macos/ftop_macos_shim.c
   )
+  list(APPEND FTOP_PLATFORM_LIBS "-Wl,-framework,CoreFoundation" "-Wl,-framework,IOKit")
 else()
   message(FATAL_ERROR "Unsupported platform: ${CMAKE_SYSTEM_NAME}")
 endif()

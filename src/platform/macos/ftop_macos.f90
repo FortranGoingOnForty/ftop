@@ -55,6 +55,13 @@ module ftop_platform
       integer(c_int), intent(out) :: sys_errno
     end function c_ftop_macos_cpu_ticks
 
+    integer(c_int) function c_ftop_macos_cpu_temperature(temperature_c, sys_errno) &
+        bind(C, name="ftop_macos_cpu_temperature")
+      import :: c_double, c_int
+      real(c_double), intent(out) :: temperature_c
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_macos_cpu_temperature
+
     integer(c_int) function c_ftop_macos_memory_info(total_bytes, used_bytes, free_bytes, available_bytes, &
         swap_total_bytes, swap_used_bytes, sys_errno) &
         bind(C, name="ftop_macos_memory_info")
@@ -233,6 +240,8 @@ contains
   logical function macos_get_cpu_metadata(self, cores) result(success)
     class(macos_backend), intent(in) :: self
     type(cpu_core_info), allocatable, intent(out) :: cores(:)
+    real(c_double) :: temperature_c
+    integer(c_int) :: sys_errno
     integer :: cpu_count
     integer :: cpu_index
     integer(int64) :: frequency_hz
@@ -243,6 +252,12 @@ contains
       do cpu_index = 1, cpu_count
         cores(cpu_index)%freq_valid = .true.
         cores(cpu_index)%freq_mhz = real(frequency_hz, real64) / 1000000.0_real64
+      end do
+    end if
+    if (c_ftop_macos_cpu_temperature(temperature_c, sys_errno) == 0_c_int) then
+      do cpu_index = 1, cpu_count
+        cores(cpu_index)%temp_valid = .true.
+        cores(cpu_index)%temp_c = real(temperature_c, real64)
       end do
     end if
     success = cpu_count > 0

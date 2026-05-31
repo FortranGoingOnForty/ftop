@@ -1,16 +1,21 @@
 program test_macos_platform
-  use, intrinsic :: iso_fortran_env, only : int64
+  use, intrinsic :: iso_fortran_env, only : int64, real64
+  use ftop_cpu_data, only : cpu_core_info
   use ftop_platform, only : &
+    create_platform, &
     macos_iokit_disk_count, &
     macos_iokit_gpu_count, &
     macos_processor_tick_samples, &
     macos_processor_ticks, &
     macos_sysctl_int, &
     macos_sysctl_int64, &
-    macos_sysctl_string
+    macos_sysctl_string, &
+    platform_backend
   implicit none
 
+  class(platform_backend), allocatable :: backend
   type(macos_processor_ticks), allocatable :: ticks(:)
+  type(cpu_core_info), allocatable :: cpu_metadata(:)
   character(len=64) :: os_type
   integer :: disk_count
   integer :: gpu_count
@@ -39,4 +44,11 @@ program test_macos_platform
   if (.not. macos_iokit_gpu_count(gpu_count)) error stop "IOKit GPU stub failed"
   if (.not. macos_iokit_disk_count(disk_count)) error stop "IOKit disk stub failed"
   if (gpu_count < 0 .or. disk_count < 0) error stop "IOKit stub counts must not be negative"
+
+  backend = create_platform()
+  if (.not. allocated(backend)) error stop "macOS platform backend allocation failed"
+  if (.not. backend%get_cpu_metadata(cpu_metadata)) error stop "macOS CPU metadata failed"
+  if (.not. any(cpu_metadata%temp_valid)) error stop "macOS CPU temperature must be available"
+  if (any(cpu_metadata%temp_valid .and. cpu_metadata%temp_c < -100.0_real64)) error stop "macOS CPU temperature too low"
+  if (any(cpu_metadata%temp_valid .and. cpu_metadata%temp_c > 150.0_real64)) error stop "macOS CPU temperature too high"
 end program test_macos_platform
