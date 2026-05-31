@@ -1,3 +1,9 @@
+function(ftop_avoid_linux_gfortran_callback_pie_warning target_name)
+  if(FTOP_PLATFORM STREQUAL "linux" AND CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
+    target_link_options(${target_name} PRIVATE -no-pie)
+  endif()
+endfunction()
+
 add_test(NAME ftop_version COMMAND $<TARGET_FILE:ftop> --version)
 set_tests_properties(
   ftop_version
@@ -12,6 +18,7 @@ add_test(NAME ftop_terminal_frame COMMAND ftop_terminal_frame)
 
 add_executable(ftop_pthread_test unit/test_pthread.f90)
 target_link_libraries(ftop_pthread_test PRIVATE ftop_core)
+ftop_avoid_linux_gfortran_callback_pie_warning(ftop_pthread_test)
 
 add_test(NAME ftop_pthread COMMAND ftop_pthread_test)
 set_tests_properties(ftop_pthread PROPERTIES TIMEOUT 5)
@@ -54,6 +61,7 @@ endif()
 
 add_executable(ftop_threaded_platform_test unit/test_threaded_platform.f90)
 target_link_libraries(ftop_threaded_platform_test PRIVATE ftop_core)
+ftop_avoid_linux_gfortran_callback_pie_warning(ftop_threaded_platform_test)
 
 add_test(NAME ftop_threaded_platform COMMAND ftop_threaded_platform_test)
 set_tests_properties(ftop_threaded_platform PROPERTIES TIMEOUT 5)
