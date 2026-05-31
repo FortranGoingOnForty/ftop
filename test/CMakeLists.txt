@@ -10,6 +10,17 @@ target_link_libraries(ftop_terminal_frame PRIVATE ftop_core)
 
 add_test(NAME ftop_terminal_frame COMMAND ftop_terminal_frame)
 
+add_executable(ftop_pthread_test unit/test_pthread.f90)
+target_link_libraries(ftop_pthread_test PRIVATE ftop_core)
+
+add_test(NAME ftop_pthread COMMAND ftop_pthread_test)
+set_tests_properties(ftop_pthread PROPERTIES TIMEOUT 5)
+
+add_executable(ftop_platform_test unit/test_platform.f90)
+target_link_libraries(ftop_platform_test PRIVATE ftop_core)
+
+add_test(NAME ftop_platform COMMAND ftop_platform_test)
+
 file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/test-runtime")
 
 add_executable(
