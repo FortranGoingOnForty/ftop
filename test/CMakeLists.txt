@@ -21,6 +21,13 @@ target_link_libraries(ftop_platform_test PRIVATE ftop_core)
 
 add_test(NAME ftop_platform COMMAND ftop_platform_test)
 
+if(FTOP_PLATFORM STREQUAL "freebsd")
+  add_executable(ftop_freebsd_sysctl_test unit/test_freebsd_sysctl.f90)
+  target_link_libraries(ftop_freebsd_sysctl_test PRIVATE ftop_core)
+
+  add_test(NAME ftop_freebsd_sysctl COMMAND ftop_freebsd_sysctl_test)
+endif()
+
 add_executable(ftop_threaded_platform_test unit/test_threaded_platform.f90)
 target_link_libraries(ftop_threaded_platform_test PRIVATE ftop_core)
 

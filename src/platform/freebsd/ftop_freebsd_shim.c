@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <stddef.h>
+#include <string.h>
 #include <sys/resource.h>
 #include <sys/sysctl.h>
 #include <sys/types.h>
@@ -66,6 +67,86 @@ int ftop_freebsd_cpu_ticks(long long *total_ticks, long long *idle_ticks, int *s
 
   *total_ticks = total;
   *idle_ticks = cpu_time[CP_IDLE] > 0 ? (long long)cpu_time[CP_IDLE] : 0;
+  return 0;
+}
+
+int ftop_freebsd_sysctl_int(const char *name, int *value, int *sys_errno) {
+  size_t value_len;
+
+  if (name == NULL || value == NULL || sys_errno == NULL) return -1;
+
+  *value = 0;
+  *sys_errno = 0;
+  value_len = sizeof(*value);
+  if (sysctlbyname(name, value, &value_len, NULL, 0) != 0) {
+    *sys_errno = errno;
+    return -1;
+  }
+  if (value_len != sizeof(*value)) {
+    *sys_errno = EOVERFLOW;
+    return -1;
+  }
+
+  return 0;
+}
+
+int ftop_freebsd_sysctl_long(const char *name, long *value, int *sys_errno) {
+  size_t value_len;
+
+  if (name == NULL || value == NULL || sys_errno == NULL) return -1;
+
+  *value = 0L;
+  *sys_errno = 0;
+  value_len = sizeof(*value);
+  if (sysctlbyname(name, value, &value_len, NULL, 0) != 0) {
+    *sys_errno = errno;
+    return -1;
+  }
+  if (value_len != sizeof(*value)) {
+    *sys_errno = EOVERFLOW;
+    return -1;
+  }
+
+  return 0;
+}
+
+int ftop_freebsd_sysctl_string(const char *name, char *buffer, size_t buffer_len, size_t *value_len, int *sys_errno) {
+  size_t actual_len;
+
+  if (name == NULL || buffer == NULL || value_len == NULL || sys_errno == NULL || buffer_len == 0) return -1;
+
+  buffer[0] = '\0';
+  *value_len = 0U;
+  *sys_errno = 0;
+  actual_len = buffer_len;
+  if (sysctlbyname(name, buffer, &actual_len, NULL, 0) != 0) {
+    *sys_errno = errno;
+    return -1;
+  }
+
+  if (actual_len == 0 || buffer[actual_len - 1U] != '\0') {
+    if (actual_len < buffer_len) buffer[actual_len] = '\0';
+    if (actual_len >= buffer_len) buffer[buffer_len - 1U] = '\0';
+  }
+  *value_len = strnlen(buffer, buffer_len);
+
+  return 0;
+}
+
+int ftop_freebsd_sysctl_bytes(const char *name, void *buffer, size_t buffer_len, size_t *value_len, int *sys_errno) {
+  size_t actual_len;
+
+  if (name == NULL || buffer == NULL || value_len == NULL || sys_errno == NULL || buffer_len == 0) return -1;
+
+  *value_len = 0U;
+  *sys_errno = 0;
+  actual_len = buffer_len;
+  if (sysctlbyname(name, buffer, &actual_len, NULL, 0) != 0) {
+    *sys_errno = errno;
+    return -1;
+  }
+
+  *value_len = actual_len;
   return 0;
 }
 
