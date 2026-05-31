@@ -1,7 +1,9 @@
 #include <errno.h>
+#include <devstat.h>
 #include <fcntl.h>
 #include <kvm.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/param.h>
 #include <sys/resource.h>
@@ -11,6 +13,7 @@
 #include <unistd.h>
 
 #define FTOP_FREEBSD_COMMAND_LEN 32
+#define FTOP_FREEBSD_DEVSTAT_NAME_LEN 16
 
 struct ftop_freebsd_process_info {
   int pid;
@@ -18,6 +21,21 @@ struct ftop_freebsd_process_info {
   int uid;
   int state;
   char command[FTOP_FREEBSD_COMMAND_LEN];
+};
+
+struct ftop_freebsd_devstat_info {
+  int device_number;
+  int unit_number;
+  int device_type;
+  int priority;
+  int block_size;
+  long long bytes_read;
+  long long bytes_written;
+  long long bytes_freed;
+  long long transfers_read;
+  long long transfers_written;
+  long long transfers_freed;
+  char name[FTOP_FREEBSD_DEVSTAT_NAME_LEN];
 };
 
 #ifndef CPUSTATES
@@ -228,6 +246,66 @@ int ftop_freebsd_kvm_getprocs(
   }
 
   *process_count = copy_count;
+  return 0;
+}
+
+static void ftop_copy_devstat_name(char *destination, const char *source) {
+  size_t i;
+
+  for (i = 0U; i + 1U < FTOP_FREEBSD_DEVSTAT_NAME_LEN && source[i] != '\0'; ++i) destination[i] = source[i];
+  destination[i] = '\0';
+}
+
+static void ftop_copy_devstat_device(struct ftop_freebsd_devstat_info *destination, const struct devstat *source) {
+  destination->device_number = (int)source->device_number;
+  destination->unit_number = source->unit_number;
+  destination->device_type = (int)source->device_type;
+  destination->priority = (int)source->priority;
+  destination->block_size = (int)source->block_size;
+  destination->bytes_read = (long long)source->bytes[DEVSTAT_READ];
+  destination->bytes_written = (long long)source->bytes[DEVSTAT_WRITE];
+  destination->bytes_freed = (long long)source->bytes[DEVSTAT_FREE];
+  destination->transfers_read = (long long)source->operations[DEVSTAT_READ];
+  destination->transfers_written = (long long)source->operations[DEVSTAT_WRITE];
+  destination->transfers_freed = (long long)source->operations[DEVSTAT_FREE];
+  ftop_copy_devstat_name(destination->name, source->device_name);
+}
+
+int ftop_freebsd_devstat_getdevs(
+    struct ftop_freebsd_devstat_info *buffer, size_t capacity, size_t *device_count, long long *generation, int *sys_errno) {
+  struct devinfo devinfo;
+  struct statinfo statinfo;
+  size_t copy_count;
+  int rc;
+  size_t i;
+
+  if (buffer == NULL || device_count == NULL || generation == NULL || sys_errno == NULL || capacity == 0) return -1;
+
+  *device_count = 0U;
+  *generation = 0;
+  *sys_errno = 0;
+  memset(&devinfo, 0, sizeof(devinfo));
+  memset(&statinfo, 0, sizeof(statinfo));
+  statinfo.dinfo = &devinfo;
+
+  if (devstat_checkversion(NULL) != 0) {
+    *sys_errno = EINVAL;
+    return -1;
+  }
+
+  rc = devstat_getdevs(NULL, &statinfo);
+  if (rc < 0) {
+    *sys_errno = errno != 0 ? errno : EINVAL;
+    free(devinfo.mem_ptr);
+    return -1;
+  }
+
+  copy_count = (size_t)devinfo.numdevs < capacity ? (size_t)devinfo.numdevs : capacity;
+  for (i = 0U; i < copy_count; ++i) ftop_copy_devstat_device(&buffer[i], &devinfo.devices[i]);
+
+  *device_count = copy_count;
+  *generation = (long long)devinfo.generation;
+  free(devinfo.mem_ptr);
   return 0;
 }
 

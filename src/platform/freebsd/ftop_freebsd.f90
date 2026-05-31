@@ -15,6 +15,7 @@ module ftop_platform
   private
 
   integer, parameter, public :: FREEBSD_PROCESS_COMMAND_LEN = 32
+  integer, parameter, public :: FREEBSD_DEVSTAT_NAME_LEN = 16
 
   type, bind(C), public :: freebsd_process_info
     integer(c_int) :: pid
@@ -28,6 +29,21 @@ module ftop_platform
     type(c_ptr) :: handle = c_null_ptr
   end type freebsd_kvm_handle
 
+  type, bind(C), public :: freebsd_devstat_info
+    integer(c_int) :: device_number
+    integer(c_int) :: unit_number
+    integer(c_int) :: device_type
+    integer(c_int) :: priority
+    integer(c_int) :: block_size
+    integer(c_long_long) :: bytes_read
+    integer(c_long_long) :: bytes_written
+    integer(c_long_long) :: bytes_freed
+    integer(c_long_long) :: transfers_read
+    integer(c_long_long) :: transfers_written
+    integer(c_long_long) :: transfers_freed
+    character(kind=c_char) :: name(FREEBSD_DEVSTAT_NAME_LEN)
+  end type freebsd_devstat_info
+
   type, extends(platform_backend) :: freebsd_backend
   contains
     procedure :: get_cpu_count => freebsd_get_cpu_count
@@ -38,6 +54,7 @@ module ftop_platform
   public :: create_platform
   public :: cpu_tick_sample
   public :: cpu_usage_percent
+  public :: freebsd_devstat_getdevs
   public :: freebsd_kvm_close
   public :: freebsd_kvm_getprocs
   public :: freebsd_kvm_open
@@ -127,6 +144,16 @@ module ftop_platform
       integer(c_size_t), intent(out) :: process_count
       integer(c_int), intent(out) :: sys_errno
     end function c_ftop_freebsd_kvm_getprocs
+
+    integer(c_int) function c_ftop_freebsd_devstat_getdevs(devices, capacity, device_count, generation, sys_errno) &
+        bind(C, name="ftop_freebsd_devstat_getdevs")
+      import :: c_int, c_long_long, c_size_t, freebsd_devstat_info
+      type(freebsd_devstat_info), intent(out) :: devices(*)
+      integer(c_size_t), value :: capacity
+      integer(c_size_t), intent(out) :: device_count
+      integer(c_long_long), intent(out) :: generation
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_freebsd_devstat_getdevs
   end interface
 
 contains
@@ -342,6 +369,33 @@ contains
     if (success) process_count = int(c_process_count)
     call assign_error(error_code, sys_errno)
   end function freebsd_kvm_getprocs
+
+  logical function freebsd_devstat_getdevs(devices, device_count, generation, error_code) result(success)
+    type(freebsd_devstat_info), intent(out) :: devices(:)
+    integer, intent(out) :: device_count
+    integer(int64), intent(out), optional :: generation
+    integer, intent(out), optional :: error_code
+    integer(c_long_long) :: c_generation
+    integer(c_size_t) :: c_device_count
+    integer(c_int) :: sys_errno
+    integer(c_int) :: rc
+
+    device_count = 0
+    if (present(generation)) generation = 0_int64
+    if (size(devices) <= 0) then
+      call assign_error(error_code, 0_c_int)
+      success = .false.
+      return
+    end if
+
+    rc = c_ftop_freebsd_devstat_getdevs(devices, int(size(devices), c_size_t), c_device_count, c_generation, sys_errno)
+    success = rc == 0_c_int
+    if (success) then
+      device_count = int(c_device_count)
+      if (present(generation)) generation = int(c_generation, int64)
+    end if
+    call assign_error(error_code, sys_errno)
+  end function freebsd_devstat_getdevs
 
   subroutine to_c_string(text, buffer)
     character(len=*), intent(in) :: text
