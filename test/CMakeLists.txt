@@ -46,6 +46,11 @@ target_link_libraries(ftop_sparkline_test PRIVATE ftop_core)
 
 add_test(NAME ftop_sparkline COMMAND ftop_sparkline_test)
 
+add_executable(ftop_graph_test unit/test_graph.f90)
+target_link_libraries(ftop_graph_test PRIVATE ftop_core)
+
+add_test(NAME ftop_graph COMMAND ftop_graph_test)
+
 add_executable(ftop_linux_proc_stat_test unit/test_linux_proc_stat.f90)
 target_link_libraries(ftop_linux_proc_stat_test PRIVATE ftop_core)
 

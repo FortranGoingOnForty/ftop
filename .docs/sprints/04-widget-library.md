@@ -49,16 +49,16 @@ A complete set of reusable rendering widgets built on fgof-screen: boxes, text l
   - [x] Min/max auto-scaling or fixed range
 
 ### Braille Graph Widget
-- [ ] `src/widgets/ftop_graph.f90`
-  - [ ] Multi-row braille-character time series (2x4 dot pattern per character cell)
-  - [ ] Unicode braille range: U+2800 to U+28FF
-  - [ ] Subpixel resolution: 2 horizontal × 4 vertical dots per cell
-  - [ ] Y-axis auto-scaling with labeled ticks
-  - [ ] Grid lines (optional, using dim braille dots)
-  - [ ] Area fill below the line (using braille dots)
-  - [ ] Multiple series overlay (different colors)
-  - [ ] Configurable height and width
-  - [ ] Color gradient from bottom to top of graph
+- [x] `src/widgets/ftop_graph.f90`
+  - [x] Multi-row braille-character time series (2x4 dot pattern per character cell)
+  - [x] Unicode braille range: U+2800 to U+28FF
+  - [x] Subpixel resolution: 2 horizontal × 4 vertical dots per cell
+  - [x] Y-axis auto-scaling with labeled ticks
+  - [x] Grid lines (optional, using dim braille dots)
+  - [x] Area fill below the line (using braille dots)
+  - [x] Multiple series overlay (different colors)
+  - [x] Configurable height and width
+  - [x] Color gradient from bottom to top of graph
 
 ### Table Widget
 - [ ] `src/widgets/ftop_table.f90`
@@ -110,6 +110,7 @@ A complete set of reusable rendering widgets built on fgof-screen: boxes, text l
 (none yet)
 
 ## Notes
+- 2026-05-31: Braille graph widget implemented and verified on FreeBSD, Linux, and macOS. Remaining Sprint 04 widgets: table and golden snapshot coverage.
 - 2026-05-31: Meter and sparkline widgets implemented and verified on FreeBSD, Linux, and macOS. Remaining Sprint 04 widgets: braille graph, table, and golden snapshot coverage.
 - 2026-05-31: Foundation slice implemented: color system, widget base, text widget, and box widget. Verified on FreeBSD, Linux, and macOS. Remaining Sprint 04 widgets: meter, sparkline, braille graph, table, and golden snapshot coverage.
 - The widget library should be general enough to eventually extract into its own fgof library (fgof-widgets or fgof-tui). Design accordingly — no ftop-specific logic in widget implementations.
