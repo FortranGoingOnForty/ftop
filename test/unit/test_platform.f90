@@ -1,6 +1,6 @@
 program test_platform
   use, intrinsic :: iso_fortran_env, only : real64
-  use ftop_cpu_data, only : cpu_state_ticks, cpu_state_total_ticks
+  use ftop_cpu_data, only : cpu_core_info, cpu_state_ticks, cpu_state_total_ticks
   use ftop_platform, only : &
     cpu_tick_sample, &
     cpu_usage_percent, &
@@ -15,6 +15,7 @@ program test_platform
   type(cpu_tick_sample) :: second_sample
   type(cpu_state_ticks) :: total_cpu_state
   type(cpu_state_ticks), allocatable :: core_cpu_states(:)
+  type(cpu_core_info), allocatable :: cpu_metadata(:)
   type(memory_info) :: memory
   type(load_average_info) :: load_average
   integer :: cpu_count
@@ -43,6 +44,12 @@ program test_platform
   if (.not. core_cpu_states(1)%valid) error stop "first CPU core state must be valid"
   if (cpu_state_total_ticks(total_cpu_state) <= 0) error stop "total CPU state ticks must be positive"
   if (cpu_state_total_ticks(core_cpu_states(1)) <= 0) error stop "first CPU core ticks must be positive"
+
+  if (.not. backend%get_cpu_metadata(cpu_metadata)) error stop "CPU metadata snapshot failed"
+  if (size(cpu_metadata) /= cpu_count) error stop "CPU metadata count mismatch"
+  if (any(cpu_metadata%freq_valid .and. cpu_metadata%freq_mhz <= 0.0_real64)) error stop "CPU frequency must be positive"
+  if (any(cpu_metadata%temp_valid .and. cpu_metadata%temp_c < -100.0_real64)) error stop "CPU temperature too low"
+  if (any(cpu_metadata%temp_valid .and. cpu_metadata%temp_c > 150.0_real64)) error stop "CPU temperature too high"
 
   memory = backend%get_memory_info()
   if (.not. memory%valid) error stop "memory info must be valid"

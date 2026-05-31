@@ -57,6 +57,32 @@ int ftop_linux_read_proc_loadavg(char *buffer, size_t buffer_len, size_t *value_
   return ftop_read_file_into_buffer("/proc/loadavg", buffer, buffer_len, value_len, sys_errno);
 }
 
+int ftop_linux_read_cpu_frequency(int cpu_index, char *buffer, size_t buffer_len, size_t *value_len, int *sys_errno) {
+  char path[128];
+  int written;
+  int rc;
+
+  if (cpu_index < 0) {
+    if (sys_errno != NULL) *sys_errno = EINVAL;
+    return -1;
+  }
+
+  written = snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_cur_freq", cpu_index);
+  if (written < 0 || (size_t)written >= sizeof(path)) {
+    if (sys_errno != NULL) *sys_errno = EOVERFLOW;
+    return -1;
+  }
+  rc = ftop_read_file_into_buffer(path, buffer, buffer_len, value_len, sys_errno);
+  if (rc == 0) return 0;
+
+  written = snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_cur_freq", cpu_index);
+  if (written < 0 || (size_t)written >= sizeof(path)) {
+    if (sys_errno != NULL) *sys_errno = EOVERFLOW;
+    return -1;
+  }
+  return ftop_read_file_into_buffer(path, buffer, buffer_len, value_len, sys_errno);
+}
+
 int ftop_linux_cpu_count(int *count, int *sys_errno) {
   long value;
 

@@ -11,7 +11,7 @@ module ftop_platform
     c_ptr, &
     c_size_t
   use, intrinsic :: iso_fortran_env, only : int64, real64
-  use ftop_cpu_data, only : cpu_state_ticks, cpu_state_total_ticks
+  use ftop_cpu_data, only : cpu_core_info, cpu_state_ticks, cpu_state_total_ticks
   use ftop_platform_types, only : cpu_tick_sample, cpu_usage_percent, load_average_info, memory_info, platform_backend
   implicit none
   private
@@ -59,6 +59,7 @@ module ftop_platform
     procedure :: get_cpu_count => freebsd_get_cpu_count
     procedure :: get_cpu_sample => freebsd_get_cpu_sample
     procedure :: get_cpu_state_snapshot => freebsd_get_cpu_state_snapshot
+    procedure :: get_cpu_metadata => freebsd_get_cpu_metadata
     procedure :: get_memory_info => freebsd_get_memory_info
     procedure :: get_load_average => freebsd_get_load_average
   end type freebsd_backend
@@ -258,6 +259,26 @@ contains
     end do
     total%valid = cpu_state_total_ticks(total) > 0_int64
   end function freebsd_get_cpu_state_snapshot
+
+  logical function freebsd_get_cpu_metadata(self, cores) result(success)
+    class(freebsd_backend), intent(in) :: self
+    type(cpu_core_info), allocatable, intent(out) :: cores(:)
+    character(len=32) :: sysctl_name
+    integer :: cpu_count
+    integer :: cpu_index
+    integer :: freq_mhz
+
+    cpu_count = max(0, freebsd_get_cpu_count(self))
+    allocate(cores(cpu_count))
+    do cpu_index = 1, cpu_count
+      write(sysctl_name, '("dev.cpu.", I0, ".freq")') cpu_index - 1
+      if (.not. freebsd_sysctl_int(trim(sysctl_name), freq_mhz)) cycle
+      if (freq_mhz <= 0) cycle
+      cores(cpu_index)%freq_valid = .true.
+      cores(cpu_index)%freq_mhz = real(freq_mhz, real64)
+    end do
+    success = cpu_count > 0
+  end function freebsd_get_cpu_metadata
 
   function freebsd_get_memory_info(self) result(info)
     class(freebsd_backend), intent(in) :: self

@@ -69,6 +69,12 @@ contains
     call require(all(snapshot%cpu_cores%user_percent >= 0.0_real64), "collector core user must not be negative")
     call require(all(snapshot%cpu_cores%system_percent >= 0.0_real64), "collector core system must not be negative")
     call require(all(snapshot%cpu_cores%iowait_percent >= 0.0_real64), "collector core iowait must not be negative")
+    call require(all(.not. snapshot%cpu_cores%freq_valid .or. snapshot%cpu_cores%freq_mhz > 0.0_real64), &
+                 "collector valid core frequency must be positive")
+    call require(all(.not. snapshot%cpu_cores%temp_valid .or. snapshot%cpu_cores%temp_c > -100.0_real64), &
+                 "collector valid core temperature must not be too low")
+    call require(all(.not. snapshot%cpu_cores%temp_valid .or. snapshot%cpu_cores%temp_c < 150.0_real64), &
+                 "collector valid core temperature must not be too high")
     call require(snapshot%cpu_total%load_valid, "collector load average must be valid")
     call require(all(snapshot%cpu_total%load_avg >= 0.0_real64), "collector load average must not be negative")
 
@@ -236,7 +242,7 @@ contains
       call system_clock(current_count)
       if (rate <= 0) return
       elapsed_ms = int((real(current_count - start_count) / real(rate)) * 1000.0)
-      if (elapsed_ms > 4000) return
+      if (elapsed_ms > 10000) return
     end do
   end function wait_for_sample_count
 

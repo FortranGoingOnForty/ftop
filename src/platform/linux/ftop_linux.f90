@@ -1,7 +1,7 @@
 module ftop_platform
   use, intrinsic :: iso_c_binding, only : c_char, c_int, c_null_char, c_size_t
-  use, intrinsic :: iso_fortran_env, only : int64
-  use ftop_cpu_data, only : cpu_state_ticks, cpu_state_total_ticks
+  use, intrinsic :: iso_fortran_env, only : int64, real64
+  use ftop_cpu_data, only : cpu_core_info, cpu_state_ticks, cpu_state_total_ticks
   use ftop_linux_loadavg, only : linux_loadavg_parse
   use ftop_linux_meminfo, only : linux_meminfo_parse
   use ftop_linux_proc_stat, only : linux_proc_stat_parse
@@ -13,6 +13,7 @@ module ftop_platform
   integer, parameter :: LINUX_PROC_STAT_BUFFER_LEN = 1048576
   integer, parameter :: LINUX_PROC_MEMINFO_BUFFER_LEN = 65536
   integer, parameter :: LINUX_PROC_LOADAVG_BUFFER_LEN = 256
+  integer, parameter :: LINUX_CPU_FREQ_BUFFER_LEN = 64
   integer, parameter, public :: LINUX_HWMON_NAME_LEN = 128
   integer, parameter, public :: LINUX_HWMON_PATH_LEN = 256
 
@@ -26,6 +27,7 @@ module ftop_platform
     procedure :: get_cpu_count => linux_get_cpu_count
     procedure :: get_cpu_sample => linux_get_cpu_sample
     procedure :: get_cpu_state_snapshot => linux_get_cpu_state_snapshot
+    procedure :: get_cpu_metadata => linux_get_cpu_metadata
     procedure :: get_memory_info => linux_get_memory_info
     procedure :: get_load_average => linux_get_load_average
   end type linux_backend
@@ -76,6 +78,16 @@ module ftop_platform
       integer(c_size_t), intent(out) :: value_len
       integer(c_int), intent(out) :: sys_errno
     end function c_ftop_linux_read_proc_loadavg
+
+    integer(c_int) function c_ftop_linux_read_cpu_frequency(cpu_index, buffer, buffer_capacity, value_len, sys_errno) &
+        bind(C, name="ftop_linux_read_cpu_frequency")
+      import :: c_char, c_int, c_size_t
+      integer(c_int), value :: cpu_index
+      character(kind=c_char), intent(out) :: buffer(*)
+      integer(c_size_t), value :: buffer_capacity
+      integer(c_size_t), intent(out) :: value_len
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_linux_read_cpu_frequency
 
     integer(c_int) function c_ftop_linux_cpuinfo_field(name, value, value_capacity, value_len, sys_errno) &
         bind(C, name="ftop_linux_cpuinfo_field")
@@ -156,6 +168,34 @@ contains
 
     success = linux_cpu_state_snapshot(total, cores)
   end function linux_get_cpu_state_snapshot
+
+  logical function linux_get_cpu_metadata(self, cores) result(success)
+    class(linux_backend), intent(in) :: self
+    type(cpu_core_info), allocatable, intent(out) :: cores(:)
+    character(kind=c_char) :: c_buffer(LINUX_CPU_FREQ_BUFFER_LEN)
+    character(len=:), allocatable :: buffer
+    integer(c_size_t) :: value_len
+    integer(c_int) :: sys_errno
+    integer(c_int) :: rc
+    integer(int64) :: khz
+    integer :: cpu_count
+    integer :: cpu_index
+    integer :: read_status
+
+    cpu_count = max(0, linux_get_cpu_count(self))
+    allocate(cores(cpu_count))
+    do cpu_index = 1, cpu_count
+      rc = c_ftop_linux_read_cpu_frequency(int(cpu_index - 1, c_int), c_buffer, int(size(c_buffer), c_size_t), &
+                                           value_len, sys_errno)
+      if (rc /= 0_c_int) cycle
+      call c_chars_to_string(c_buffer, int(value_len), buffer)
+      read(buffer, *, iostat=read_status) khz
+      if (read_status /= 0 .or. khz <= 0_int64) cycle
+      cores(cpu_index)%freq_valid = .true.
+      cores(cpu_index)%freq_mhz = real(khz, real64) / 1000.0_real64
+    end do
+    success = cpu_count > 0
+  end function linux_get_cpu_metadata
 
   function linux_get_memory_info(self) result(info)
     class(linux_backend), intent(in) :: self

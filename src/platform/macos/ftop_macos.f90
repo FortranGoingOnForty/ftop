@@ -1,7 +1,7 @@
 module ftop_platform
   use, intrinsic :: iso_c_binding, only : c_char, c_double, c_int, c_long_long, c_null_char, c_size_t
   use, intrinsic :: iso_fortran_env, only : int64, real64
-  use ftop_cpu_data, only : cpu_state_ticks, cpu_state_total_ticks
+  use ftop_cpu_data, only : cpu_core_info, cpu_state_ticks, cpu_state_total_ticks
   use ftop_platform_types, only : cpu_tick_sample, cpu_usage_percent, load_average_info, memory_info, platform_backend
   implicit none
   private
@@ -18,6 +18,7 @@ module ftop_platform
     procedure :: get_cpu_count => macos_get_cpu_count
     procedure :: get_cpu_sample => macos_get_cpu_sample
     procedure :: get_cpu_state_snapshot => macos_get_cpu_state_snapshot
+    procedure :: get_cpu_metadata => macos_get_cpu_metadata
     procedure :: get_memory_info => macos_get_memory_info
     procedure :: get_load_average => macos_get_load_average
   end type macos_backend
@@ -195,6 +196,24 @@ contains
     end do
     total%valid = cpu_state_total_ticks(total) > 0_int64
   end function macos_get_cpu_state_snapshot
+
+  logical function macos_get_cpu_metadata(self, cores) result(success)
+    class(macos_backend), intent(in) :: self
+    type(cpu_core_info), allocatable, intent(out) :: cores(:)
+    integer :: cpu_count
+    integer :: cpu_index
+    integer(int64) :: frequency_hz
+
+    cpu_count = max(0, macos_get_cpu_count(self))
+    allocate(cores(cpu_count))
+    if (macos_sysctl_int64("hw.cpufrequency", frequency_hz) .and. frequency_hz > 0_int64) then
+      do cpu_index = 1, cpu_count
+        cores(cpu_index)%freq_valid = .true.
+        cores(cpu_index)%freq_mhz = real(frequency_hz, real64) / 1000000.0_real64
+      end do
+    end if
+    success = cpu_count > 0
+  end function macos_get_cpu_metadata
 
   function macos_get_memory_info(self) result(info)
     class(macos_backend), intent(in) :: self

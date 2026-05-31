@@ -56,6 +56,10 @@ module ftop_collector
     real(c_double) :: cpu_core_user_percent(FTOP_COLLECTOR_MAX_CPU_CORES)
     real(c_double) :: cpu_core_system_percent(FTOP_COLLECTOR_MAX_CPU_CORES)
     real(c_double) :: cpu_core_iowait_percent(FTOP_COLLECTOR_MAX_CPU_CORES)
+    integer(c_int) :: cpu_core_freq_valid(FTOP_COLLECTOR_MAX_CPU_CORES)
+    real(c_double) :: cpu_core_freq_mhz(FTOP_COLLECTOR_MAX_CPU_CORES)
+    integer(c_int) :: cpu_core_temp_valid(FTOP_COLLECTOR_MAX_CPU_CORES)
+    real(c_double) :: cpu_core_temp_c(FTOP_COLLECTOR_MAX_CPU_CORES)
     integer(c_int) :: load_valid
     real(c_double) :: load_average(3)
     integer(c_int) :: memory_valid
@@ -275,9 +279,11 @@ contains
     type(cpu_state_ticks), allocatable :: current_core_cpus(:)
     type(cpu_core_info) :: total_cpu
     type(cpu_core_info), allocatable :: core_cpus(:)
+    type(cpu_core_info), allocatable :: cpu_metadata(:)
     type(platform_memory_info) :: memory
     type(load_average_info) :: load_average
     integer(c_long_long) :: deadline_ms
+    integer(c_long_long) :: metadata_refresh_ms
     logical :: warming_up
 
     result = c_null_ptr
@@ -291,11 +297,14 @@ contains
       allocate(previous_core_cpus(0))
     end if
     call make_invalid_cpu_infos(size(previous_core_cpus), total_cpu, core_cpus)
+    if (.not. backend%get_cpu_metadata(cpu_metadata)) allocate(cpu_metadata(0))
+    call merge_cpu_metadata(core_cpus, cpu_metadata)
     memory = backend%get_memory_info()
     load_average = backend%get_load_average()
     call publish_sample(state, backend%get_cpu_count(), total_cpu, core_cpus, .true., memory, load_average)
 
     deadline_ms = monotonic_ms()
+    metadata_refresh_ms = deadline_ms + 1000_c_long_long
     do
       if (sleep_until_or_stop(state, deadline_ms + interval_ms(state))) exit
       deadline_ms = deadline_ms + interval_ms(state)
@@ -315,6 +324,14 @@ contains
           previous_core_cpus = current_core_cpus
         end if
       end if
+      if (deadline_ms >= metadata_refresh_ms) then
+        if (.not. backend%get_cpu_metadata(cpu_metadata)) then
+          if (allocated(cpu_metadata)) deallocate(cpu_metadata)
+          allocate(cpu_metadata(0))
+        end if
+        metadata_refresh_ms = deadline_ms + 1000_c_long_long
+      end if
+      call merge_cpu_metadata(core_cpus, cpu_metadata)
 
       call publish_sample(state, backend%get_cpu_count(), total_cpu, core_cpus, warming_up, memory, load_average)
       if (should_stop(state)) exit
@@ -350,6 +367,19 @@ contains
     end do
   end subroutine make_cpu_delta_infos
 
+  subroutine merge_cpu_metadata(core_cpus, metadata)
+    type(cpu_core_info), intent(inout) :: core_cpus(:)
+    type(cpu_core_info), intent(in) :: metadata(:)
+    integer :: core_index
+
+    do core_index = 1, min(size(core_cpus), size(metadata))
+      core_cpus(core_index)%freq_valid = metadata(core_index)%freq_valid
+      core_cpus(core_index)%freq_mhz = metadata(core_index)%freq_mhz
+      core_cpus(core_index)%temp_valid = metadata(core_index)%temp_valid
+      core_cpus(core_index)%temp_c = metadata(core_index)%temp_c
+    end do
+  end subroutine merge_cpu_metadata
+
   subroutine clear_state(state, interval_ms)
     type(collector_shared_state), intent(out) :: state
     integer, intent(in) :: interval_ms
@@ -371,6 +401,10 @@ contains
     state%cpu_core_user_percent = 0.0_c_double
     state%cpu_core_system_percent = 0.0_c_double
     state%cpu_core_iowait_percent = 0.0_c_double
+    state%cpu_core_freq_valid = 0_c_int
+    state%cpu_core_freq_mhz = 0.0_c_double
+    state%cpu_core_temp_valid = 0_c_int
+    state%cpu_core_temp_c = 0.0_c_double
     state%load_valid = 0_c_int
     state%load_average = 0.0_c_double
     state%memory_valid = 0_c_int
@@ -408,6 +442,10 @@ contains
     state%cpu_core_user_percent = 0.0_c_double
     state%cpu_core_system_percent = 0.0_c_double
     state%cpu_core_iowait_percent = 0.0_c_double
+    state%cpu_core_freq_valid = 0_c_int
+    state%cpu_core_freq_mhz = 0.0_c_double
+    state%cpu_core_temp_valid = 0_c_int
+    state%cpu_core_temp_c = 0.0_c_double
     state%load_valid = 0_c_int
     state%load_average = 0.0_c_double
     state%memory_valid = 0_c_int
@@ -470,6 +508,10 @@ contains
       snapshot%cpu_cores(core_index)%user_percent = real(state%cpu_core_user_percent(core_index), real64)
       snapshot%cpu_cores(core_index)%system_percent = real(state%cpu_core_system_percent(core_index), real64)
       snapshot%cpu_cores(core_index)%iowait_percent = real(state%cpu_core_iowait_percent(core_index), real64)
+      snapshot%cpu_cores(core_index)%freq_valid = state%cpu_core_freq_valid(core_index) /= 0_c_int
+      snapshot%cpu_cores(core_index)%freq_mhz = real(state%cpu_core_freq_mhz(core_index), real64)
+      snapshot%cpu_cores(core_index)%temp_valid = state%cpu_core_temp_valid(core_index) /= 0_c_int
+      snapshot%cpu_cores(core_index)%temp_c = real(state%cpu_core_temp_c(core_index), real64)
     end do
 
     success = .true.
@@ -654,12 +696,20 @@ contains
     state%cpu_core_user_percent = 0.0_c_double
     state%cpu_core_system_percent = 0.0_c_double
     state%cpu_core_iowait_percent = 0.0_c_double
+    state%cpu_core_freq_valid = 0_c_int
+    state%cpu_core_freq_mhz = 0.0_c_double
+    state%cpu_core_temp_valid = 0_c_int
+    state%cpu_core_temp_c = 0.0_c_double
     do core_index = 1, core_count
       state%cpu_core_valid(core_index) = merge(1_c_int, 0_c_int, core_cpus(core_index)%valid .and. .not. warming_up)
       state%cpu_core_usage_percent(core_index) = real(clamp_percent(core_cpus(core_index)%usage_percent), c_double)
       state%cpu_core_user_percent(core_index) = real(clamp_percent(core_cpus(core_index)%user_percent), c_double)
       state%cpu_core_system_percent(core_index) = real(clamp_percent(core_cpus(core_index)%system_percent), c_double)
       state%cpu_core_iowait_percent(core_index) = real(clamp_percent(core_cpus(core_index)%iowait_percent), c_double)
+      state%cpu_core_freq_valid(core_index) = merge(1_c_int, 0_c_int, core_cpus(core_index)%freq_valid)
+      state%cpu_core_freq_mhz(core_index) = real(max(0.0_real64, core_cpus(core_index)%freq_mhz), c_double)
+      state%cpu_core_temp_valid(core_index) = merge(1_c_int, 0_c_int, core_cpus(core_index)%temp_valid)
+      state%cpu_core_temp_c(core_index) = real(core_cpus(core_index)%temp_c, c_double)
     end do
   end subroutine publish_cpu_cores
 
