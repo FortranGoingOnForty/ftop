@@ -1,9 +1,32 @@
 module ftop_platform
-  use, intrinsic :: iso_c_binding, only : c_char, c_int, c_long, c_long_long, c_null_char, c_size_t
+  use, intrinsic :: iso_c_binding, only : &
+    c_associated, &
+    c_char, &
+    c_int, &
+    c_long, &
+    c_long_long, &
+    c_null_char, &
+    c_null_ptr, &
+    c_ptr, &
+    c_size_t
   use, intrinsic :: iso_fortran_env, only : int64
   use ftop_platform_types, only : cpu_tick_sample, cpu_usage_percent, memory_info, platform_backend
   implicit none
   private
+
+  integer, parameter, public :: FREEBSD_PROCESS_COMMAND_LEN = 32
+
+  type, bind(C), public :: freebsd_process_info
+    integer(c_int) :: pid
+    integer(c_int) :: ppid
+    integer(c_int) :: uid
+    integer(c_int) :: state
+    character(kind=c_char) :: command(FREEBSD_PROCESS_COMMAND_LEN)
+  end type freebsd_process_info
+
+  type, public :: freebsd_kvm_handle
+    type(c_ptr) :: handle = c_null_ptr
+  end type freebsd_kvm_handle
 
   type, extends(platform_backend) :: freebsd_backend
   contains
@@ -15,6 +38,9 @@ module ftop_platform
   public :: create_platform
   public :: cpu_tick_sample
   public :: cpu_usage_percent
+  public :: freebsd_kvm_close
+  public :: freebsd_kvm_getprocs
+  public :: freebsd_kvm_open
   public :: freebsd_sysctl_bytes
   public :: freebsd_sysctl_int
   public :: freebsd_sysctl_long
@@ -80,6 +106,27 @@ module ftop_platform
       integer(c_size_t), intent(out) :: value_len
       integer(c_int), intent(out) :: sys_errno
     end function c_ftop_freebsd_sysctl_bytes
+
+    type(c_ptr) function c_ftop_freebsd_kvm_open(sys_errno) bind(C, name="ftop_freebsd_kvm_open")
+      import :: c_int, c_ptr
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_freebsd_kvm_open
+
+    integer(c_int) function c_ftop_freebsd_kvm_close(handle, sys_errno) bind(C, name="ftop_freebsd_kvm_close")
+      import :: c_int, c_ptr
+      type(c_ptr), value :: handle
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_freebsd_kvm_close
+
+    integer(c_int) function c_ftop_freebsd_kvm_getprocs(handle, processes, capacity, process_count, sys_errno) &
+        bind(C, name="ftop_freebsd_kvm_getprocs")
+      import :: c_int, c_ptr, c_size_t, freebsd_process_info
+      type(c_ptr), value :: handle
+      type(freebsd_process_info), intent(out) :: processes(*)
+      integer(c_size_t), value :: capacity
+      integer(c_size_t), intent(out) :: process_count
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_freebsd_kvm_getprocs
   end interface
 
 contains
@@ -247,6 +294,54 @@ contains
     if (success .and. present(value_len)) value_len = int(c_value_len)
     call assign_error(error_code, sys_errno)
   end function freebsd_sysctl_bytes
+
+  logical function freebsd_kvm_open(handle, error_code) result(success)
+    type(freebsd_kvm_handle), intent(out) :: handle
+    integer, intent(out), optional :: error_code
+    integer(c_int) :: sys_errno
+
+    handle%handle = c_ftop_freebsd_kvm_open(sys_errno)
+    success = c_associated(handle%handle)
+    call assign_error(error_code, sys_errno)
+  end function freebsd_kvm_open
+
+  logical function freebsd_kvm_close(handle, error_code) result(success)
+    type(freebsd_kvm_handle), intent(inout) :: handle
+    integer, intent(out), optional :: error_code
+    integer(c_int) :: sys_errno
+    integer(c_int) :: rc
+
+    sys_errno = 0_c_int
+    success = .false.
+    if (c_associated(handle%handle)) then
+      rc = c_ftop_freebsd_kvm_close(handle%handle, sys_errno)
+      success = rc == 0_c_int
+    end if
+    if (success) handle%handle = c_null_ptr
+    call assign_error(error_code, sys_errno)
+  end function freebsd_kvm_close
+
+  logical function freebsd_kvm_getprocs(handle, processes, process_count, error_code) result(success)
+    type(freebsd_kvm_handle), intent(in) :: handle
+    type(freebsd_process_info), intent(out) :: processes(:)
+    integer, intent(out) :: process_count
+    integer, intent(out), optional :: error_code
+    integer(c_size_t) :: c_process_count
+    integer(c_int) :: sys_errno
+    integer(c_int) :: rc
+
+    process_count = 0
+    if (.not. c_associated(handle%handle) .or. size(processes) <= 0) then
+      call assign_error(error_code, 0_c_int)
+      success = .false.
+      return
+    end if
+
+    rc = c_ftop_freebsd_kvm_getprocs(handle%handle, processes, int(size(processes), c_size_t), c_process_count, sys_errno)
+    success = rc == 0_c_int
+    if (success) process_count = int(c_process_count)
+    call assign_error(error_code, sys_errno)
+  end function freebsd_kvm_getprocs
 
   subroutine to_c_string(text, buffer)
     character(len=*), intent(in) :: text

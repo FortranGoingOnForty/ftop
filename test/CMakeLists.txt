@@ -26,6 +26,11 @@ if(FTOP_PLATFORM STREQUAL "freebsd")
   target_link_libraries(ftop_freebsd_sysctl_test PRIVATE ftop_core)
 
   add_test(NAME ftop_freebsd_sysctl COMMAND ftop_freebsd_sysctl_test)
+
+  add_executable(ftop_freebsd_kvm_test unit/test_freebsd_kvm.f90)
+  target_link_libraries(ftop_freebsd_kvm_test PRIVATE ftop_core)
+
+  add_test(NAME ftop_freebsd_kvm COMMAND ftop_freebsd_kvm_test)
 endif()
 
 add_executable(ftop_threaded_platform_test unit/test_threaded_platform.f90)

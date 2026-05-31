@@ -21,6 +21,8 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
 
+set(FTOP_PLATFORM_LIBS)
+
 set(FTOP_FGOF_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." CACHE PATH "Path to the FortranGoingOnForty workspace containing fgof-* repos")
 
 function(ftop_add_fgof_dependency repo_name target_name)
@@ -63,6 +65,7 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
     src/platform/freebsd/ftop_freebsd.f90
     src/platform/freebsd/ftop_freebsd_shim.c
   )
+  list(APPEND FTOP_PLATFORM_LIBS kvm)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
   set(FTOP_PLATFORM "macos")
   set(FTOP_PLATFORM_SOURCES
@@ -111,6 +114,7 @@ target_link_libraries(
     fgof::lineedit
     fgof::cache
     fgof::expect
+    ${FTOP_PLATFORM_LIBS}
 )
 
 target_compile_options(

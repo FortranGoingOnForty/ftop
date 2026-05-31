@@ -1,10 +1,24 @@
 #include <errno.h>
+#include <fcntl.h>
+#include <kvm.h>
 #include <stddef.h>
 #include <string.h>
+#include <sys/param.h>
 #include <sys/resource.h>
 #include <sys/sysctl.h>
 #include <sys/types.h>
+#include <sys/user.h>
 #include <unistd.h>
+
+#define FTOP_FREEBSD_COMMAND_LEN 32
+
+struct ftop_freebsd_process_info {
+  int pid;
+  int ppid;
+  int uid;
+  int state;
+  char command[FTOP_FREEBSD_COMMAND_LEN];
+};
 
 #ifndef CPUSTATES
 #define CPUSTATES 5
@@ -147,6 +161,73 @@ int ftop_freebsd_sysctl_bytes(const char *name, void *buffer, size_t buffer_len,
   }
 
   *value_len = actual_len;
+  return 0;
+}
+
+void *ftop_freebsd_kvm_open(int *sys_errno) {
+  char error_buffer[256];
+  kvm_t *handle;
+
+  if (sys_errno == NULL) return NULL;
+
+  *sys_errno = 0;
+  error_buffer[0] = '\0';
+  handle = kvm_openfiles(NULL, "/dev/null", NULL, O_RDONLY, error_buffer);
+  if (handle == NULL) {
+    *sys_errno = errno != 0 ? errno : ENOENT;
+    return NULL;
+  }
+
+  return handle;
+}
+
+int ftop_freebsd_kvm_close(void *handle, int *sys_errno) {
+  if (handle == NULL || sys_errno == NULL) return -1;
+
+  *sys_errno = 0;
+  if (kvm_close((kvm_t *)handle) != 0) {
+    *sys_errno = errno;
+    return -1;
+  }
+
+  return 0;
+}
+
+static void ftop_copy_process_command(char *destination, const char *source) {
+  size_t i;
+
+  for (i = 0U; i + 1U < FTOP_FREEBSD_COMMAND_LEN && source[i] != '\0'; ++i) destination[i] = source[i];
+  destination[i] = '\0';
+}
+
+int ftop_freebsd_kvm_getprocs(
+    void *handle, struct ftop_freebsd_process_info *buffer, size_t capacity, size_t *process_count, int *sys_errno) {
+  struct kinfo_proc *processes;
+  size_t copy_count;
+  int count;
+  size_t i;
+
+  if (handle == NULL || buffer == NULL || process_count == NULL || sys_errno == NULL || capacity == 0) return -1;
+
+  *process_count = 0U;
+  *sys_errno = 0;
+  count = 0;
+  processes = kvm_getprocs((kvm_t *)handle, KERN_PROC_PROC, 0, &count);
+  if (processes == NULL || count < 0) {
+    *sys_errno = errno != 0 ? errno : EINVAL;
+    return -1;
+  }
+
+  copy_count = (size_t)count < capacity ? (size_t)count : capacity;
+  for (i = 0U; i < copy_count; ++i) {
+    buffer[i].pid = (int)processes[i].ki_pid;
+    buffer[i].ppid = (int)processes[i].ki_ppid;
+    buffer[i].uid = (int)processes[i].ki_uid;
+    buffer[i].state = (int)processes[i].ki_stat;
+    ftop_copy_process_command(buffer[i].command, processes[i].ki_comm);
+  }
+
+  *process_count = copy_count;
   return 0;
 }
 
