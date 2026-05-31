@@ -1,5 +1,5 @@
 module ftop_platform
-  use, intrinsic :: iso_c_binding, only : c_char, c_int, c_null_char, c_size_t
+  use, intrinsic :: iso_c_binding, only : c_char, c_double, c_int, c_null_char, c_size_t
   use, intrinsic :: iso_fortran_env, only : int64, real64
   use ftop_cpu_data, only : cpu_core_info, cpu_state_ticks, cpu_state_total_ticks
   use ftop_linux_loadavg, only : linux_loadavg_parse
@@ -89,6 +89,13 @@ module ftop_platform
       integer(c_int), intent(out) :: sys_errno
     end function c_ftop_linux_read_cpu_frequency
 
+    integer(c_int) function c_ftop_linux_read_cpu_temperature(temperature_c, sys_errno) &
+        bind(C, name="ftop_linux_read_cpu_temperature")
+      import :: c_double, c_int
+      real(c_double), intent(out) :: temperature_c
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_linux_read_cpu_temperature
+
     integer(c_int) function c_ftop_linux_cpuinfo_field(name, value, value_capacity, value_len, sys_errno) &
         bind(C, name="ftop_linux_cpuinfo_field")
       import :: c_char, c_int, c_size_t
@@ -177,6 +184,7 @@ contains
     integer(c_size_t) :: value_len
     integer(c_int) :: sys_errno
     integer(c_int) :: rc
+    real(c_double) :: temperature_c
     integer(int64) :: khz
     integer :: cpu_count
     integer :: cpu_index
@@ -194,6 +202,13 @@ contains
       cores(cpu_index)%freq_valid = .true.
       cores(cpu_index)%freq_mhz = real(khz, real64) / 1000.0_real64
     end do
+    rc = c_ftop_linux_read_cpu_temperature(temperature_c, sys_errno)
+    if (rc == 0_c_int) then
+      do cpu_index = 1, cpu_count
+        cores(cpu_index)%temp_valid = .true.
+        cores(cpu_index)%temp_c = real(temperature_c, real64)
+      end do
+    end if
     success = cpu_count > 0
   end function linux_get_cpu_metadata
 

@@ -418,3 +418,102 @@ int ftop_linux_hwmon_discover(struct ftop_linux_hwmon_sensor *buffer, size_t cap
   *sensor_count = count < capacity ? count : capacity;
   return 0;
 }
+
+static int ftop_linux_is_cpu_hwmon_name(const char *name) {
+  return strcmp(name, "coretemp") == 0 || strcmp(name, "k10temp") == 0 || strcmp(name, "zenpower") == 0 ||
+         strcmp(name, "cpu_thermal") == 0 || strcmp(name, "soc_thermal") == 0;
+}
+
+static int ftop_linux_is_temp_input_name(const char *name) {
+  size_t len;
+
+  if (strncmp(name, "temp", 4U) != 0) return 0;
+  len = strlen(name);
+  if (len <= 10U) return 0;
+  return strcmp(name + len - 6U, "_input") == 0;
+}
+
+static int ftop_linux_read_temperature_millicelsius(const char *path, long long *temperature) {
+  char buffer[64];
+  char *end;
+  size_t value_len;
+  long long value;
+  int sys_errno;
+
+  if (ftop_read_file_into_buffer(path, buffer, sizeof(buffer), &value_len, &sys_errno) != 0) return -1;
+  errno = 0;
+  value = strtoll(buffer, &end, 10);
+  if (end == buffer || errno != 0) return -1;
+  if (value < -100000LL || value > 150000LL) return -1;
+
+  *temperature = value;
+  return 0;
+}
+
+static int ftop_linux_scan_cpu_hwmon_temperatures(const char *sensor_path, long long *max_temperature) {
+  char input_path[512];
+  DIR *directory;
+  struct dirent *entry;
+  long long temperature;
+  int found;
+  int written;
+
+  directory = opendir(sensor_path);
+  if (directory == NULL) return 0;
+
+  found = 0;
+  while ((entry = readdir(directory)) != NULL) {
+    if (!ftop_linux_is_temp_input_name(entry->d_name)) continue;
+    written = snprintf(input_path, sizeof(input_path), "%s/%s", sensor_path, entry->d_name);
+    if (written < 0 || (size_t)written >= sizeof(input_path)) continue;
+    if (ftop_linux_read_temperature_millicelsius(input_path, &temperature) != 0) continue;
+    if (!found || temperature > *max_temperature) *max_temperature = temperature;
+    found = 1;
+  }
+
+  closedir(directory);
+  return found;
+}
+
+int ftop_linux_read_cpu_temperature(double *temperature_c, int *sys_errno) {
+  char name[FTOP_LINUX_HWMON_NAME_LEN];
+  char name_path[512];
+  char sensor_path[512];
+  DIR *directory;
+  struct dirent *entry;
+  long long max_temperature;
+  int found;
+  int written;
+
+  if (temperature_c == NULL || sys_errno == NULL) return -1;
+
+  *temperature_c = 0.0;
+  *sys_errno = 0;
+  directory = opendir("/sys/class/hwmon");
+  if (directory == NULL) {
+    *sys_errno = errno;
+    return -1;
+  }
+
+  found = 0;
+  max_temperature = 0;
+  while ((entry = readdir(directory)) != NULL) {
+    if (strncmp(entry->d_name, "hwmon", 5U) != 0) continue;
+    written = snprintf(sensor_path, sizeof(sensor_path), "/sys/class/hwmon/%s", entry->d_name);
+    if (written < 0 || (size_t)written >= sizeof(sensor_path)) continue;
+    written = snprintf(name_path, sizeof(name_path), "%s/name", sensor_path);
+    if (written < 0 || (size_t)written >= sizeof(name_path)) continue;
+    if (ftop_read_hwmon_name(name_path, name, sizeof(name)) != 0) continue;
+    if (!ftop_linux_is_cpu_hwmon_name(name)) continue;
+    if (ftop_linux_scan_cpu_hwmon_temperatures(sensor_path, &max_temperature)) found = 1;
+  }
+
+  closedir(directory);
+  if (!found) {
+    *sys_errno = ENOENT;
+    return -1;
+  }
+
+  *temperature_c = (double)max_temperature / 1000.0;
+  return 0;
+}

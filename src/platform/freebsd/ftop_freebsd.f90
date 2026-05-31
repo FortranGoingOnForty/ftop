@@ -103,6 +103,29 @@ module ftop_platform
       integer(c_int), intent(out) :: sys_errno
     end function c_ftop_freebsd_cpu_state_ticks
 
+    integer(c_int) function c_ftop_freebsd_cpu_frequency(cpu_index, freq_mhz, sys_errno) &
+        bind(C, name="ftop_freebsd_cpu_frequency")
+      import :: c_int
+      integer(c_int), value :: cpu_index
+      integer(c_int), intent(out) :: freq_mhz
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_freebsd_cpu_frequency
+
+    integer(c_int) function c_ftop_freebsd_cpu_temperature(cpu_index, temperature_c, sys_errno) &
+        bind(C, name="ftop_freebsd_cpu_temperature")
+      import :: c_double, c_int
+      integer(c_int), value :: cpu_index
+      real(c_double), intent(out) :: temperature_c
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_freebsd_cpu_temperature
+
+    integer(c_int) function c_ftop_freebsd_acpi_temperature(temperature_c, sys_errno) &
+        bind(C, name="ftop_freebsd_acpi_temperature")
+      import :: c_double, c_int
+      real(c_double), intent(out) :: temperature_c
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_freebsd_acpi_temperature
+
     integer(c_int) function c_ftop_freebsd_memory_info(total_bytes, available_bytes, sys_errno) &
         bind(C, name="ftop_freebsd_memory_info")
       import :: c_int, c_long_long
@@ -263,19 +286,31 @@ contains
   logical function freebsd_get_cpu_metadata(self, cores) result(success)
     class(freebsd_backend), intent(in) :: self
     type(cpu_core_info), allocatable, intent(out) :: cores(:)
-    character(len=32) :: sysctl_name
+    real(c_double) :: acpi_temperature_c
+    real(c_double) :: cpu_temperature_c
+    integer(c_int) :: c_freq_mhz
+    integer(c_int) :: sys_errno
     integer :: cpu_count
     integer :: cpu_index
-    integer :: freq_mhz
+    logical :: have_acpi_temperature
 
     cpu_count = max(0, freebsd_get_cpu_count(self))
     allocate(cores(cpu_count))
+    have_acpi_temperature = c_ftop_freebsd_acpi_temperature(acpi_temperature_c, sys_errno) == 0_c_int
     do cpu_index = 1, cpu_count
-      write(sysctl_name, '("dev.cpu.", I0, ".freq")') cpu_index - 1
-      if (.not. freebsd_sysctl_int(trim(sysctl_name), freq_mhz)) cycle
-      if (freq_mhz <= 0) cycle
-      cores(cpu_index)%freq_valid = .true.
-      cores(cpu_index)%freq_mhz = real(freq_mhz, real64)
+      if (c_ftop_freebsd_cpu_frequency(int(cpu_index - 1, c_int), c_freq_mhz, sys_errno) == 0_c_int .and. &
+          c_freq_mhz > 0_c_int) then
+        cores(cpu_index)%freq_valid = .true.
+        cores(cpu_index)%freq_mhz = real(c_freq_mhz, real64)
+      end if
+
+      if (c_ftop_freebsd_cpu_temperature(int(cpu_index - 1, c_int), cpu_temperature_c, sys_errno) == 0_c_int) then
+        cores(cpu_index)%temp_valid = .true.
+        cores(cpu_index)%temp_c = real(cpu_temperature_c, real64)
+      else if (have_acpi_temperature) then
+        cores(cpu_index)%temp_valid = .true.
+        cores(cpu_index)%temp_c = real(acpi_temperature_c, real64)
+      end if
     end do
     success = cpu_count > 0
   end function freebsd_get_cpu_metadata

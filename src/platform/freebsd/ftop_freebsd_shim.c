@@ -3,6 +3,7 @@
 #include <fcntl.h>
 #include <kvm.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/param.h>
@@ -185,7 +186,7 @@ int ftop_freebsd_cpu_state_ticks(
   return 0;
 }
 
-int ftop_freebsd_sysctl_int(const char *name, int *value, int *sys_errno) {
+static int ftop_freebsd_sysctl_int_value(const char *name, int *value, int *sys_errno) {
   size_t value_len;
 
   if (name == NULL || value == NULL || sys_errno == NULL) return -1;
@@ -203,6 +204,78 @@ int ftop_freebsd_sysctl_int(const char *name, int *value, int *sys_errno) {
   }
 
   return 0;
+}
+
+int ftop_freebsd_sysctl_int(const char *name, int *value, int *sys_errno) {
+  return ftop_freebsd_sysctl_int_value(name, value, sys_errno);
+}
+
+int ftop_freebsd_cpu_frequency(int cpu_index, int *freq_mhz, int *sys_errno) {
+  char name[64];
+  int written;
+
+  if (freq_mhz == NULL || sys_errno == NULL) return -1;
+  *freq_mhz = 0;
+  *sys_errno = 0;
+  if (cpu_index < 0) {
+    *sys_errno = EINVAL;
+    return -1;
+  }
+
+  written = snprintf(name, sizeof(name), "dev.cpu.%d.freq", cpu_index);
+  if (written < 0 || (size_t)written >= sizeof(name)) {
+    *sys_errno = EOVERFLOW;
+    return -1;
+  }
+
+  return ftop_freebsd_sysctl_int_value(name, freq_mhz, sys_errno);
+}
+
+static int ftop_freebsd_deci_kelvin_to_celsius(int raw_temperature, double *temperature_c, int *sys_errno) {
+  double value;
+
+  value = ((double)raw_temperature / 10.0) - 273.15;
+  if (value < -100.0 || value > 150.0) {
+    *sys_errno = EINVAL;
+    return -1;
+  }
+
+  *temperature_c = value;
+  return 0;
+}
+
+int ftop_freebsd_cpu_temperature(int cpu_index, double *temperature_c, int *sys_errno) {
+  char name[64];
+  int raw_temperature;
+  int written;
+
+  if (temperature_c == NULL || sys_errno == NULL) return -1;
+  *temperature_c = 0.0;
+  *sys_errno = 0;
+  if (cpu_index < 0) {
+    *sys_errno = EINVAL;
+    return -1;
+  }
+
+  written = snprintf(name, sizeof(name), "dev.cpu.%d.temperature", cpu_index);
+  if (written < 0 || (size_t)written >= sizeof(name)) {
+    *sys_errno = EOVERFLOW;
+    return -1;
+  }
+  if (ftop_freebsd_sysctl_int_value(name, &raw_temperature, sys_errno) != 0) return -1;
+
+  return ftop_freebsd_deci_kelvin_to_celsius(raw_temperature, temperature_c, sys_errno);
+}
+
+int ftop_freebsd_acpi_temperature(double *temperature_c, int *sys_errno) {
+  int raw_temperature;
+
+  if (temperature_c == NULL || sys_errno == NULL) return -1;
+  *temperature_c = 0.0;
+  *sys_errno = 0;
+  if (ftop_freebsd_sysctl_int_value("hw.acpi.thermal.tz0.temperature", &raw_temperature, sys_errno) != 0) return -1;
+
+  return ftop_freebsd_deci_kelvin_to_celsius(raw_temperature, temperature_c, sys_errno);
 }
 
 int ftop_freebsd_sysctl_long(const char *name, long *value, int *sys_errno) {
