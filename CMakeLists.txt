@@ -91,7 +91,11 @@ add_library(
   src/shim/ftop_pthread.f90
   src/shim/ftop_signal.f90
   src/shim/ftop_terminal_io.f90
+  src/ftop_color.f90
+  src/ftop_widgets.f90
   src/ftop_app.f90
+  src/widgets/ftop_text.f90
+  src/widgets/ftop_box.f90
   src/shim/ftop_dl.c
   src/shim/ftop_pthread.c
   src/shim/ftop_signal.c

@@ -26,6 +26,16 @@ target_link_libraries(ftop_metric_data_test PRIVATE ftop_core)
 
 add_test(NAME ftop_metric_data COMMAND ftop_metric_data_test)
 
+add_executable(ftop_color_test unit/test_color.f90)
+target_link_libraries(ftop_color_test PRIVATE ftop_core)
+
+add_test(NAME ftop_color COMMAND ftop_color_test)
+
+add_executable(ftop_widgets_test unit/test_widgets.f90)
+target_link_libraries(ftop_widgets_test PRIVATE ftop_core)
+
+add_test(NAME ftop_widgets COMMAND ftop_widgets_test)
+
 add_executable(ftop_linux_proc_stat_test unit/test_linux_proc_stat.f90)
 target_link_libraries(ftop_linux_proc_stat_test PRIVATE ftop_core)
 

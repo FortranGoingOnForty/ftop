@@ -3,34 +3,34 @@
 ## Goal
 A complete set of reusable rendering widgets built on fgof-screen: boxes, text labels, bar meters, sparkline charts, braille time-series graphs, and a color gradient system with truecolor support. These are the building blocks for all dashboard panels.
 
-## Status: NOT STARTED
+## Status: IN PROGRESS
 
 ## Targets
 
 ### Color System
-- [ ] `src/ftop_color.f90` — color management
-  - [ ] `type :: rgb_color` — (r, g, b) 0-255
-  - [ ] `type :: color_gradient` — array of RGB stops with interpolation
-  - [ ] Truecolor ANSI generation: `\e[38;2;r;g;bm` (fg), `\e[48;2;r;g;bm` (bg)
-  - [ ] 256-color fallback: map RGB to nearest 256-color index
-  - [ ] Named color constants: standard 16, common UI colors
-  - [ ] Gradient presets: green-yellow-red (CPU/mem), blue-cyan (network), green-blue (disk)
-  - [ ] Gradient interpolation: given value 0.0-1.0, return interpolated RGB
+- [x] `src/ftop_color.f90` — color management
+  - [x] `type :: rgb_color` — (r, g, b) 0-255
+  - [x] `type :: color_gradient` — array of RGB stops with interpolation
+  - [x] Truecolor ANSI generation: `\e[38;2;r;g;bm` (fg), `\e[48;2;r;g;bm` (bg)
+  - [x] 256-color fallback: map RGB to nearest 256-color index
+  - [x] Named color constants: standard 16, common UI colors
+  - [x] Gradient presets: green-yellow-red (CPU/mem), blue-cyan (network), green-blue (disk)
+  - [x] Gradient interpolation: given value 0.0-1.0, return interpolated RGB
 
 ### Box Widget
-- [ ] `src/widgets/ftop_box.f90`
-  - [ ] Draw bordered rectangle with title
-  - [ ] Border styles: single (`─│┌┐└┘`), double (`═║╔╗╚╝`), rounded (`╭╮╰╯`), heavy (`━┃┏┓┗┛`)
-  - [ ] Title positioning: left, center, right
-  - [ ] Content area calculation (inner rect minus border)
-  - [ ] Padding support
+- [x] `src/widgets/ftop_box.f90`
+  - [x] Draw bordered rectangle with title
+  - [x] Border styles: single (`─│┌┐└┘`), double (`═║╔╗╚╝`), rounded (`╭╮╰╯`), heavy (`━┃┏┓┗┛`)
+  - [x] Title positioning: left, center, right
+  - [x] Content area calculation (inner rect minus border)
+  - [x] Padding support
 
 ### Text Widget
-- [ ] `src/widgets/ftop_text.f90`
-  - [ ] Render styled text at position
-  - [ ] Alignment: left, center, right
-  - [ ] Truncation with ellipsis for overflow
-  - [ ] Printf-style formatting for numbers (e.g., "47.3%", "1.2 GiB")
+- [x] `src/widgets/ftop_text.f90`
+  - [x] Render styled text at position
+  - [x] Alignment: left, center, right
+  - [x] Truncation with ellipsis for overflow
+  - [x] Printf-style formatting for numbers (e.g., "47.3%", "1.2 GiB")
 
 ### Bar Meter Widget
 - [ ] `src/widgets/ftop_meter.f90`
@@ -71,11 +71,11 @@ A complete set of reusable rendering widgets built on fgof-screen: boxes, text l
   - [ ] Row striping (alternating background, optional)
 
 ### Widget Base
-- [ ] `src/ftop_widgets.f90` — abstract widget interface
-  - [ ] `type, abstract :: widget`
-  - [ ] Deferred: `render(screen_buffer, rect)` — draw into a rectangular region
-  - [ ] Deferred: `min_size()` -> (min_width, min_height)
-  - [ ] Common: position, size, visibility, focus state
+- [x] `src/ftop_widgets.f90` — abstract widget interface
+  - [x] `type, abstract :: widget`
+  - [x] Deferred: `render(screen_buffer, rect)` — draw into a rectangular region
+  - [x] Deferred: `min_size()` -> (min_width, min_height)
+  - [x] Common: position, size, visibility, focus state
 
 ## Definition of Done
 - Each widget renders correctly into an fgof-screen buffer
@@ -110,6 +110,7 @@ A complete set of reusable rendering widgets built on fgof-screen: boxes, text l
 (none yet)
 
 ## Notes
+- 2026-05-31: Foundation slice implemented: color system, widget base, text widget, and box widget. Verified on FreeBSD, Linux, and macOS. Remaining Sprint 04 widgets: meter, sparkline, braille graph, table, and golden snapshot coverage.
 - The widget library should be general enough to eventually extract into its own fgof library (fgof-widgets or fgof-tui). Design accordingly — no ftop-specific logic in widget implementations.
 - btop's graph rendering in `btop_draw.cpp` is a good reference for braille graph implementation. Study how it maps values to braille dot positions.
 - Consider supporting both filled (area) and line (outline) graph styles. btop uses filled; line graphs can show multiple series more clearly.
