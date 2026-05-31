@@ -52,10 +52,12 @@ module ftop_platform
       integer(c_int), intent(out) :: sys_errno
     end function c_ftop_macos_cpu_ticks
 
-    integer(c_int) function c_ftop_macos_memory_info(total_bytes, available_bytes, sys_errno) &
+    integer(c_int) function c_ftop_macos_memory_info(total_bytes, used_bytes, free_bytes, available_bytes, sys_errno) &
         bind(C, name="ftop_macos_memory_info")
       import :: c_int, c_long_long
       integer(c_long_long), intent(out) :: total_bytes
+      integer(c_long_long), intent(out) :: used_bytes
+      integer(c_long_long), intent(out) :: free_bytes
       integer(c_long_long), intent(out) :: available_bytes
       integer(c_int), intent(out) :: sys_errno
     end function c_ftop_macos_memory_info
@@ -219,6 +221,8 @@ contains
     class(macos_backend), intent(in) :: self
     type(memory_info) :: info
     integer(c_long_long) :: total_bytes
+    integer(c_long_long) :: used_bytes
+    integer(c_long_long) :: free_bytes
     integer(c_long_long) :: available_bytes
     integer(c_int) :: sys_errno
     integer(c_int) :: rc
@@ -226,13 +230,14 @@ contains
     associate(unused => self)
     end associate
 
-    rc = c_ftop_macos_memory_info(total_bytes, available_bytes, sys_errno)
+    rc = c_ftop_macos_memory_info(total_bytes, used_bytes, free_bytes, available_bytes, sys_errno)
     if (rc == 0_c_int .and. total_bytes > 0_c_long_long) then
       info%valid = .true.
       info%total_bytes = int(total_bytes, int64)
+      info%used_bytes = int(max(0_c_long_long, min(total_bytes, used_bytes)), int64)
+      info%free_bytes = int(max(0_c_long_long, min(total_bytes, free_bytes)), int64)
       info%available_bytes = int(max(0_c_long_long, min(total_bytes, available_bytes)), int64)
-      info%used_bytes = max(0_int64, info%total_bytes - info%available_bytes)
-      info%free_bytes = info%available_bytes
+      info%cached_bytes = max(0_int64, info%available_bytes - info%free_bytes)
     end if
   end function macos_get_memory_info
 

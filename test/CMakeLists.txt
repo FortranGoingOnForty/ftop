@@ -60,6 +60,13 @@ target_link_libraries(ftop_platform_test PRIVATE ftop_core)
 
 add_test(NAME ftop_platform COMMAND ftop_platform_test)
 
+add_executable(ftop_metric_accuracy_test unit/test_metric_accuracy.f90 unit/ftop_metric_accuracy.c)
+target_link_libraries(ftop_metric_accuracy_test PRIVATE ftop_core)
+target_compile_definitions(ftop_metric_accuracy_test PRIVATE FTOP_PLATFORM_${FTOP_PLATFORM}=1)
+
+add_test(NAME ftop_metric_accuracy COMMAND ftop_metric_accuracy_test)
+set_tests_properties(ftop_metric_accuracy PROPERTIES TIMEOUT 20)
+
 if(FTOP_PLATFORM STREQUAL "freebsd")
   add_executable(ftop_freebsd_sysctl_test unit/test_freebsd_sysctl.f90)
   target_link_libraries(ftop_freebsd_sysctl_test PRIVATE ftop_core)

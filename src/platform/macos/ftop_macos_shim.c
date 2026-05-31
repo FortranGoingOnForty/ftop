@@ -77,18 +77,24 @@ int ftop_macos_cpu_ticks(long long *total_ticks, long long *idle_ticks, int *sys
   return 0;
 }
 
-int ftop_macos_memory_info(long long *total_bytes, long long *available_bytes, int *sys_errno) {
+int ftop_macos_memory_info(
+    long long *total_bytes, long long *used_bytes, long long *free_bytes, long long *available_bytes, int *sys_errno) {
   vm_statistics64_data_t vm_info;
   mach_msg_type_number_t count;
   unsigned long long total;
   size_t total_len;
   kern_return_t rc;
   long long page_size;
+  long long free_pages;
   long long available_pages;
 
-  if (total_bytes == NULL || available_bytes == NULL || sys_errno == NULL) return -1;
+  if (total_bytes == NULL || used_bytes == NULL || free_bytes == NULL || available_bytes == NULL || sys_errno == NULL) {
+    return -1;
+  }
 
   *total_bytes = 0;
+  *used_bytes = 0;
+  *free_bytes = 0;
   *available_bytes = 0;
   *sys_errno = 0;
   total = 0ULL;
@@ -106,16 +112,19 @@ int ftop_macos_memory_info(long long *total_bytes, long long *available_bytes, i
   }
 
   page_size = (long long)sysconf(_SC_PAGESIZE);
-  available_pages = (long long)vm_info.free_count + (long long)vm_info.inactive_count;
-  available_pages += (long long)vm_info.speculative_count;
+  free_pages = (long long)vm_info.free_count + (long long)vm_info.speculative_count;
+  available_pages = free_pages + (long long)vm_info.inactive_count;
 
   *total_bytes = (long long)total;
+  *free_bytes = free_pages * page_size;
   *available_bytes = available_pages * page_size;
   if (*total_bytes <= 0) {
     *sys_errno = EINVAL;
     return -1;
   }
+  if (*free_bytes > *total_bytes) *free_bytes = *total_bytes;
   if (*available_bytes > *total_bytes) *available_bytes = *total_bytes;
+  *used_bytes = *total_bytes - *free_bytes;
 
   return 0;
 }
