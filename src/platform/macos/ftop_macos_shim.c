@@ -77,8 +77,32 @@ int ftop_macos_cpu_ticks(long long *total_ticks, long long *idle_ticks, int *sys
   return 0;
 }
 
+static int ftop_macos_swap_info(long long *total_bytes, long long *used_bytes, int *sys_errno) {
+  struct xsw_usage usage;
+  size_t usage_len;
+
+  if (total_bytes == NULL || used_bytes == NULL || sys_errno == NULL) return -1;
+
+  *total_bytes = 0;
+  *used_bytes = 0;
+  *sys_errno = 0;
+  memset(&usage, 0, sizeof(usage));
+  usage_len = sizeof(usage);
+  if (sysctlbyname("vm.swapusage", &usage, &usage_len, NULL, 0) != 0) {
+    *sys_errno = errno;
+    return -1;
+  }
+
+  *total_bytes = (long long)usage.xsu_total;
+  *used_bytes = (long long)usage.xsu_used;
+  if (*used_bytes > *total_bytes) *used_bytes = *total_bytes;
+
+  return 0;
+}
+
 int ftop_macos_memory_info(
-    long long *total_bytes, long long *used_bytes, long long *free_bytes, long long *available_bytes, int *sys_errno) {
+    long long *total_bytes, long long *used_bytes, long long *free_bytes, long long *available_bytes,
+    long long *swap_total_bytes, long long *swap_used_bytes, int *sys_errno) {
   vm_statistics64_data_t vm_info;
   mach_msg_type_number_t count;
   unsigned long long total;
@@ -87,8 +111,12 @@ int ftop_macos_memory_info(
   long long page_size;
   long long free_pages;
   long long available_pages;
+  long long swap_total;
+  long long swap_used;
+  int swap_errno;
 
-  if (total_bytes == NULL || used_bytes == NULL || free_bytes == NULL || available_bytes == NULL || sys_errno == NULL) {
+  if (total_bytes == NULL || used_bytes == NULL || free_bytes == NULL || available_bytes == NULL ||
+      swap_total_bytes == NULL || swap_used_bytes == NULL || sys_errno == NULL) {
     return -1;
   }
 
@@ -96,6 +124,8 @@ int ftop_macos_memory_info(
   *used_bytes = 0;
   *free_bytes = 0;
   *available_bytes = 0;
+  *swap_total_bytes = 0;
+  *swap_used_bytes = 0;
   *sys_errno = 0;
   total = 0ULL;
   total_len = sizeof(total);
@@ -125,6 +155,13 @@ int ftop_macos_memory_info(
   if (*free_bytes > *total_bytes) *free_bytes = *total_bytes;
   if (*available_bytes > *total_bytes) *available_bytes = *total_bytes;
   *used_bytes = *total_bytes - *free_bytes;
+  swap_total = 0;
+  swap_used = 0;
+  swap_errno = 0;
+  if (ftop_macos_swap_info(&swap_total, &swap_used, &swap_errno) == 0) {
+    *swap_total_bytes = swap_total;
+    *swap_used_bytes = swap_used;
+  }
 
   return 0;
 }

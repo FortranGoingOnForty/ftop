@@ -488,17 +488,63 @@ static unsigned int ftop_optional_sysctl_uint(const char *name) {
   return value;
 }
 
-int ftop_freebsd_memory_info(long long *total_bytes, long long *available_bytes, int *sys_errno) {
+static int ftop_freebsd_swap_info(long long *total_bytes, long long *used_bytes, int *sys_errno) {
+  char error_buffer[256];
+  struct kvm_swap swap_info;
+  kvm_t *handle;
+  long long page_size;
+  int rc;
+
+  if (total_bytes == NULL || used_bytes == NULL || sys_errno == NULL) return -1;
+
+  *total_bytes = 0;
+  *used_bytes = 0;
+  *sys_errno = 0;
+  memset(&swap_info, 0, sizeof(swap_info));
+  error_buffer[0] = '\0';
+
+  handle = kvm_openfiles(NULL, "/dev/null", NULL, O_RDONLY, error_buffer);
+  if (handle == NULL) {
+    *sys_errno = errno != 0 ? errno : ENOENT;
+    return -1;
+  }
+
+  rc = kvm_getswapinfo(handle, &swap_info, 1, 0);
+  if (rc < 0) {
+    *sys_errno = errno != 0 ? errno : EINVAL;
+    (void)kvm_close(handle);
+    return -1;
+  }
+  (void)kvm_close(handle);
+
+  page_size = (long long)getpagesize();
+  *total_bytes = (long long)swap_info.ksw_total * page_size;
+  *used_bytes = (long long)swap_info.ksw_used * page_size;
+  if (*used_bytes > *total_bytes) *used_bytes = *total_bytes;
+
+  return 0;
+}
+
+int ftop_freebsd_memory_info(long long *total_bytes, long long *available_bytes, long long *swap_total_bytes,
+    long long *swap_used_bytes, int *sys_errno) {
   unsigned long physical_memory;
   unsigned int free_pages;
   unsigned int inactive_pages;
   unsigned int available_pages;
+  long long swap_total;
+  long long swap_used;
   long long page_size;
+  int swap_errno;
 
-  if (total_bytes == NULL || available_bytes == NULL || sys_errno == NULL) return -1;
+  if (total_bytes == NULL || available_bytes == NULL || swap_total_bytes == NULL || swap_used_bytes == NULL ||
+      sys_errno == NULL) {
+    return -1;
+  }
 
   *total_bytes = 0;
   *available_bytes = 0;
+  *swap_total_bytes = 0;
+  *swap_used_bytes = 0;
   *sys_errno = 0;
   if (ftop_sysctl_ulong("hw.physmem", &physical_memory) != 0) {
     *sys_errno = errno;
@@ -525,6 +571,13 @@ int ftop_freebsd_memory_info(long long *total_bytes, long long *available_bytes,
     return -1;
   }
   if (*available_bytes > *total_bytes) *available_bytes = *total_bytes;
+  swap_total = 0;
+  swap_used = 0;
+  swap_errno = 0;
+  if (ftop_freebsd_swap_info(&swap_total, &swap_used, &swap_errno) == 0) {
+    *swap_total_bytes = swap_total;
+    *swap_used_bytes = swap_used;
+  }
 
   return 0;
 }
