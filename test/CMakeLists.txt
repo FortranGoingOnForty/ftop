@@ -56,6 +56,13 @@ target_link_libraries(ftop_table_test PRIVATE ftop_core)
 
 add_test(NAME ftop_table COMMAND ftop_table_test)
 
+add_executable(ftop_widget_snapshots_test unit/test_widget_snapshots.f90)
+target_link_libraries(ftop_widget_snapshots_test PRIVATE ftop_core)
+add_test(
+  NAME ftop_widget_snapshots
+  COMMAND ftop_widget_snapshots_test "${CMAKE_CURRENT_SOURCE_DIR}/golden/widget_showcase.txt"
+)
+
 add_executable(ftop_linux_proc_stat_test unit/test_linux_proc_stat.f90)
 target_link_libraries(ftop_linux_proc_stat_test PRIVATE ftop_core)
 
