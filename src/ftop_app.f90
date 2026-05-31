@@ -169,12 +169,17 @@ contains
     if (width <= 0 .or. height <= 0) return
 
     border_style = clear_screen_style()
-    border_style%fg = 45
+    border_style%fg_truecolor = .true.
+    border_style%fg_rgb = [126, 87, 255]
     title_style = clear_screen_style()
-    title_style%fg = 81
+    title_style%fg_truecolor = .true.
+    title_style%fg_rgb = [164, 240, 255]
+    title_style%bg_truecolor = .true.
+    title_style%bg_rgb = [32, 22, 56]
     title_style%bold = .true.
     dim_style = clear_screen_style()
-    dim_style%fg = 245
+    dim_style%fg_truecolor = .true.
+    dim_style%fg_rgb = [150, 156, 178]
 
     call clear_screen(session%current)
     session%current%cursor_visible = .false.

@@ -34,9 +34,9 @@ A running main loop that enters raw mode, clears the screen, draws a bordered bo
   - [ ] Log mouse events (for debugging; wiring to widgets comes later)
 - [ ] Basic ANSI rendering primitives
   - [x] Box drawing (single-line and double-line Unicode borders)
-  - [ ] Foreground/background color setting (truecolor: `\e[38;2;r;g;bm`)
+  - [x] Foreground/background color setting (truecolor: `\e[38;2;r;g;bm`)
   - [x] Text positioning (`\e[row;colH`)
-  - [ ] Style attributes (bold, dim, underline, italic, reverse, strikethrough)
+  - [x] Style attributes (bold, dim, underline, italic, reverse, strikethrough)
   - [x] Style reset (`\e[0m`)
 - [x] Signal handling via C shim
   - [x] SIGWINCH -> set resize flag (checked in main loop)
@@ -77,4 +77,4 @@ A running main loop that enters raw mode, clears the screen, draws a bordered bo
 - SIGTSTP/SIGCONT handling is critical for a well-behaved TUI. btop handles this; htop handles this. We must too.
 - Unicode box drawing is part of Sprint 01, not deferred; fgof-screen now preserves UTF-8 cell glyphs for box characters.
 - Mouse events are decoded into the status line for now; add a real debug log before checking the logging target.
-- Truecolor-specific primitive coverage remains pending; fgof-screen currently emits 256-color SGR styles.
+- Truecolor foreground/background and common style attributes are supported in fgof-screen and used by the Sprint 01 frame.
