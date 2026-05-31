@@ -32,6 +32,7 @@ module ftop_collector
   integer, parameter, public :: FTOP_COLLECTOR_DEFAULT_INTERVAL_MS = 1000
   integer, parameter, public :: FTOP_COLLECTOR_MIN_INTERVAL_MS = 1
   integer, parameter, public :: FTOP_COLLECTOR_MAX_INTERVAL_MS = 60000
+  integer, parameter, public :: FTOP_COLLECTOR_HISTORY_CAPACITY = 300
 
   type, bind(C) :: collector_shared_state
     integer(c_int) :: stop_requested
@@ -44,6 +45,10 @@ module ftop_collector
     integer(c_int) :: memory_valid
     integer(c_long_long) :: memory_total_bytes
     integer(c_long_long) :: memory_available_bytes
+    integer(c_int) :: history_start
+    integer(c_int) :: history_count
+    real(c_double) :: cpu_usage_history(FTOP_COLLECTOR_HISTORY_CAPACITY)
+    real(c_double) :: memory_usage_history(FTOP_COLLECTOR_HISTORY_CAPACITY)
     type(c_ptr) :: mutex
   end type collector_shared_state
 
@@ -53,6 +58,8 @@ module ftop_collector
     integer :: sample_count = 0
     type(cpu_total_info) :: cpu_total
     type(metric_memory_info) :: memory
+    real(real64), allocatable :: cpu_usage_history(:)
+    real(real64), allocatable :: memory_usage_history(:)
   end type collector_snapshot
 
   type, public :: collector
@@ -140,11 +147,8 @@ contains
     end if
 
     if (.not. ftop_mutex_lock(self%mutex)) return
-    self%state%stop_requested = 0_c_int
+    call clear_runtime_state(self%state)
     self%state%running = 1_c_int
-    self%state%warming_up = 1_c_int
-    self%state%sample_count = 0_c_int
-    self%state%cpu_usage_percent = 0.0_c_double
     if (.not. ftop_mutex_unlock(self%mutex)) return
 
     if (ftop_thread_create(self%thread, c_funloc(collector_thread_main), c_loc(self%state))) then
@@ -187,6 +191,11 @@ contains
     snapshot%memory%available_bytes = int(self%state%memory_available_bytes, int64)
     snapshot%memory%used_bytes = max(0_int64, snapshot%memory%total_bytes - snapshot%memory%available_bytes)
     snapshot%memory%free_bytes = snapshot%memory%available_bytes
+    if (.not. copy_history(self%state, snapshot)) then
+      call clear_snapshot(snapshot)
+      call ignore_mutex_unlock(self%mutex)
+      return
+    end if
 
     if (.not. ftop_mutex_unlock(self%mutex)) then
       call clear_snapshot(snapshot)
@@ -274,8 +283,29 @@ contains
     state%memory_valid = 0_c_int
     state%memory_total_bytes = 0_c_long_long
     state%memory_available_bytes = 0_c_long_long
+    state%history_start = 1_c_int
+    state%history_count = 0_c_int
+    state%cpu_usage_history = 0.0_c_double
+    state%memory_usage_history = 0.0_c_double
     state%mutex = c_null_ptr
   end subroutine clear_state
+
+  subroutine clear_runtime_state(state)
+    type(collector_shared_state), intent(inout) :: state
+
+    state%stop_requested = 0_c_int
+    state%warming_up = 1_c_int
+    state%sample_count = 0_c_int
+    state%cpu_count = 0_c_int
+    state%cpu_usage_percent = 0.0_c_double
+    state%memory_valid = 0_c_int
+    state%memory_total_bytes = 0_c_long_long
+    state%memory_available_bytes = 0_c_long_long
+    state%history_start = 1_c_int
+    state%history_count = 0_c_int
+    state%cpu_usage_history = 0.0_c_double
+    state%memory_usage_history = 0.0_c_double
+  end subroutine clear_runtime_state
 
   subroutine clear_snapshot(snapshot)
     type(collector_snapshot), intent(out) :: snapshot
@@ -299,6 +329,37 @@ contains
     snapshot%memory%swap_total_bytes = 0_int64
     snapshot%memory%swap_used_bytes = 0_int64
   end subroutine clear_snapshot
+
+  logical function copy_history(state, snapshot) result(success)
+    type(collector_shared_state), intent(in) :: state
+    type(collector_snapshot), intent(inout) :: snapshot
+    integer :: allocation_status
+    integer :: item_index
+    integer :: source_index
+    integer :: history_count
+
+    success = .false.
+    history_count = max(0, min(int(state%history_count), FTOP_COLLECTOR_HISTORY_CAPACITY))
+    allocate(snapshot%cpu_usage_history(history_count), stat=allocation_status)
+    if (allocation_status /= 0) return
+    allocate(snapshot%memory_usage_history(history_count), stat=allocation_status)
+    if (allocation_status /= 0) return
+
+    do item_index = 1, history_count
+      source_index = history_index(state, item_index)
+      snapshot%cpu_usage_history(item_index) = real(state%cpu_usage_history(source_index), real64)
+      snapshot%memory_usage_history(item_index) = real(state%memory_usage_history(source_index), real64)
+    end do
+
+    success = .true.
+  end function copy_history
+
+  integer function history_index(state, item_index) result(index)
+    type(collector_shared_state), intent(in) :: state
+    integer, intent(in) :: item_index
+
+    index = modulo(int(state%history_start) + item_index - 2, FTOP_COLLECTOR_HISTORY_CAPACITY) + 1
+  end function history_index
 
   integer function bounded_interval_ms(interval_ms) result(bounded)
     integer, intent(in), optional :: interval_ms
@@ -398,9 +459,47 @@ contains
     state%memory_valid = merge(1_c_int, 0_c_int, memory%valid)
     state%memory_total_bytes = int(max(0_int64, memory%total_bytes), c_long_long)
     state%memory_available_bytes = int(max(0_int64, min(memory%total_bytes, memory%available_bytes)), c_long_long)
+    call append_history(state, real(state%cpu_usage_percent, real64), memory_usage_percent(memory))
 
     if (.not. ftop_mutex_unlock(mutex)) return
   end subroutine publish_sample
+
+  subroutine append_history(state, cpu_usage_percent, memory_usage_percent)
+    type(collector_shared_state), intent(inout) :: state
+    real(real64), intent(in) :: cpu_usage_percent
+    real(real64), intent(in) :: memory_usage_percent
+    integer :: index
+
+    if (state%history_count < FTOP_COLLECTOR_HISTORY_CAPACITY) then
+      state%history_count = state%history_count + 1_c_int
+      index = history_index(state, int(state%history_count))
+    else
+      index = int(state%history_start)
+      state%history_start = int(modulo(int(state%history_start), FTOP_COLLECTOR_HISTORY_CAPACITY) + 1, c_int)
+    end if
+
+    state%cpu_usage_history(index) = real(max(0.0_real64, min(100.0_real64, cpu_usage_percent)), c_double)
+    state%memory_usage_history(index) = real(max(0.0_real64, min(100.0_real64, memory_usage_percent)), c_double)
+  end subroutine append_history
+
+  real(real64) function memory_usage_percent(memory) result(usage_percent)
+    type(platform_memory_info), intent(in) :: memory
+    integer(int64) :: used_bytes
+
+    usage_percent = 0.0_real64
+    if (.not. memory%valid) return
+    if (memory%total_bytes <= 0_int64) return
+    used_bytes = max(0_int64, memory%total_bytes - memory%available_bytes)
+    usage_percent = 100.0_real64 * real(used_bytes, real64) / real(memory%total_bytes, real64)
+    usage_percent = max(0.0_real64, min(100.0_real64, usage_percent))
+  end function memory_usage_percent
+
+  subroutine ignore_mutex_unlock(mutex)
+    type(ftop_mutex_handle), intent(in) :: mutex
+    logical :: ignored
+
+    ignored = ftop_mutex_unlock(mutex)
+  end subroutine ignore_mutex_unlock
 
   subroutine mark_not_running(state)
     type(collector_shared_state), intent(inout) :: state
