@@ -26,6 +26,13 @@ target_link_libraries(ftop_metric_data_test PRIVATE ftop_core)
 
 add_test(NAME ftop_metric_data COMMAND ftop_metric_data_test)
 
+add_executable(ftop_collector_test unit/test_collector.f90)
+target_link_libraries(ftop_collector_test PRIVATE ftop_core)
+ftop_avoid_linux_gfortran_callback_pie_warning(ftop_collector_test)
+
+add_test(NAME ftop_collector COMMAND ftop_collector_test)
+set_tests_properties(ftop_collector PROPERTIES TIMEOUT 5)
+
 add_executable(ftop_pthread_test unit/test_pthread.f90)
 target_link_libraries(ftop_pthread_test PRIVATE ftop_core)
 ftop_avoid_linux_gfortran_callback_pie_warning(ftop_pthread_test)

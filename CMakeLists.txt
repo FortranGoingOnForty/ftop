@@ -79,6 +79,7 @@ endif()
 
 add_library(
   ftop_core STATIC
+  src/collect/ftop_collector.f90
   src/collect/ftop_cpu_data.f90
   src/collect/ftop_mem_data.f90
   src/collect/ftop_ring_buffer.f90
@@ -91,6 +92,7 @@ add_library(
   src/shim/ftop_pthread.c
   src/shim/ftop_signal.c
   src/shim/ftop_terminal_posix.c
+  src/collect/ftop_collector_time.c
   ${FTOP_PLATFORM_SOURCES}
 )
 

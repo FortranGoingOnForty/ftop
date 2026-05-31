@@ -1,0 +1,416 @@
+module ftop_collector
+  use, intrinsic :: iso_c_binding, only : &
+    c_double, &
+    c_f_pointer, &
+    c_funloc, &
+    c_int, &
+    c_loc, &
+    c_long_long, &
+    c_null_ptr, &
+    c_ptr
+  use, intrinsic :: iso_fortran_env, only : int64, real64
+  use ftop_cpu_data, only : cpu_total_info
+  use ftop_mem_data, only : metric_memory_info => memory_info
+  use ftop_platform, only : &
+    cpu_tick_sample, &
+    cpu_usage_percent, &
+    create_platform, &
+    platform_backend, &
+    platform_memory_info => memory_info
+  use ftop_pthread, only : &
+    ftop_mutex_destroy, &
+    ftop_mutex_handle, &
+    ftop_mutex_init, &
+    ftop_mutex_lock, &
+    ftop_mutex_unlock, &
+    ftop_thread_create, &
+    ftop_thread_handle, &
+    ftop_thread_join
+  implicit none
+  private
+
+  integer, parameter, public :: FTOP_COLLECTOR_DEFAULT_INTERVAL_MS = 1000
+  integer, parameter, public :: FTOP_COLLECTOR_MIN_INTERVAL_MS = 1
+  integer, parameter, public :: FTOP_COLLECTOR_MAX_INTERVAL_MS = 60000
+
+  type, bind(C) :: collector_shared_state
+    integer(c_int) :: stop_requested
+    integer(c_int) :: running
+    integer(c_int) :: warming_up
+    integer(c_int) :: sample_count
+    integer(c_int) :: interval_ms
+    integer(c_int) :: cpu_count
+    real(c_double) :: cpu_usage_percent
+    integer(c_int) :: memory_valid
+    integer(c_long_long) :: memory_total_bytes
+    integer(c_long_long) :: memory_available_bytes
+    type(c_ptr) :: mutex
+  end type collector_shared_state
+
+  type, public :: collector_snapshot
+    logical :: running = .false.
+    logical :: warming_up = .true.
+    integer :: sample_count = 0
+    type(cpu_total_info) :: cpu_total
+    type(metric_memory_info) :: memory
+  end type collector_snapshot
+
+  type, public :: collector
+    private
+    type(collector_shared_state) :: state
+    type(ftop_mutex_handle) :: mutex
+    type(ftop_thread_handle) :: thread
+    logical :: ready = .false.
+    logical :: thread_started = .false.
+  contains
+    procedure :: init => collector_init
+    procedure :: destroy => collector_destroy
+    procedure :: start => collector_start
+    procedure :: stop => collector_stop
+    procedure :: snapshot => collector_snapshot_copy
+    procedure :: running => collector_running
+    procedure :: initialized => collector_initialized
+    final :: collector_finalize
+  end type collector
+
+  interface
+    integer(c_int) function c_ftop_collector_monotonic_ms(milliseconds, sys_errno) &
+        bind(C, name="ftop_collector_monotonic_ms")
+      import :: c_int, c_long_long
+      integer(c_long_long), intent(out) :: milliseconds
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_collector_monotonic_ms
+
+    integer(c_int) function c_ftop_collector_sleep_until_ms(deadline_ms, sys_errno) &
+        bind(C, name="ftop_collector_sleep_until_ms")
+      import :: c_int, c_long_long
+      integer(c_long_long), value :: deadline_ms
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_collector_sleep_until_ms
+  end interface
+
+contains
+
+  logical function collector_init(self, interval_ms) result(success)
+    class(collector), intent(inout) :: self
+    integer, intent(in), optional :: interval_ms
+
+    success = .false.
+    if (self%thread_started) return
+    if (self%ready) then
+      if (.not. self%destroy()) return
+    end if
+
+    call clear_state(self%state, bounded_interval_ms(interval_ms))
+    if (.not. ftop_mutex_init(self%mutex)) return
+    self%state%mutex = self%mutex%handle
+    self%ready = .true.
+    success = .true.
+  end function collector_init
+
+  logical function collector_destroy(self) result(success)
+    class(collector), intent(inout) :: self
+
+    success = .true.
+    if (self%thread_started) success = self%stop()
+    if (.not. success) return
+
+    if (self%ready) success = ftop_mutex_destroy(self%mutex)
+    if (.not. success) return
+
+    call clear_state(self%state, FTOP_COLLECTOR_DEFAULT_INTERVAL_MS)
+    self%ready = .false.
+    self%thread_started = .false.
+  end function collector_destroy
+
+  logical function collector_start(self, interval_ms) result(success)
+    class(collector), intent(inout), target :: self
+    integer, intent(in), optional :: interval_ms
+
+    success = .false.
+    if (self%thread_started) then
+      success = .true.
+      return
+    end if
+
+    if (.not. self%ready) then
+      if (.not. self%init(interval_ms)) return
+    else if (present(interval_ms)) then
+      if (.not. set_interval(self, interval_ms)) return
+    end if
+
+    if (.not. ftop_mutex_lock(self%mutex)) return
+    self%state%stop_requested = 0_c_int
+    self%state%running = 1_c_int
+    self%state%warming_up = 1_c_int
+    self%state%sample_count = 0_c_int
+    self%state%cpu_usage_percent = 0.0_c_double
+    if (.not. ftop_mutex_unlock(self%mutex)) return
+
+    if (ftop_thread_create(self%thread, c_funloc(collector_thread_main), c_loc(self%state))) then
+      self%thread_started = .true.
+      success = .true.
+    else
+      call mark_not_running(self%state)
+    end if
+  end function collector_start
+
+  logical function collector_stop(self) result(success)
+    class(collector), intent(inout) :: self
+
+    success = .true.
+    if (.not. self%thread_started) return
+
+    success = request_stop(self%state)
+    if (.not. success) return
+
+    success = ftop_thread_join(self%thread)
+    if (success) self%thread_started = .false.
+  end function collector_stop
+
+  function collector_snapshot_copy(self) result(snapshot)
+    class(collector), intent(in) :: self
+    type(collector_snapshot) :: snapshot
+
+    if (.not. self%ready) return
+    if (.not. ftop_mutex_lock(self%mutex)) return
+
+    snapshot%running = self%state%running /= 0_c_int
+    snapshot%warming_up = self%state%warming_up /= 0_c_int
+    snapshot%sample_count = int(self%state%sample_count)
+    snapshot%cpu_total%valid = snapshot%sample_count > 0 .and. .not. snapshot%warming_up
+    snapshot%cpu_total%usage_percent = real(self%state%cpu_usage_percent, real64)
+    snapshot%cpu_total%core_count = int(self%state%cpu_count)
+    snapshot%cpu_total%thread_count = int(self%state%cpu_count)
+    snapshot%memory%valid = self%state%memory_valid /= 0_c_int
+    snapshot%memory%total_bytes = int(self%state%memory_total_bytes, int64)
+    snapshot%memory%available_bytes = int(self%state%memory_available_bytes, int64)
+    snapshot%memory%used_bytes = max(0_int64, snapshot%memory%total_bytes - snapshot%memory%available_bytes)
+    snapshot%memory%free_bytes = snapshot%memory%available_bytes
+
+    if (.not. ftop_mutex_unlock(self%mutex)) then
+      call clear_snapshot(snapshot)
+    end if
+  end function collector_snapshot_copy
+
+  logical function collector_running(self) result(is_running)
+    class(collector), intent(in) :: self
+
+    is_running = .false.
+    if (.not. self%ready) return
+    if (.not. ftop_mutex_lock(self%mutex)) return
+    is_running = self%state%running /= 0_c_int
+    if (.not. ftop_mutex_unlock(self%mutex)) is_running = .false.
+  end function collector_running
+
+  logical function collector_initialized(self) result(is_initialized)
+    class(collector), intent(in) :: self
+
+    is_initialized = self%ready
+  end function collector_initialized
+
+  subroutine collector_finalize(self)
+    type(collector), intent(inout) :: self
+    logical :: ignored
+
+    ignored = collector_destroy(self)
+  end subroutine collector_finalize
+
+  function collector_thread_main(arg) bind(C) result(result)
+    type(c_ptr), value :: arg
+    type(c_ptr) :: result
+    type(collector_shared_state), pointer :: state
+    class(platform_backend), allocatable :: backend
+    type(cpu_tick_sample) :: previous_cpu
+    type(cpu_tick_sample) :: current_cpu
+    type(platform_memory_info) :: memory
+    integer(c_long_long) :: deadline_ms
+    real(real64) :: usage_percent
+    logical :: warming_up
+
+    result = c_null_ptr
+    nullify(state)
+    call c_f_pointer(arg, state)
+    if (.not. associated(state)) return
+
+    backend = create_platform()
+    previous_cpu = backend%get_cpu_sample()
+    memory = backend%get_memory_info()
+    call publish_sample(state, backend%get_cpu_count(), 0.0_real64, .true., memory)
+
+    deadline_ms = monotonic_ms()
+    do
+      if (sleep_until_or_stop(state, deadline_ms + interval_ms(state))) exit
+      deadline_ms = deadline_ms + interval_ms(state)
+
+      current_cpu = backend%get_cpu_sample()
+      memory = backend%get_memory_info()
+      warming_up = .true.
+      usage_percent = 0.0_real64
+      if (previous_cpu%valid .and. current_cpu%valid .and. current_cpu%total > previous_cpu%total) then
+        usage_percent = cpu_usage_percent(previous_cpu, current_cpu)
+        warming_up = .false.
+      end if
+      if (current_cpu%valid) previous_cpu = current_cpu
+
+      call publish_sample(state, backend%get_cpu_count(), usage_percent, warming_up, memory)
+      if (should_stop(state)) exit
+    end do
+
+    call mark_not_running(state)
+  end function collector_thread_main
+
+  subroutine clear_state(state, interval_ms)
+    type(collector_shared_state), intent(out) :: state
+    integer, intent(in) :: interval_ms
+
+    state%stop_requested = 0_c_int
+    state%running = 0_c_int
+    state%warming_up = 1_c_int
+    state%sample_count = 0_c_int
+    state%interval_ms = int(interval_ms, c_int)
+    state%cpu_count = 0_c_int
+    state%cpu_usage_percent = 0.0_c_double
+    state%memory_valid = 0_c_int
+    state%memory_total_bytes = 0_c_long_long
+    state%memory_available_bytes = 0_c_long_long
+    state%mutex = c_null_ptr
+  end subroutine clear_state
+
+  subroutine clear_snapshot(snapshot)
+    type(collector_snapshot), intent(out) :: snapshot
+
+    snapshot%running = .false.
+    snapshot%warming_up = .true.
+    snapshot%sample_count = 0
+    snapshot%cpu_total%valid = .false.
+    snapshot%cpu_total%usage_percent = 0.0_real64
+    snapshot%cpu_total%load_avg = 0.0_real64
+    snapshot%cpu_total%load_valid = .false.
+    snapshot%cpu_total%core_count = 0
+    snapshot%cpu_total%thread_count = 0
+    snapshot%memory%valid = .false.
+    snapshot%memory%total_bytes = 0_int64
+    snapshot%memory%used_bytes = 0_int64
+    snapshot%memory%free_bytes = 0_int64
+    snapshot%memory%available_bytes = 0_int64
+    snapshot%memory%cached_bytes = 0_int64
+    snapshot%memory%buffers_bytes = 0_int64
+    snapshot%memory%swap_total_bytes = 0_int64
+    snapshot%memory%swap_used_bytes = 0_int64
+  end subroutine clear_snapshot
+
+  integer function bounded_interval_ms(interval_ms) result(bounded)
+    integer, intent(in), optional :: interval_ms
+
+    bounded = FTOP_COLLECTOR_DEFAULT_INTERVAL_MS
+    if (present(interval_ms)) bounded = interval_ms
+    bounded = max(FTOP_COLLECTOR_MIN_INTERVAL_MS, min(FTOP_COLLECTOR_MAX_INTERVAL_MS, bounded))
+  end function bounded_interval_ms
+
+  logical function set_interval(self, interval_ms) result(success)
+    class(collector), intent(inout) :: self
+    integer, intent(in) :: interval_ms
+
+    success = .false.
+    if (.not. self%ready) return
+    if (.not. ftop_mutex_lock(self%mutex)) return
+    self%state%interval_ms = int(bounded_interval_ms(interval_ms), c_int)
+    success = .true.
+    if (.not. ftop_mutex_unlock(self%mutex)) success = .false.
+  end function set_interval
+
+  integer(c_long_long) function monotonic_ms() result(milliseconds)
+    integer(c_int) :: rc
+    integer(c_int) :: sys_errno
+
+    rc = c_ftop_collector_monotonic_ms(milliseconds, sys_errno)
+    if (rc /= 0_c_int) milliseconds = 0_c_long_long
+  end function monotonic_ms
+
+  integer(c_long_long) function interval_ms(state) result(interval)
+    type(collector_shared_state), intent(in) :: state
+
+    interval = int(max(FTOP_COLLECTOR_MIN_INTERVAL_MS, int(state%interval_ms)), c_long_long)
+  end function interval_ms
+
+  logical function sleep_until_or_stop(state, deadline_ms) result(stopped)
+    type(collector_shared_state), intent(inout) :: state
+    integer(c_long_long), intent(in) :: deadline_ms
+    integer(c_long_long) :: now_ms
+    integer(c_long_long) :: next_sleep_ms
+    integer(c_int) :: rc
+    integer(c_int) :: sys_errno
+
+    stopped = .false.
+    do
+      if (should_stop(state)) then
+        stopped = .true.
+        return
+      end if
+
+      now_ms = monotonic_ms()
+      if (now_ms >= deadline_ms) return
+      next_sleep_ms = min(deadline_ms, now_ms + 10_c_long_long)
+      rc = c_ftop_collector_sleep_until_ms(next_sleep_ms, sys_errno)
+      if (rc /= 0_c_int) return
+    end do
+  end function sleep_until_or_stop
+
+  logical function request_stop(state) result(success)
+    type(collector_shared_state), intent(inout) :: state
+    type(ftop_mutex_handle) :: mutex
+
+    success = .false.
+    mutex%handle = state%mutex
+    if (.not. ftop_mutex_lock(mutex)) return
+    state%stop_requested = 1_c_int
+    success = .true.
+    if (.not. ftop_mutex_unlock(mutex)) success = .false.
+  end function request_stop
+
+  logical function should_stop(state) result(stop_requested)
+    type(collector_shared_state), intent(inout) :: state
+    type(ftop_mutex_handle) :: mutex
+
+    stop_requested = .true.
+    mutex%handle = state%mutex
+    if (.not. ftop_mutex_lock(mutex)) return
+    stop_requested = state%stop_requested /= 0_c_int
+    if (.not. ftop_mutex_unlock(mutex)) stop_requested = .true.
+  end function should_stop
+
+  subroutine publish_sample(state, cpu_count, usage_percent, warming_up, memory)
+    type(collector_shared_state), intent(inout) :: state
+    integer, intent(in) :: cpu_count
+    real(real64), intent(in) :: usage_percent
+    logical, intent(in) :: warming_up
+    type(platform_memory_info), intent(in) :: memory
+    type(ftop_mutex_handle) :: mutex
+
+    mutex%handle = state%mutex
+    if (.not. ftop_mutex_lock(mutex)) return
+
+    state%cpu_count = int(max(0, cpu_count), c_int)
+    state%cpu_usage_percent = real(max(0.0_real64, min(100.0_real64, usage_percent)), c_double)
+    state%warming_up = merge(1_c_int, 0_c_int, warming_up)
+    state%sample_count = state%sample_count + 1_c_int
+    state%memory_valid = merge(1_c_int, 0_c_int, memory%valid)
+    state%memory_total_bytes = int(max(0_int64, memory%total_bytes), c_long_long)
+    state%memory_available_bytes = int(max(0_int64, min(memory%total_bytes, memory%available_bytes)), c_long_long)
+
+    if (.not. ftop_mutex_unlock(mutex)) return
+  end subroutine publish_sample
+
+  subroutine mark_not_running(state)
+    type(collector_shared_state), intent(inout) :: state
+    type(ftop_mutex_handle) :: mutex
+
+    mutex%handle = state%mutex
+    if (.not. ftop_mutex_lock(mutex)) return
+    state%running = 0_c_int
+    state%stop_requested = 0_c_int
+    if (.not. ftop_mutex_unlock(mutex)) return
+  end subroutine mark_not_running
+
+end module ftop_collector
