@@ -59,18 +59,25 @@ else()
   message(FATAL_ERROR "Unsupported platform: ${CMAKE_SYSTEM_NAME}")
 endif()
 
-add_executable(
-  ftop
+add_library(
+  ftop_core STATIC
   src/shim/ftop_terminal_io.f90
   src/ftop_app.f90
-  src/ftop.f90
   src/shim/ftop_terminal_posix.c
   ${FTOP_PLATFORM_SOURCES}
 )
 
+set_target_properties(ftop_core PROPERTIES
+  Fortran_MODULE_DIRECTORY "${CMAKE_BINARY_DIR}/mod/ftop_core"
+)
+
+target_include_directories(ftop_core PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/mod/ftop_core>
+)
+
 target_link_libraries(
-  ftop
-  PRIVATE
+  ftop_core
+  PUBLIC
     fgof::screen
     fgof::termios
     fgof::keys
@@ -84,16 +91,25 @@ target_link_libraries(
 )
 
 target_compile_options(
-  ftop
+  ftop_core
   PRIVATE
     $<$<COMPILE_LANG_AND_ID:Fortran,GNU>:-std=f2018 -Wall -Wextra -Wpedantic -Werror>
     $<$<COMPILE_LANG_AND_ID:C,GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>
 )
 
 target_compile_definitions(
-  ftop
+  ftop_core
   PRIVATE
     FTOP_PLATFORM_${FTOP_PLATFORM}=1
+)
+
+add_executable(ftop src/ftop.f90)
+target_link_libraries(ftop PRIVATE ftop_core)
+
+target_compile_options(
+  ftop
+  PRIVATE
+    $<$<COMPILE_LANG_AND_ID:Fortran,GNU>:-std=f2018 -Wall -Wextra -Wpedantic -Werror>
 )
 
 include(CTest)

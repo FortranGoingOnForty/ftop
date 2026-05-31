@@ -66,6 +66,7 @@ module ftop_app
   end type terminal_session
 
   public :: run_ftop
+  public :: render_test_frame
 
 contains
 
@@ -102,6 +103,23 @@ contains
 
     call stop_terminal_session(session)
   end function run_ftop
+
+  function render_test_frame(width, height, refresh_ms, frame_count, status_text) result(rendered)
+    integer, intent(in) :: width
+    integer, intent(in) :: height
+    integer, intent(in) :: refresh_ms
+    integer, intent(in) :: frame_count
+    character(len=*), intent(in) :: status_text
+    character(len=:), allocatable :: rendered
+    type(terminal_session) :: session
+
+    session%current = allocate_screen(width, height)
+    session%refresh_ms = refresh_ms
+    session%frame_count = frame_count
+    session%status_text = status_text
+    call draw_frame(session)
+    rendered = render_screen_ansi(session%current)
+  end function render_test_frame
 
   integer function start_terminal_session(session) result(status)
     type(terminal_session), intent(inout) :: session

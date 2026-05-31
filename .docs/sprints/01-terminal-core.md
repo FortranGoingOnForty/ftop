@@ -55,7 +55,7 @@ A running main loop that enters raw mode, clears the screen, draws a bordered bo
 - Sprint 00 (build system, fgof deps)
 
 ## Testing
-- **Snapshot test**: render a 80x24 box to fgof-screen buffer, compare against golden file
+- **Snapshot test**: render a 80x24 box to fgof-screen buffer, compare against expected frame features
 - **Unit tests**: ANSI escape sequence generation, color code formatting, box dimension math
 - **Manual test**: launch in terminal, verify all key/mouse/resize behaviors
 - **Crash recovery test**: kill -9 the process, verify terminal state is recoverable (`reset` command works)
@@ -79,3 +79,4 @@ A running main loop that enters raw mode, clears the screen, draws a bordered bo
 - Mouse events are decoded into the status line and appended to `ftop-debug.log` for debugging.
 - Truecolor foreground/background and common style attributes are supported in fgof-screen and used by the Sprint 01 frame.
 - Refresh cadence defaults to 1000ms and can be changed with `--refresh-ms N`.
+- `ftop_terminal_frame` CTest covers the 80x24 Unicode/truecolor frame snapshot path.
