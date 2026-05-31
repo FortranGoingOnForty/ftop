@@ -3,7 +3,7 @@
 ## Goal
 Full CPU and memory metric collection on all three platforms, running in a background thread, with ring-buffer history tracking. The collector populates shared data structures that the draw loop can read. No rendering yet — this sprint proves data accuracy.
 
-## Status: IMPLEMENTED WITH DEFERRALS
+## Status: COMPLETE
 
 ## Targets
 
@@ -32,7 +32,7 @@ Full CPU and memory metric collection on all three platforms, running in a backg
   - [x] Calculate total CPU usage
 - [x] CPU frequency: read `/sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq`
 - [x] CPU temperature: read `/sys/class/hwmon/hwmon*/temp*_input` (match to correct sensor)
-- [x] CPU topology: `/proc/cpuinfo` for core count and thread count; model name deferred
+- [x] CPU topology: `/proc/cpuinfo` for core count, thread count, and model name
 - [x] Memory: parse `/proc/meminfo` (MemTotal, MemFree, MemAvailable, Buffers, Cached, SwapTotal, SwapFree)
 - [x] Load average: parse `/proc/loadavg`
 
@@ -49,7 +49,7 @@ Full CPU and memory metric collection on all three platforms, running in a backg
 - [x] CPU usage: `host_processor_info()` -> `CPU_STATE_USER/SYSTEM/IDLE/NICE` per-core
   - [x] Delta calculation from tick counters
 - [x] CPU frequency: not directly available via public API (sysctl `hw.cpufrequency` for nominal)
-- [ ] CPU temperature: SMC via IOKit (deferred)
+- [x] CPU temperature: IOHID thermal sensors on Apple Silicon, AppleSMC keys on Intel
 - [x] Memory: `host_statistics64()` -> `vm_statistics64_data_t`
   - [x] `free_count`, `active_count`, `inactive_count`, `wire_count`, `speculative_count`
   - [x] Page size via `sysconf(_SC_PAGESIZE)`
@@ -92,11 +92,10 @@ Full CPU and memory metric collection on all three platforms, running in a backg
 - **Collection interval drift**: don't use `sleep(interval)`. Use absolute wall-clock targets to avoid drift. `clock_gettime(CLOCK_MONOTONIC)` via C shim.
 
 ## Deferred
-- macOS SMC CPU temperature via IOKit.
-- CPU model name storage/publishing; Sprint 03 now publishes physical core count and logical thread count.
+(none)
 
 ## Notes
 - The ring buffer should be a standalone, reusable module. It will be used by every metric type (CPU, memory, network, disk, GPU, per-process).
 - Consider pre-opening `/proc/stat` and `/proc/meminfo` file descriptors and seeking to beginning on each read, rather than open/read/close per cycle. This avoids file descriptor churn.
 - The snapshot() mechanism should do a deep copy of all relevant data. The draw thread must never hold a reference to collector-owned memory.
-- CPU topology is reported as physical `core_count` and logical `thread_count`; per-core arrays are still per logical CPU sample.
+- CPU topology is reported as physical `core_count`, logical `thread_count`, and model name; per-core arrays are still per logical CPU sample.
