@@ -1,10 +1,16 @@
 module ftop_platform
-  use, intrinsic :: iso_c_binding, only : c_char, c_int, c_long_long, c_null_char, c_size_t
+  use, intrinsic :: iso_c_binding, only : c_char, c_int, c_null_char, c_size_t
   use, intrinsic :: iso_fortran_env, only : int64
+  use ftop_cpu_data, only : cpu_state_ticks, cpu_state_total_ticks
+  use ftop_linux_meminfo, only : linux_meminfo_parse
+  use ftop_linux_proc_stat, only : linux_proc_stat_parse
+  use ftop_mem_data, only : metric_memory_info => memory_info
   use ftop_platform_types, only : cpu_tick_sample, cpu_usage_percent, memory_info, platform_backend
   implicit none
   private
 
+  integer, parameter :: LINUX_PROC_STAT_BUFFER_LEN = 1048576
+  integer, parameter :: LINUX_PROC_MEMINFO_BUFFER_LEN = 65536
   integer, parameter, public :: LINUX_HWMON_NAME_LEN = 128
   integer, parameter, public :: LINUX_HWMON_PATH_LEN = 256
 
@@ -25,7 +31,9 @@ module ftop_platform
   public :: cpu_usage_percent
   public :: linux_cpuinfo_field
   public :: linux_cpuinfo_field_count
+  public :: linux_cpu_state_snapshot
   public :: linux_hwmon_discover
+  public :: linux_memory_snapshot
   public :: memory_info
   public :: platform_backend
 
@@ -36,21 +44,23 @@ module ftop_platform
       integer(c_int), intent(out) :: sys_errno
     end function c_ftop_linux_cpu_count
 
-    integer(c_int) function c_ftop_linux_cpu_ticks(total_ticks, idle_ticks, sys_errno) &
-        bind(C, name="ftop_linux_cpu_ticks")
-      import :: c_int, c_long_long
-      integer(c_long_long), intent(out) :: total_ticks
-      integer(c_long_long), intent(out) :: idle_ticks
+    integer(c_int) function c_ftop_linux_read_proc_stat(buffer, buffer_capacity, value_len, sys_errno) &
+        bind(C, name="ftop_linux_read_proc_stat")
+      import :: c_char, c_int, c_size_t
+      character(kind=c_char), intent(out) :: buffer(*)
+      integer(c_size_t), value :: buffer_capacity
+      integer(c_size_t), intent(out) :: value_len
       integer(c_int), intent(out) :: sys_errno
-    end function c_ftop_linux_cpu_ticks
+    end function c_ftop_linux_read_proc_stat
 
-    integer(c_int) function c_ftop_linux_memory_info(total_bytes, available_bytes, sys_errno) &
-        bind(C, name="ftop_linux_memory_info")
-      import :: c_int, c_long_long
-      integer(c_long_long), intent(out) :: total_bytes
-      integer(c_long_long), intent(out) :: available_bytes
+    integer(c_int) function c_ftop_linux_read_proc_meminfo(buffer, buffer_capacity, value_len, sys_errno) &
+        bind(C, name="ftop_linux_read_proc_meminfo")
+      import :: c_char, c_int, c_size_t
+      character(kind=c_char), intent(out) :: buffer(*)
+      integer(c_size_t), value :: buffer_capacity
+      integer(c_size_t), intent(out) :: value_len
       integer(c_int), intent(out) :: sys_errno
-    end function c_ftop_linux_memory_info
+    end function c_ftop_linux_read_proc_meminfo
 
     integer(c_int) function c_ftop_linux_cpuinfo_field(name, value, value_capacity, value_len, sys_errno) &
         bind(C, name="ftop_linux_cpuinfo_field")
@@ -108,40 +118,75 @@ contains
   function linux_get_cpu_sample(self) result(sample)
     class(linux_backend), intent(in) :: self
     type(cpu_tick_sample) :: sample
-    integer(c_long_long) :: total_ticks
-    integer(c_long_long) :: idle_ticks
-    integer(c_int) :: sys_errno
-    integer(c_int) :: rc
+    type(cpu_state_ticks) :: total
+    type(cpu_state_ticks), allocatable :: cores(:)
 
     associate(unused => self)
     end associate
 
-    rc = c_ftop_linux_cpu_ticks(total_ticks, idle_ticks, sys_errno)
-    if (rc == 0_c_int .and. total_ticks > 0_c_long_long) then
+    if (linux_cpu_state_snapshot(total, cores) .and. total%valid) then
       sample%valid = .true.
-      sample%total = int(total_ticks, int64)
-      sample%idle = int(max(0_c_long_long, idle_ticks), int64)
+      sample%total = cpu_state_total_ticks(total)
+      sample%idle = max(0_int64, total%idle + total%iowait)
     end if
   end function linux_get_cpu_sample
 
   function linux_get_memory_info(self) result(info)
     class(linux_backend), intent(in) :: self
     type(memory_info) :: info
-    integer(c_long_long) :: total_bytes
-    integer(c_long_long) :: available_bytes
-    integer(c_int) :: sys_errno
-    integer(c_int) :: rc
+    type(metric_memory_info) :: metric_memory
 
     associate(unused => self)
     end associate
 
-    rc = c_ftop_linux_memory_info(total_bytes, available_bytes, sys_errno)
-    if (rc == 0_c_int .and. total_bytes > 0_c_long_long) then
+    if (linux_memory_snapshot(metric_memory) .and. metric_memory%valid) then
       info%valid = .true.
-      info%total_bytes = int(total_bytes, int64)
-      info%available_bytes = int(max(0_c_long_long, min(total_bytes, available_bytes)), int64)
+      info%total_bytes = metric_memory%total_bytes
+      info%available_bytes = metric_memory%available_bytes
     end if
   end function linux_get_memory_info
+
+  logical function linux_cpu_state_snapshot(total, cores, error_code) result(success)
+    type(cpu_state_ticks), intent(out) :: total
+    type(cpu_state_ticks), allocatable, intent(out) :: cores(:)
+    integer, intent(out), optional :: error_code
+    character(kind=c_char), allocatable :: c_buffer(:)
+    character(len=:), allocatable :: buffer
+    integer(c_size_t) :: value_len
+    integer(c_int) :: sys_errno
+    integer(c_int) :: rc
+
+    total = cpu_state_ticks()
+    if (allocated(cores)) deallocate(cores)
+    allocate(c_buffer(LINUX_PROC_STAT_BUFFER_LEN))
+    rc = c_ftop_linux_read_proc_stat(c_buffer, int(size(c_buffer), c_size_t), value_len, sys_errno)
+    success = rc == 0_c_int
+    if (success) then
+      call c_chars_to_string(c_buffer, int(value_len), buffer)
+      success = linux_proc_stat_parse(buffer, total, cores)
+    end if
+    call assign_error(error_code, sys_errno)
+  end function linux_cpu_state_snapshot
+
+  logical function linux_memory_snapshot(info, error_code) result(success)
+    type(metric_memory_info), intent(out) :: info
+    integer, intent(out), optional :: error_code
+    character(kind=c_char), allocatable :: c_buffer(:)
+    character(len=:), allocatable :: buffer
+    integer(c_size_t) :: value_len
+    integer(c_int) :: sys_errno
+    integer(c_int) :: rc
+
+    info = metric_memory_info()
+    allocate(c_buffer(LINUX_PROC_MEMINFO_BUFFER_LEN))
+    rc = c_ftop_linux_read_proc_meminfo(c_buffer, int(size(c_buffer), c_size_t), value_len, sys_errno)
+    success = rc == 0_c_int
+    if (success) then
+      call c_chars_to_string(c_buffer, int(value_len), buffer)
+      success = linux_meminfo_parse(buffer, info)
+    end if
+    call assign_error(error_code, sys_errno)
+  end function linux_memory_snapshot
 
   logical function linux_cpuinfo_field(name, value, value_len, error_code) result(success)
     character(len=*), intent(in) :: name
@@ -236,6 +281,20 @@ contains
     end do
     buffer(text_len + 1) = c_null_char
   end subroutine to_c_string
+
+  subroutine c_chars_to_string(c_buffer, value_len, text)
+    character(kind=c_char), intent(in) :: c_buffer(:)
+    integer, intent(in) :: value_len
+    character(len=:), allocatable, intent(out) :: text
+    integer :: i
+    integer :: copied_len
+
+    copied_len = max(0, min(value_len, size(c_buffer)))
+    allocate(character(len=copied_len) :: text)
+    do i = 1, copied_len
+      text(i:i) = achar(iachar(c_buffer(i)))
+    end do
+  end subroutine c_chars_to_string
 
   subroutine assign_error(error_code, sys_errno)
     integer, intent(out), optional :: error_code

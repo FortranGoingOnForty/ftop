@@ -16,6 +16,43 @@ struct ftop_linux_hwmon_sensor {
   char name[FTOP_LINUX_HWMON_NAME_LEN];
 };
 
+static int ftop_read_file_into_buffer(const char *path, char *buffer, size_t buffer_len, size_t *value_len, int *sys_errno) {
+  ssize_t bytes_read;
+  int fd;
+
+  if (path == NULL || buffer == NULL || value_len == NULL || sys_errno == NULL || buffer_len < 2U) return -1;
+
+  buffer[0] = '\0';
+  *value_len = 0U;
+  *sys_errno = 0;
+
+  fd = open(path, O_RDONLY);
+  if (fd < 0) {
+    *sys_errno = errno;
+    return -1;
+  }
+
+  bytes_read = read(fd, buffer, buffer_len - 1U);
+  if (bytes_read < 0) {
+    *sys_errno = errno;
+    close(fd);
+    return -1;
+  }
+
+  close(fd);
+  buffer[bytes_read] = '\0';
+  *value_len = (size_t)bytes_read;
+  return 0;
+}
+
+int ftop_linux_read_proc_stat(char *buffer, size_t buffer_len, size_t *value_len, int *sys_errno) {
+  return ftop_read_file_into_buffer("/proc/stat", buffer, buffer_len, value_len, sys_errno);
+}
+
+int ftop_linux_read_proc_meminfo(char *buffer, size_t buffer_len, size_t *value_len, int *sys_errno) {
+  return ftop_read_file_into_buffer("/proc/meminfo", buffer, buffer_len, value_len, sys_errno);
+}
+
 int ftop_linux_cpu_count(int *count, int *sys_errno) {
   long value;
 
