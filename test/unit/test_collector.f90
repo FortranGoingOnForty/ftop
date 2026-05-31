@@ -6,6 +6,9 @@ program test_collector
   call test_collector_lifecycle()
   call test_collector_restart()
   call test_collector_history_capacity()
+  call test_collector_clean_shutdown_deadline()
+  call test_collector_rapid_start_stop()
+  call test_collector_five_second_plausibility()
 
 contains
 
@@ -129,6 +132,52 @@ contains
     call require(metrics%destroy(), "collector capacity destroy failed")
   end subroutine test_collector_history_capacity
 
+  subroutine test_collector_clean_shutdown_deadline()
+    type(collector) :: metrics
+    integer :: start_count
+    integer :: rate
+    integer :: elapsed_ms
+
+    call require(metrics%start(60000), "collector shutdown deadline start failed")
+    call system_clock(start_count, rate)
+    call require(metrics%stop(), "collector shutdown deadline stop failed")
+    elapsed_ms = elapsed_milliseconds(start_count, rate)
+    call require(elapsed_ms >= 0, "collector shutdown elapsed time failed")
+    call require(elapsed_ms < 1000, "collector shutdown exceeded 1 second")
+    call require(metrics%destroy(), "collector shutdown deadline destroy failed")
+  end subroutine test_collector_clean_shutdown_deadline
+
+  subroutine test_collector_rapid_start_stop()
+    type(collector) :: metrics
+    integer :: i
+
+    do i = 1, 25
+      call require(metrics%start(5), "collector rapid start failed")
+      call require(metrics%running(), "collector rapid start must report running")
+      call require(metrics%stop(), "collector rapid stop failed")
+      call require(.not. metrics%running(), "collector rapid stop must report stopped")
+    end do
+    call require(metrics%destroy(), "collector rapid destroy failed")
+  end subroutine test_collector_rapid_start_stop
+
+  subroutine test_collector_five_second_plausibility()
+    type(collector) :: metrics
+    type(collector_snapshot) :: snapshot
+
+    call require(metrics%start(50), "collector plausibility start failed")
+    snapshot = wait_for_elapsed_snapshot(metrics, 5000)
+    call require(snapshot%sample_count >= 5, "collector plausibility sample count too low")
+    call require(snapshot%cpu_total%valid, "collector plausibility CPU total invalid")
+    call require(snapshot%memory%valid, "collector plausibility memory invalid")
+    call require(snapshot%memory%used_bytes > 0, "collector plausibility memory used must be positive")
+    call require(size(snapshot%cpu_usage_history) >= 5, "collector plausibility CPU history too small")
+    call require(any(snapshot%cpu_usage_history > 0.0_real64), "collector plausibility CPU history must be non-zero")
+    call require(any(snapshot%cpu_core_usage_history > 0.0_real64), &
+                 "collector plausibility CPU core history must be non-zero")
+    call require(metrics%stop(), "collector plausibility stop failed")
+    call require(metrics%destroy(), "collector plausibility destroy failed")
+  end subroutine test_collector_five_second_plausibility
+
   function wait_for_snapshot(metrics) result(snapshot)
     type(collector), intent(in) :: metrics
     type(collector_snapshot) :: snapshot
@@ -190,6 +239,39 @@ contains
       if (elapsed_ms > 4000) return
     end do
   end function wait_for_sample_count
+
+  function wait_for_elapsed_snapshot(metrics, target_elapsed_ms) result(snapshot)
+    type(collector), intent(in) :: metrics
+    integer, intent(in) :: target_elapsed_ms
+    type(collector_snapshot) :: snapshot
+    integer :: start_count
+    integer :: current_count
+    integer :: rate
+
+    call system_clock(start_count, rate)
+    do
+      snapshot = metrics%snapshot()
+      call system_clock(current_count)
+      if (elapsed_milliseconds(start_count, rate, current_count) >= target_elapsed_ms) return
+      if (rate <= 0) return
+    end do
+  end function wait_for_elapsed_snapshot
+
+  integer function elapsed_milliseconds(start_count, rate, current_count) result(elapsed_ms)
+    integer, intent(in) :: start_count
+    integer, intent(in) :: rate
+    integer, intent(in), optional :: current_count
+    integer :: end_count
+
+    elapsed_ms = -1
+    if (rate <= 0) return
+    if (present(current_count)) then
+      end_count = current_count
+    else
+      call system_clock(end_count)
+    end if
+    elapsed_ms = int((real(end_count - start_count) / real(rate)) * 1000.0)
+  end function elapsed_milliseconds
 
   subroutine require(condition, message)
     logical, intent(in) :: condition
