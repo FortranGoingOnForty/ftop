@@ -1,6 +1,6 @@
 module ftop_platform_types
   use, intrinsic :: iso_fortran_env, only : int64, real64
-  use ftop_cpu_data, only : cpu_core_info, cpu_state_ticks
+  use ftop_cpu_data, only : CPU_MODEL_NAME_LEN, cpu_core_info, cpu_state_ticks
   implicit none
   private
 
@@ -21,6 +21,8 @@ module ftop_platform_types
     logical :: valid = .false.
     integer :: core_count = 0
     integer :: thread_count = 0
+    logical :: model_name_valid = .false.
+    character(len=CPU_MODEL_NAME_LEN) :: model_name = ""
   end type cpu_topology_info
 
   type :: memory_info

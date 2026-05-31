@@ -243,6 +243,7 @@ contains
     class(freebsd_backend), intent(in) :: self
     type(cpu_topology_info) :: info
     integer :: core_count
+    integer :: model_name_len
     integer :: thread_count
     integer :: threads_per_core
 
@@ -261,6 +262,7 @@ contains
     info%valid = .true.
     info%thread_count = thread_count
     info%core_count = max(1, min(thread_count, core_count))
+    info%model_name_valid = freebsd_sysctl_string("hw.model", info%model_name, model_name_len) .and. model_name_len > 0
   end function freebsd_get_cpu_topology
 
   function freebsd_get_cpu_sample(self) result(sample)

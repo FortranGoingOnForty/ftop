@@ -32,6 +32,8 @@ contains
     call require(.not. total%load_valid, "CPU load must default invalid")
     call require(total%core_count == 0, "CPU total core count default mismatch")
     call require(total%thread_count == 0, "CPU total thread count default mismatch")
+    call require(.not. total%model_name_valid, "CPU model name must default invalid")
+    call require(len_trim(total%model_name) == 0, "CPU model name must default empty")
   end subroutine test_cpu_info_defaults
 
   subroutine test_cpu_history()

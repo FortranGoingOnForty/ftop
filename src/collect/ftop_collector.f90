@@ -1,15 +1,18 @@
 module ftop_collector
   use, intrinsic :: iso_c_binding, only : &
+    c_char, &
     c_double, &
     c_f_pointer, &
     c_funloc, &
     c_int, &
     c_loc, &
     c_long_long, &
+    c_null_char, &
     c_null_ptr, &
     c_ptr
   use, intrinsic :: iso_fortran_env, only : int64, real64
   use ftop_cpu_data, only : &
+    CPU_MODEL_NAME_LEN, &
     cpu_core_info, &
     cpu_state_delta_info, &
     cpu_state_ticks, &
@@ -47,6 +50,8 @@ module ftop_collector
     integer(c_int) :: interval_ms
     integer(c_int) :: cpu_count
     integer(c_int) :: cpu_physical_core_count
+    integer(c_int) :: cpu_model_name_valid
+    character(kind=c_char) :: cpu_model_name(CPU_MODEL_NAME_LEN)
     integer(c_int) :: cpu_valid
     real(c_double) :: cpu_usage_percent
     real(c_double) :: cpu_user_percent
@@ -222,6 +227,8 @@ contains
     snapshot%cpu_total%load_avg = real(self%state%load_average, real64)
     snapshot%cpu_total%core_count = int(self%state%cpu_physical_core_count)
     snapshot%cpu_total%thread_count = int(self%state%cpu_count)
+    call copy_c_chars_to_fortran(self%state%cpu_model_name, self%state%cpu_model_name_valid, &
+                                 snapshot%cpu_total%model_name, snapshot%cpu_total%model_name_valid)
     snapshot%memory%valid = self%state%memory_valid /= 0_c_int
     snapshot%memory%total_bytes = int(self%state%memory_total_bytes, int64)
     snapshot%memory%used_bytes = int(self%state%memory_used_bytes, int64)
@@ -396,6 +403,8 @@ contains
     state%interval_ms = int(interval_ms, c_int)
     state%cpu_count = 0_c_int
     state%cpu_physical_core_count = 0_c_int
+    state%cpu_model_name_valid = 0_c_int
+    state%cpu_model_name = c_null_char
     state%cpu_valid = 0_c_int
     state%cpu_usage_percent = 0.0_c_double
     state%cpu_user_percent = 0.0_c_double
@@ -438,6 +447,8 @@ contains
     state%sample_count = 0_c_int
     state%cpu_count = 0_c_int
     state%cpu_physical_core_count = 0_c_int
+    state%cpu_model_name_valid = 0_c_int
+    state%cpu_model_name = c_null_char
     state%cpu_valid = 0_c_int
     state%cpu_usage_percent = 0.0_c_double
     state%cpu_user_percent = 0.0_c_double
@@ -486,6 +497,8 @@ contains
     snapshot%cpu_total%load_valid = .false.
     snapshot%cpu_total%core_count = 0
     snapshot%cpu_total%thread_count = 0
+    snapshot%cpu_total%model_name_valid = .false.
+    snapshot%cpu_total%model_name = ""
     snapshot%memory%valid = .false.
     snapshot%memory%total_bytes = 0_int64
     snapshot%memory%used_bytes = 0_int64
@@ -674,6 +687,8 @@ contains
 
     state%cpu_count = int(thread_count, c_int)
     state%cpu_physical_core_count = int(physical_core_count, c_int)
+    call copy_fortran_string_to_c_chars(topology%model_name, topology%model_name_valid, &
+                                        state%cpu_model_name, state%cpu_model_name_valid)
     state%cpu_valid = merge(1_c_int, 0_c_int, total_cpu%valid .and. .not. warming_up)
     state%cpu_usage_percent = real(clamp_percent(total_cpu%usage_percent), c_double)
     state%cpu_user_percent = real(clamp_percent(total_cpu%user_percent), c_double)
@@ -728,6 +743,52 @@ contains
       state%cpu_core_temp_c(core_index) = real(core_cpus(core_index)%temp_c, c_double)
     end do
   end subroutine publish_cpu_cores
+
+  subroutine copy_fortran_string_to_c_chars(source, source_valid, destination, destination_valid)
+    character(len=*), intent(in) :: source
+    logical, intent(in) :: source_valid
+    character(kind=c_char), intent(out) :: destination(:)
+    integer(c_int), intent(out) :: destination_valid
+    integer :: copied_len
+    integer :: i
+    integer :: source_len
+
+    destination = c_null_char
+    destination_valid = 0_c_int
+    if (.not. source_valid .or. size(destination) <= 0) return
+
+    source_len = len_trim(source)
+    if (source_len <= 0) return
+    copied_len = min(source_len, size(destination) - 1)
+    do i = 1, copied_len
+      destination(i) = char(iachar(source(i:i)), kind=c_char)
+    end do
+    if (copied_len < size(destination)) destination(copied_len + 1) = c_null_char
+    destination_valid = merge(1_c_int, 0_c_int, copied_len > 0)
+  end subroutine copy_fortran_string_to_c_chars
+
+  subroutine copy_c_chars_to_fortran(source, source_valid, destination, destination_valid)
+    character(kind=c_char), intent(in) :: source(:)
+    integer(c_int), intent(in) :: source_valid
+    character(len=*), intent(out) :: destination
+    logical, intent(out) :: destination_valid
+    integer :: copied_len
+    integer :: i
+    integer :: limit
+
+    destination = ""
+    destination_valid = .false.
+    if (source_valid == 0_c_int) return
+
+    copied_len = 0
+    limit = min(size(source), len(destination))
+    do i = 1, limit
+      if (source(i) == c_null_char) exit
+      destination(i:i) = achar(iachar(source(i)))
+      copied_len = copied_len + 1
+    end do
+    destination_valid = copied_len > 0
+  end subroutine copy_c_chars_to_fortran
 
   subroutine append_history(state, cpu_usage_percent, memory_usage_percent, core_cpus, core_count)
     type(collector_shared_state), intent(inout) :: state

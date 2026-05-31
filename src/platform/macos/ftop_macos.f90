@@ -161,6 +161,7 @@ contains
     class(macos_backend), intent(in) :: self
     type(cpu_topology_info) :: info
     integer :: core_count
+    integer :: model_name_len
     integer :: thread_count
 
     thread_count = macos_get_cpu_count(self)
@@ -174,6 +175,11 @@ contains
     info%valid = .true.
     info%thread_count = thread_count
     info%core_count = max(1, min(thread_count, core_count))
+    info%model_name_valid = macos_sysctl_string("machdep.cpu.brand_string", info%model_name, model_name_len) .and. &
+                            model_name_len > 0
+    if (.not. info%model_name_valid) then
+      info%model_name_valid = macos_sysctl_string("hw.model", info%model_name, model_name_len) .and. model_name_len > 0
+    end if
   end function macos_get_cpu_topology
 
   function macos_get_cpu_sample(self) result(sample)

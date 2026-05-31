@@ -4,6 +4,8 @@ module ftop_cpu_data
   implicit none
   private
 
+  integer, parameter, public :: CPU_MODEL_NAME_LEN = 128
+
   type, public :: cpu_core_info
     logical :: valid = .false.
     real(real64) :: usage_percent = 0.0_real64
@@ -26,6 +28,8 @@ module ftop_cpu_data
     logical :: load_valid = .false.
     integer :: core_count = 0
     integer :: thread_count = 0
+    logical :: model_name_valid = .false.
+    character(len=CPU_MODEL_NAME_LEN) :: model_name = ""
   end type cpu_total_info
 
   type, public :: cpu_state_ticks

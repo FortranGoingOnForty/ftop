@@ -28,6 +28,8 @@ contains
     call require(snapshot%cpu_total%thread_count > 0, "collector CPU thread count must be positive")
     call require(snapshot%cpu_total%core_count <= snapshot%cpu_total%thread_count, &
                  "collector CPU core count must not exceed threads")
+    call require(snapshot%cpu_total%model_name_valid, "collector CPU model name must be valid")
+    call require(len_trim(snapshot%cpu_total%model_name) > 0, "collector CPU model name must not be empty")
     call require(snapshot%cpu_total%valid, "collector CPU total must be valid")
     call require(allocated(snapshot%cpu_cores), "collector CPU cores must be allocated")
     call require(size(snapshot%cpu_cores) > 0, "collector must publish CPU cores")

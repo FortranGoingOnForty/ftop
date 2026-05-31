@@ -35,6 +35,8 @@ program test_platform
   if (topology%thread_count <= 0) error stop "platform CPU topology thread count must be positive"
   if (topology%core_count > topology%thread_count) error stop "platform CPU topology core count exceeds threads"
   if (topology%thread_count /= cpu_count) error stop "platform CPU topology thread count mismatch"
+  if (.not. topology%model_name_valid) error stop "platform CPU model name must be valid"
+  if (len_trim(topology%model_name) <= 0) error stop "platform CPU model name must not be empty"
 
   first_sample = backend%get_cpu_sample()
   if (.not. first_sample%valid) error stop "first CPU tick sample must be valid"

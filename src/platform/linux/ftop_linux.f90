@@ -157,6 +157,7 @@ contains
     type(cpu_topology_info) :: info
     integer :: core_count
     integer :: cores_per_package
+    integer :: model_name_len
     integer :: package_count
     integer :: siblings_per_package
     integer :: thread_count
@@ -177,6 +178,7 @@ contains
     info%valid = .true.
     info%thread_count = thread_count
     info%core_count = max(1, min(thread_count, core_count))
+    info%model_name_valid = linux_cpuinfo_field("model name", info%model_name, model_name_len) .and. model_name_len > 0
   end function linux_get_cpu_topology
 
   function linux_get_cpu_sample(self) result(sample)
