@@ -191,7 +191,10 @@ add_executable(
 )
 target_link_libraries(ftop_terminal_smoke PRIVATE fgof::expect)
 
-add_test(NAME ftop_terminal_smoke COMMAND ftop_terminal_smoke $<TARGET_FILE:ftop>)
+add_test(
+  NAME ftop_terminal_smoke
+  COMMAND ftop_terminal_smoke $<TARGET_FILE:ftop> "${CMAKE_SOURCE_DIR}/config/process-focused.toml"
+)
 set_tests_properties(
   ftop_terminal_smoke
   PROPERTIES

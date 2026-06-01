@@ -7,6 +7,8 @@ module ftop_app
     event_text, &
     has_pending_input
   use fgof_keys_types, only : &
+    FGOF_KEY_BACKSPACE, &
+    FGOF_KEY_DELETE, &
     FGOF_KEY_DOWN, &
     FGOF_KEY_ENTER, &
     FGOF_KEY_ESCAPE, &
@@ -37,7 +39,12 @@ module ftop_app
     layout_grid, &
     parse_layout_file
   use ftop_process_table, only : &
+    process_table_append_filter_text, &
+    process_table_begin_filter, &
+    process_table_clear_filter, &
     process_table_cycle_sort_key, &
+    process_table_delete_filter_char, &
+    process_table_finish_filter, &
     process_table_page_delta, &
     process_table_select_delta, &
     process_table_state, &
@@ -451,15 +458,15 @@ contains
         session%running = .false.
       else if (event%modifiers%ctrl .and. text == "z") then
         call suspend_session(session)
-      else if (.not. event%modifiers%ctrl .and. text == "z") then
-        call toggle_zoom(session)
-      else if (.not. event%modifiers%ctrl .and. text == "q") then
-        call set_status(session, "q")
-        session%running = .false.
       else if (event%modifiers%ctrl) then
         if (len(text) > 0) call set_status(session, "key: " // text)
       else if (handle_process_printable_key(session, text)) then
         continue
+      else if (text == "z") then
+        call toggle_zoom(session)
+      else if (text == "q") then
+        call set_status(session, "q")
+        session%running = .false.
       else if (len(text) > 0) then
         call set_status(session, "key: " // text)
       end if
@@ -492,7 +499,15 @@ contains
 
     handled = .false.
     if (.not. process_widget_focused(session)) return
+    if (session%process_state%filter_active) then
+      call process_table_append_filter_text(session%process_state, text)
+      handled = .true.
+      call set_status(session, process_table_status(session%process_state))
+      return
+    end if
     select case (text)
+    case ("/")
+      call process_table_begin_filter(session%process_state)
     case ("s")
       call process_table_toggle_sort_direction(session%process_state)
     case ("t")
@@ -511,6 +526,15 @@ contains
     handled = .false.
     if (.not. process_widget_focused(session)) return
     select case (key_name)
+    case (FGOF_KEY_BACKSPACE, FGOF_KEY_DELETE)
+      if (.not. session%process_state%filter_active) return
+      call process_table_delete_filter_char(session%process_state)
+    case (FGOF_KEY_ENTER)
+      if (.not. session%process_state%filter_active) return
+      call process_table_finish_filter(session%process_state)
+    case (FGOF_KEY_ESCAPE)
+      if (.not. session%process_state%filter_active .and. session%process_state%filter_length <= 0) return
+      call process_table_clear_filter(session%process_state)
     case (FGOF_KEY_UP)
       call process_table_select_delta(session%process_state, -1)
     case (FGOF_KEY_DOWN)

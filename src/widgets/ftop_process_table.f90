@@ -36,6 +36,7 @@ module ftop_process_table
 
   integer, parameter :: PROCESS_TABLE_COLUMNS = 7
   integer, parameter :: PROCESS_SORT_KEY_COUNT = 6
+  integer, parameter, public :: PROCESS_FILTER_LEN = 96
 
   type, public :: process_table_state
     integer :: selected_row = 1
@@ -43,17 +44,26 @@ module ftop_process_table
     integer :: sort_key = PROCESS_SORT_PID
     integer :: sort_direction = TABLE_SORT_ASCENDING
     integer :: row_count = 0
+    integer :: total_row_count = 0
     integer :: viewport_rows = 0
+    integer :: filter_length = 0
+    character(len=PROCESS_FILTER_LEN) :: filter_text = ""
+    logical :: filter_active = .false.
     logical :: tree_view = .true.
   end type process_table_state
 
   public :: process_panel_min_size
+  public :: process_table_append_filter_text
+  public :: process_table_begin_filter
+  public :: process_table_clear_filter
   public :: process_table_cycle_sort_key
+  public :: process_table_delete_filter_char
   public :: process_table_page_delta
   public :: process_table_select_delta
   public :: process_table_sort_direction_label
   public :: process_table_sort_key_label
   public :: process_table_status
+  public :: process_table_finish_filter
   public :: process_table_toggle_sort_direction
   public :: process_table_toggle_tree
   public :: render_process_panel
@@ -80,51 +90,68 @@ contains
     type(process_table_state) :: active_state
     type(process_table) :: sorted_processes
     type(widget_rect) :: content
+    type(widget_rect) :: table_content
+    logical :: show_filter_bar
 
     active_state = process_table_state()
     if (present(state)) active_state = state
+    call normalize_filter_state(active_state)
     call draw_box(buffer, panel, BOX_STYLE_ROUNDED, border_style, "Processes", title_style)
     content = box_content_rect(panel)
     if (content%height <= 0 .or. content%width <= 0) return
+    show_filter_bar = process_table_filter_visible(active_state)
+    table_content = process_table_content_rect(content, show_filter_bar)
 
     if (.not. snapshot%processes%valid) then
-      call render_text(buffer, content_line_rect(content, 1), "processes unavailable", dim_style)
+      call render_text(buffer, content_line_rect(table_content, 1), "processes unavailable", dim_style)
       if (present(state)) then
+        active_state%total_row_count = 0
         call normalize_process_table_state(active_state, 0, 0)
         state = active_state
       end if
+      if (show_filter_bar) call render_process_filter_bar(buffer, content, active_state, title_style, dim_style)
       return
     end if
     if (.not. allocated(snapshot%processes%items) .or. size(snapshot%processes%items) <= 0) then
-      call render_text(buffer, content_line_rect(content, 1), "no processes", dim_style)
+      call render_text(buffer, content_line_rect(table_content, 1), "no processes", dim_style)
       if (present(state)) then
+        active_state%total_row_count = 0
         call normalize_process_table_state(active_state, 0, 0)
         state = active_state
       end if
+      if (show_filter_bar) call render_process_filter_bar(buffer, content, active_state, title_style, dim_style)
       return
     end if
 
     columns = process_columns(active_state)
     sorted_processes = snapshot%processes
+    active_state%total_row_count = count_valid_processes(sorted_processes)
     call sort_process_table(sorted_processes, active_state%sort_key, &
                             descending=active_state%sort_direction == TABLE_SORT_DESCENDING)
+    call filter_process_table(sorted_processes, active_state)
     if (active_state%tree_view) call build_process_tree(sorted_processes)
     cells = process_cells(sorted_processes)
     if (size(cells, 1) <= 0) then
-      call render_text(buffer, content_line_rect(content, 1), "no processes", dim_style)
+      if (active_state%filter_length > 0) then
+        call render_text(buffer, content_line_rect(table_content, 1), "no matching processes", dim_style)
+      else
+        call render_text(buffer, content_line_rect(table_content, 1), "no processes", dim_style)
+      end if
       if (present(state)) then
-        call normalize_process_table_state(active_state, 0, 0)
+        call normalize_process_table_state(active_state, 0, table_viewport_row_count(table_content, .true.))
         state = active_state
       end if
+      if (show_filter_bar) call render_process_filter_bar(buffer, content, active_state, title_style, dim_style)
       return
     end if
 
-    call normalize_process_table_state(active_state, size(cells, 1), table_viewport_row_count(content, .true.))
+    call normalize_process_table_state(active_state, size(cells, 1), table_viewport_row_count(table_content, .true.))
 
-    call render_table(buffer, content, columns, cells, separator=TABLE_SEPARATOR_SPACE, &
+    call render_table(buffer, table_content, columns, cells, separator=TABLE_SEPARATOR_SPACE, &
                       show_header=.true., striped=.false., style=dim_style, &
                       header_style=title_style, selected_style=title_style, separator_style=dim_style, &
                       scroll_row=active_state%scroll_row, selected_row=active_state%selected_row)
+    if (show_filter_bar) call render_process_filter_bar(buffer, content, active_state, title_style, dim_style)
     if (present(state)) state = active_state
   end subroutine render_process_panel
 
@@ -211,6 +238,75 @@ contains
     end do
   end function process_cells
 
+  subroutine filter_process_table(table, state)
+    type(process_table), intent(inout) :: table
+    type(process_table_state), intent(inout) :: state
+    type(process_info), allocatable :: filtered(:)
+    character(len=:), allocatable :: query
+    integer :: match_count
+    integer :: process_index
+    integer :: row
+
+    call normalize_filter_state(state)
+    if (state%filter_length <= 0) then
+      state%row_count = count_valid_processes(table)
+      return
+    end if
+    if (.not. allocated(table%items)) then
+      state%row_count = 0
+      return
+    end if
+
+    query = process_table_filter_text(state)
+    match_count = 0
+    do process_index = 1, size(table%items)
+      if (process_matches_filter(table%items(process_index), query)) match_count = match_count + 1
+    end do
+
+    allocate(filtered(match_count))
+    row = 0
+    do process_index = 1, size(table%items)
+      if (.not. process_matches_filter(table%items(process_index), query)) cycle
+      row = row + 1
+      filtered(row) = table%items(process_index)
+    end do
+    call move_alloc(filtered, table%items)
+    state%row_count = match_count
+  end subroutine filter_process_table
+
+  integer function count_valid_processes(table) result(count)
+    type(process_table), intent(in) :: table
+    integer :: process_index
+
+    count = 0
+    if (.not. allocated(table%items)) return
+    do process_index = 1, size(table%items)
+      if (table%items(process_index)%valid) count = count + 1
+    end do
+  end function count_valid_processes
+
+  logical function process_matches_filter(process, query) result(matches)
+    type(process_info), intent(in) :: process
+    character(len=*), intent(in) :: query
+    character(len=:), allocatable :: needle
+
+    if (.not. process%valid) then
+      matches = .false.
+      return
+    end if
+    if (len(query) <= 0) then
+      matches = .true.
+      return
+    end if
+
+    needle = ascii_lower(query)
+    matches = index(ascii_lower(process_display_command(process)), needle) > 0
+    if (matches) return
+    matches = index(ascii_lower(trim(process%name)), needle) > 0
+    if (matches) return
+    matches = index(ascii_lower(process_user_label(process)), needle) > 0
+  end function process_matches_filter
+
   subroutine fill_process_row(cells, row_index, process)
     type(table_cell), intent(inout) :: cells(:, :)
     integer, intent(in) :: row_index
@@ -237,6 +333,59 @@ contains
       text = process_display_command(process)
     end if
   end function process_tree_display_command
+
+  subroutine process_table_begin_filter(state)
+    type(process_table_state), intent(inout) :: state
+
+    call normalize_filter_state(state)
+    state%filter_active = .true.
+  end subroutine process_table_begin_filter
+
+  subroutine process_table_finish_filter(state)
+    type(process_table_state), intent(inout) :: state
+
+    state%filter_active = .false.
+    call normalize_filter_state(state)
+  end subroutine process_table_finish_filter
+
+  subroutine process_table_clear_filter(state)
+    type(process_table_state), intent(inout) :: state
+
+    state%filter_active = .false.
+    state%filter_length = 0
+    state%filter_text = ""
+    state%selected_row = 1
+    state%scroll_row = 1
+    call normalize_process_table_state(state, state%row_count, state%viewport_rows)
+  end subroutine process_table_clear_filter
+
+  subroutine process_table_append_filter_text(state, text)
+    type(process_table_state), intent(inout) :: state
+    character(len=*), intent(in) :: text
+    integer :: char_index
+
+    call normalize_filter_state(state)
+    state%filter_active = .true.
+    do char_index = 1, len(text)
+      if (state%filter_length >= PROCESS_FILTER_LEN) exit
+      state%filter_length = state%filter_length + 1
+      state%filter_text(state%filter_length:state%filter_length) = text(char_index:char_index)
+    end do
+    state%selected_row = 1
+    state%scroll_row = 1
+  end subroutine process_table_append_filter_text
+
+  subroutine process_table_delete_filter_char(state)
+    type(process_table_state), intent(inout) :: state
+
+    call normalize_filter_state(state)
+    state%filter_active = .true.
+    if (state%filter_length <= 0) return
+    state%filter_text(state%filter_length:state%filter_length) = " "
+    state%filter_length = state%filter_length - 1
+    state%selected_row = 1
+    state%scroll_row = 1
+  end subroutine process_table_delete_filter_char
 
   subroutine process_table_select_delta(state, delta)
     type(process_table_state), intent(inout) :: state
@@ -295,6 +444,10 @@ contains
     text = "process " // view_text // " row " // integer_text(max(0, state%selected_row)) // "/" // &
            integer_text(max(0, state%row_count)) // " sort " // process_table_sort_key_label(state) // " " // &
            process_table_sort_direction_label(state)
+    if (process_table_filter_visible(state)) then
+      text = text // " filter " // process_table_filter_text(state) // " showing " // &
+             integer_text(max(0, state%row_count)) // "/" // integer_text(max(0, state%total_row_count))
+    end if
   end function process_table_status
 
   function process_table_sort_key_label(state) result(label)
@@ -335,7 +488,9 @@ contains
     integer :: max_scroll_row
 
     state%row_count = max(0, row_count)
+    state%total_row_count = max(state%row_count, state%total_row_count)
     state%viewport_rows = max(0, viewport_rows)
+    call normalize_filter_state(state)
     if (state%sort_direction /= TABLE_SORT_DESCENDING) state%sort_direction = TABLE_SORT_ASCENDING
     if (state%row_count <= 0) then
       state%selected_row = 0
@@ -386,6 +541,86 @@ contains
       sort_key = PROCESS_SORT_PID
     end select
   end function process_sort_key_at
+
+  subroutine normalize_filter_state(state)
+    type(process_table_state), intent(inout) :: state
+
+    state%filter_length = max(0, min(PROCESS_FILTER_LEN, state%filter_length))
+    if (state%filter_length <= 0) then
+      state%filter_text = ""
+    else if (state%filter_length < PROCESS_FILTER_LEN) then
+      state%filter_text(state%filter_length + 1:) = ""
+    end if
+  end subroutine normalize_filter_state
+
+  logical function process_table_filter_visible(state) result(visible)
+    type(process_table_state), intent(in) :: state
+
+    visible = state%filter_active .or. state%filter_length > 0
+  end function process_table_filter_visible
+
+  function process_table_filter_text(state) result(text)
+    type(process_table_state), intent(in) :: state
+    character(len=:), allocatable :: text
+    integer :: length
+
+    length = max(0, min(PROCESS_FILTER_LEN, state%filter_length))
+    if (length <= 0) then
+      text = ""
+    else
+      text = state%filter_text(:length)
+    end if
+  end function process_table_filter_text
+
+  function process_table_content_rect(content, show_filter_bar) result(table_content)
+    type(widget_rect), intent(in) :: content
+    logical, intent(in) :: show_filter_bar
+    type(widget_rect) :: table_content
+
+    table_content = content
+    if (show_filter_bar .and. table_content%height > 0) table_content%height = table_content%height - 1
+  end function process_table_content_rect
+
+  subroutine render_process_filter_bar(buffer, content, state, active_style, dim_style)
+    type(screen_buffer), intent(inout) :: buffer
+    type(widget_rect), intent(in) :: content
+    type(process_table_state), intent(in) :: state
+    type(screen_style), intent(in) :: active_style
+    type(screen_style), intent(in) :: dim_style
+    type(screen_style) :: filter_style
+
+    filter_style = dim_style
+    if (state%filter_active) filter_style = active_style
+    call render_text(buffer, content_line_rect(content, content%height), process_filter_bar_text(state), filter_style)
+  end subroutine render_process_filter_bar
+
+  function process_filter_bar_text(state) result(text)
+    type(process_table_state), intent(in) :: state
+    character(len=:), allocatable :: text
+    character(len=:), allocatable :: cursor
+
+    if (state%filter_active) then
+      cursor = "_"
+    else
+      cursor = ""
+    end if
+    text = "filter: " // process_table_filter_text(state) // cursor // " (showing " // &
+           integer_text(max(0, state%row_count)) // " of " // &
+           integer_text(max(0, state%total_row_count)) // " processes)"
+  end function process_filter_bar_text
+
+  function ascii_lower(text) result(lower)
+    character(len=*), intent(in) :: text
+    character(len=:), allocatable :: lower
+    integer :: code
+    integer :: i
+
+    lower = trim(text)
+    do i = 1, len(lower)
+      code = iachar(lower(i:i))
+      if (code >= iachar("A") .and. code <= iachar("Z")) lower(i:i) = achar(code + 32)
+    end do
+  end function ascii_lower
 
   function content_line_rect(content, line_index) result(line)
     type(widget_rect), intent(in) :: content

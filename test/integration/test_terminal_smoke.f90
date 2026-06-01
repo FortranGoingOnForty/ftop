@@ -28,6 +28,7 @@ program test_terminal_smoke
   end interface
 
   character(len=512) :: ftop_path
+  character(len=512) :: process_config_path
   character(len=32) :: argv(2)
   type(expect_options) :: options
   type(expect_session) :: session
@@ -37,6 +38,8 @@ program test_terminal_smoke
 
   call get_command_argument(1, ftop_path)
   if (len_trim(ftop_path) == 0) error stop "ftop path argument is required"
+  call get_command_argument(2, process_config_path)
+  if (len_trim(process_config_path) == 0) error stop "process config path argument is required"
 
   call delete_debug_log()
 
@@ -93,9 +96,55 @@ program test_terminal_smoke
 
   if (.not. debug_log_contains("mouse press left row=5 col=10")) error stop "mouse event was not logged"
 
+  call verify_process_filter(trim(ftop_path), trim(process_config_path), options)
   call verify_signal_exit(trim(ftop_path), argv, options)
 
 contains
+
+  subroutine verify_process_filter(program_path, config_path, launch_options)
+    character(len=*), intent(in) :: program_path
+    character(len=*), intent(in) :: config_path
+    type(expect_options), intent(in) :: launch_options
+    character(len=512) :: filter_argv(4)
+    type(expect_session) :: filter_session
+    type(expect_match) :: filter_match
+    logical :: filter_closed
+
+    filter_argv = ""
+    filter_argv(1) = "--refresh-ms"
+    filter_argv(2) = "100"
+    filter_argv(3) = "--config"
+    filter_argv(4) = config_path
+
+    filter_session = spawn_expect(program_path, filter_argv, launch_options)
+    if (filter_session%error_code /= FGOF_EXPECT_OK) error stop "failed to spawn ftop for process filter"
+
+    filter_match = wait_for_string(filter_session, "Processes", 2500)
+    if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "process filter frame did not render"
+
+    if (.not. send_text(filter_session, achar(9))) error stop "failed to send filter memory Tab"
+    filter_match = wait_for_string(filter_session, "focus memory", 2500)
+    if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not focus memory before filter"
+
+    if (.not. send_text(filter_session, achar(9))) error stop "failed to send filter process Tab"
+    filter_match = wait_for_string(filter_session, "focus process", 2500)
+    if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not focus process before filter"
+
+    if (.not. send_text(filter_session, "/ftop")) error stop "failed to send process filter"
+    filter_match = wait_for_string(filter_session, "filter ftop", 2500)
+    if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not enter process filter"
+
+    if (.not. send_text(filter_session, achar(27) // achar(27))) error stop "failed to clear process filter"
+    filter_match = wait_for_string(filter_session, "sort pid asc", 2500)
+    if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not clear process filter"
+
+    if (.not. send_text(filter_session, "q")) error stop "failed to quit process filter ftop"
+    filter_match = wait_for_string(filter_session, achar(27) // "[?1049l", 2500)
+    if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "process filter ftop did not exit"
+
+    filter_closed = close_expect(filter_session)
+    if (.not. filter_closed) error stop "failed to close process filter session"
+  end subroutine verify_process_filter
 
   subroutine verify_signal_exit(program_path, launch_argv, launch_options)
     character(len=*), intent(in) :: program_path
