@@ -6,14 +6,21 @@ module ftop_platform
   use ftop_linux_meminfo, only : linux_meminfo_parse
   use ftop_linux_proc_stat, only : linux_proc_stat_parse
   use ftop_mem_data, only : metric_memory_info => memory_info
-  use ftop_platform_types, only : cpu_tick_sample, cpu_topology_info, cpu_usage_percent, load_average_info, memory_info, &
-                                  platform_backend
+  use ftop_platform_types, only : &
+    cpu_tick_sample, &
+    cpu_topology_info, &
+    cpu_usage_percent, &
+    load_average_info, &
+    memory_info, &
+    platform_backend, &
+    system_uptime_info
   implicit none
   private
 
   integer, parameter :: LINUX_PROC_STAT_BUFFER_LEN = 1048576
   integer, parameter :: LINUX_PROC_MEMINFO_BUFFER_LEN = 65536
   integer, parameter :: LINUX_PROC_LOADAVG_BUFFER_LEN = 256
+  integer, parameter :: LINUX_PROC_UPTIME_BUFFER_LEN = 128
   integer, parameter :: LINUX_CPU_FREQ_BUFFER_LEN = 64
   integer, parameter, public :: LINUX_HWMON_NAME_LEN = 128
   integer, parameter, public :: LINUX_HWMON_PATH_LEN = 256
@@ -32,6 +39,7 @@ module ftop_platform
     procedure :: get_cpu_metadata => linux_get_cpu_metadata
     procedure :: get_memory_info => linux_get_memory_info
     procedure :: get_load_average => linux_get_load_average
+    procedure :: get_system_uptime => linux_get_system_uptime
   end type linux_backend
 
   public :: create_platform
@@ -47,6 +55,7 @@ module ftop_platform
   public :: load_average_info
   public :: memory_info
   public :: platform_backend
+  public :: system_uptime_info
 
   interface
     integer(c_int) function c_ftop_linux_cpu_count(count, sys_errno) bind(C, name="ftop_linux_cpu_count")
@@ -81,6 +90,15 @@ module ftop_platform
       integer(c_size_t), intent(out) :: value_len
       integer(c_int), intent(out) :: sys_errno
     end function c_ftop_linux_read_proc_loadavg
+
+    integer(c_int) function c_ftop_linux_read_proc_uptime(buffer, buffer_capacity, value_len, sys_errno) &
+        bind(C, name="ftop_linux_read_proc_uptime")
+      import :: c_char, c_int, c_size_t
+      character(kind=c_char), intent(out) :: buffer(*)
+      integer(c_size_t), value :: buffer_capacity
+      integer(c_size_t), intent(out) :: value_len
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_linux_read_proc_uptime
 
     integer(c_int) function c_ftop_linux_read_cpu_frequency(cpu_index, buffer, buffer_capacity, value_len, sys_errno) &
         bind(C, name="ftop_linux_read_cpu_frequency")
@@ -274,6 +292,31 @@ contains
 
     if (.not. linux_load_average_snapshot(info)) info = load_average_info()
   end function linux_get_load_average
+
+  function linux_get_system_uptime(self) result(info)
+    class(linux_backend), intent(in) :: self
+    type(system_uptime_info) :: info
+    character(kind=c_char) :: c_buffer(LINUX_PROC_UPTIME_BUFFER_LEN)
+    character(len=:), allocatable :: buffer
+    integer(c_size_t) :: value_len
+    integer(c_int) :: sys_errno
+    integer(c_int) :: rc
+    integer :: read_status
+    real(real64) :: seconds
+
+    associate(unused => self)
+    end associate
+
+    rc = c_ftop_linux_read_proc_uptime(c_buffer, int(size(c_buffer), c_size_t), value_len, sys_errno)
+    if (rc /= 0_c_int) return
+
+    call c_chars_to_string(c_buffer, int(value_len), buffer)
+    read(buffer, *, iostat=read_status) seconds
+    if (read_status /= 0 .or. seconds < 0.0_real64) return
+
+    info%valid = .true.
+    info%seconds = int(seconds, int64)
+  end function linux_get_system_uptime
 
   logical function linux_cpu_state_snapshot(total, cores, error_code) result(success)
     type(cpu_state_ticks), intent(out) :: total

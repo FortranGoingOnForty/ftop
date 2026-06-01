@@ -1,5 +1,5 @@
 module ftop_cpu
-  use, intrinsic :: iso_fortran_env, only : real64
+  use, intrinsic :: iso_fortran_env, only : int64, real64
   use fgof_screen_types, only : screen_buffer, screen_style
   use ftop_box, only : BOX_STYLE_ROUNDED, box_content_rect, draw_box
   use ftop_collector, only : collector_snapshot
@@ -25,7 +25,7 @@ contains
     type(widget_size) :: size_value
 
     size_value%width = 28
-    size_value%height = 8
+    size_value%height = 9
   end function cpu_panel_min_size
 
   subroutine render_cpu_panel(buffer, panel, snapshot, border_style, title_style, dim_style)
@@ -55,9 +55,10 @@ contains
                       fill_mode=METER_FILL_SHADED, empty_style=dim_style, label_style=text_style)
     call render_text(buffer, content_line_rect(content, 3), cpu_detail_text(snapshot), dim_style)
     call render_text(buffer, content_line_rect(content, 4), cpu_model_text(snapshot), dim_style)
-    call render_text(buffer, content_line_rect(content, 5), cpu_frequency_temp_text(snapshot), dim_style)
+    call render_text(buffer, content_line_rect(content, 5), cpu_uptime_text(snapshot), dim_style)
+    call render_text(buffer, content_line_rect(content, 6), cpu_frequency_temp_text(snapshot), dim_style)
 
-    graph_line = 6
+    graph_line = 7
     graph_height = min(4, max(0, content%height - graph_line - 1))
     if (graph_height > 0 .and. allocated(snapshot%cpu_usage_history)) then
       call render_cpu_history(buffer, content, graph_line, graph_height, snapshot, usage_gradient, dim_style)
@@ -234,6 +235,43 @@ contains
     text = "freq " // average_text(freq_sum, freq_count, "MHz") // &
            " temp " // average_text(temp_sum, temp_count, "C")
   end function cpu_frequency_temp_text
+
+  function cpu_uptime_text(snapshot) result(text)
+    type(collector_snapshot), intent(in) :: snapshot
+    character(len=:), allocatable :: text
+
+    if (snapshot%system_uptime_valid) then
+      text = "uptime " // duration_text(snapshot%system_uptime_seconds)
+    else
+      text = "uptime n/a"
+    end if
+  end function cpu_uptime_text
+
+  function duration_text(total_seconds) result(text)
+    integer(int64), intent(in) :: total_seconds
+    character(len=:), allocatable :: text
+    character(len=32) :: scratch
+    integer(int64) :: days
+    integer(int64) :: hours
+    integer(int64) :: minutes
+    integer(int64) :: remaining
+    integer(int64) :: seconds
+
+    remaining = max(0_int64, total_seconds)
+    seconds = mod(remaining, 60_int64)
+    remaining = remaining / 60_int64
+    minutes = mod(remaining, 60_int64)
+    remaining = remaining / 60_int64
+    hours = mod(remaining, 24_int64)
+    days = remaining / 24_int64
+
+    if (days > 0_int64) then
+      write(scratch, '(i0,a,i2.2,a,i2.2,a,i2.2)') days, "d ", hours, ":", minutes, ":", seconds
+    else
+      write(scratch, '(i0,a,i2.2,a,i2.2)') hours, ":", minutes, ":", seconds
+    end if
+    text = trim(adjustl(scratch))
+  end function duration_text
 
   function average_text(total, count, unit) result(text)
     real(real64), intent(in) :: total

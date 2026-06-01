@@ -2,8 +2,14 @@ module ftop_platform
   use, intrinsic :: iso_c_binding, only : c_char, c_double, c_int, c_long_long, c_null_char, c_size_t
   use, intrinsic :: iso_fortran_env, only : int64, real64
   use ftop_cpu_data, only : cpu_core_info, cpu_state_ticks, cpu_state_total_ticks
-  use ftop_platform_types, only : cpu_tick_sample, cpu_topology_info, cpu_usage_percent, load_average_info, memory_info, &
-                                  platform_backend
+  use ftop_platform_types, only : &
+    cpu_tick_sample, &
+    cpu_topology_info, &
+    cpu_usage_percent, &
+    load_average_info, &
+    memory_info, &
+    platform_backend, &
+    system_uptime_info
   implicit none
   private
 
@@ -23,6 +29,7 @@ module ftop_platform
     procedure :: get_cpu_metadata => macos_get_cpu_metadata
     procedure :: get_memory_info => macos_get_memory_info
     procedure :: get_load_average => macos_get_load_average
+    procedure :: get_system_uptime => macos_get_system_uptime
   end type macos_backend
 
   public :: create_platform
@@ -39,6 +46,7 @@ module ftop_platform
   public :: macos_sysctl_string
   public :: memory_info
   public :: platform_backend
+  public :: system_uptime_info
 
   interface
     integer(c_int) function c_ftop_macos_cpu_count(count, sys_errno) bind(C, name="ftop_macos_cpu_count")
@@ -80,6 +88,13 @@ module ftop_platform
       real(c_double), intent(out) :: loads(3)
       integer(c_int), intent(out) :: sys_errno
     end function c_ftop_macos_load_average
+
+    integer(c_int) function c_ftop_macos_uptime_seconds(seconds, sys_errno) &
+        bind(C, name="ftop_macos_uptime_seconds")
+      import :: c_int, c_long_long
+      integer(c_long_long), intent(out) :: seconds
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_macos_uptime_seconds
 
     integer(c_int) function c_ftop_macos_processor_ticks(ticks, capacity, processor_count, sys_errno) &
         bind(C, name="ftop_macos_processor_ticks")
@@ -309,6 +324,23 @@ contains
       info%values = real(loads, real64)
     end if
   end function macos_get_load_average
+
+  function macos_get_system_uptime(self) result(info)
+    class(macos_backend), intent(in) :: self
+    type(system_uptime_info) :: info
+    integer(c_long_long) :: seconds
+    integer(c_int) :: sys_errno
+    integer(c_int) :: rc
+
+    associate(unused => self)
+    end associate
+
+    rc = c_ftop_macos_uptime_seconds(seconds, sys_errno)
+    if (rc == 0_c_int .and. seconds >= 0_c_long_long) then
+      info%valid = .true.
+      info%seconds = int(seconds, int64)
+    end if
+  end function macos_get_system_uptime
 
   function macos_cpu_state_from_c(c_ticks) result(ticks)
     type(macos_processor_ticks), intent(in) :: c_ticks

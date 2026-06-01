@@ -57,6 +57,10 @@ int ftop_linux_read_proc_loadavg(char *buffer, size_t buffer_len, size_t *value_
   return ftop_read_file_into_buffer("/proc/loadavg", buffer, buffer_len, value_len, sys_errno);
 }
 
+int ftop_linux_read_proc_uptime(char *buffer, size_t buffer_len, size_t *value_len, int *sys_errno) {
+  return ftop_read_file_into_buffer("/proc/uptime", buffer, buffer_len, value_len, sys_errno);
+}
+
 int ftop_linux_read_cpu_frequency(int cpu_index, char *buffer, size_t buffer_len, size_t *value_len, int *sys_errno) {
   char path[128];
   int written;

@@ -68,8 +68,10 @@ module ftop_app
     integer :: refresh_ms = DEFAULT_REFRESH_MS
     integer :: frame_count = 0
     integer :: focus_index = 1
+    integer :: last_render_count = 0
     integer :: last_refresh_count = 0
     integer :: clock_rate = 0
+    real :: render_fps = 0.0
     logical :: guard_bound = .false.
     logical :: terminal_started = .false.
     logical :: collector_started = .false.
@@ -135,6 +137,7 @@ contains
     session%current = allocate_screen(width, height)
     session%refresh_ms = refresh_ms
     session%frame_count = frame_count
+    session%render_fps = target_fps(refresh_ms)
     session%status_text = status_text
     call draw_frame(session)
     rendered = render_screen_ansi(session%current)
@@ -216,6 +219,7 @@ contains
     end if
 
     call write_terminal_output(output)
+    call update_render_fps(session)
     session%previous = session%current
     session%dirty = .false.
   end subroutine render_session
@@ -231,10 +235,12 @@ contains
     focus = focused_widget_name(session)
     if (session%layout_loaded) then
       call render_dashboard(session%current, snapshot, session%refresh_ms, session%frame_count, &
-                            session%status_text, session%layout, focus, session%zoomed)
+                            session%status_text, session%layout, focus, session%zoomed, &
+                            render_fps=session%render_fps)
     else
       call render_dashboard(session%current, snapshot, session%refresh_ms, session%frame_count, &
-                            session%status_text, focused_widget=focus, zoomed=session%zoomed)
+                            session%status_text, focused_widget=focus, zoomed=session%zoomed, &
+                            render_fps=session%render_fps)
     end if
   end subroutine draw_frame
 
@@ -557,6 +563,8 @@ contains
 
     call system_clock(session%last_refresh_count, session%clock_rate)
     session%frame_count = 0
+    session%last_render_count = 0
+    session%render_fps = 0.0
   end subroutine initialize_refresh_timer
 
   logical function refresh_due(session) result(due)
@@ -572,6 +580,26 @@ contains
     call system_clock(session%last_refresh_count)
     session%dirty = .true.
   end subroutine mark_refresh
+
+  subroutine update_render_fps(session)
+    type(terminal_session), intent(inout) :: session
+    integer :: elapsed_count
+    integer :: now_count
+    integer :: rate
+    real :: elapsed_seconds
+
+    call system_clock(now_count, rate)
+    if (rate <= 0) return
+
+    if (session%last_render_count > 0) then
+      elapsed_count = now_count - session%last_render_count
+      if (elapsed_count > 0) then
+        elapsed_seconds = real(elapsed_count) / real(rate)
+        if (elapsed_seconds > 0.0) session%render_fps = 1.0 / elapsed_seconds
+      end if
+    end if
+    session%last_render_count = now_count
+  end subroutine update_render_fps
 
   integer function poll_timeout_ms(session) result(timeout_ms)
     type(terminal_session), intent(in) :: session
@@ -606,6 +634,16 @@ contains
 
     bounded = max(MIN_REFRESH_MS, min(MAX_REFRESH_MS, refresh_ms))
   end function bounded_refresh_ms
+
+  real function target_fps(refresh_ms) result(fps)
+    integer, intent(in) :: refresh_ms
+
+    if (refresh_ms > 0) then
+      fps = 1000.0 / real(refresh_ms)
+    else
+      fps = 0.0
+    end if
+  end function target_fps
 
   subroutine log_debug(message)
     character(len=*), intent(in) :: message

@@ -12,8 +12,14 @@ module ftop_platform
     c_size_t
   use, intrinsic :: iso_fortran_env, only : int64, real64
   use ftop_cpu_data, only : cpu_core_info, cpu_state_ticks, cpu_state_total_ticks
-  use ftop_platform_types, only : cpu_tick_sample, cpu_topology_info, cpu_usage_percent, load_average_info, memory_info, &
-                                  platform_backend
+  use ftop_platform_types, only : &
+    cpu_tick_sample, &
+    cpu_topology_info, &
+    cpu_usage_percent, &
+    load_average_info, &
+    memory_info, &
+    platform_backend, &
+    system_uptime_info
   implicit none
   private
 
@@ -64,6 +70,7 @@ module ftop_platform
     procedure :: get_cpu_metadata => freebsd_get_cpu_metadata
     procedure :: get_memory_info => freebsd_get_memory_info
     procedure :: get_load_average => freebsd_get_load_average
+    procedure :: get_system_uptime => freebsd_get_system_uptime
   end type freebsd_backend
 
   public :: create_platform
@@ -81,6 +88,7 @@ module ftop_platform
   public :: load_average_info
   public :: memory_info
   public :: platform_backend
+  public :: system_uptime_info
 
   interface
     integer(c_int) function c_ftop_freebsd_cpu_count(count, sys_errno) bind(C, name="ftop_freebsd_cpu_count")
@@ -145,6 +153,13 @@ module ftop_platform
       real(c_double), intent(out) :: loads(3)
       integer(c_int), intent(out) :: sys_errno
     end function c_ftop_freebsd_load_average
+
+    integer(c_int) function c_ftop_freebsd_uptime_seconds(seconds, sys_errno) &
+        bind(C, name="ftop_freebsd_uptime_seconds")
+      import :: c_int, c_long_long
+      integer(c_long_long), intent(out) :: seconds
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_freebsd_uptime_seconds
 
     integer(c_int) function c_ftop_freebsd_sysctl_int(name, value, sys_errno) &
         bind(C, name="ftop_freebsd_sysctl_int")
@@ -389,6 +404,23 @@ contains
       info%values = real(loads, real64)
     end if
   end function freebsd_get_load_average
+
+  function freebsd_get_system_uptime(self) result(info)
+    class(freebsd_backend), intent(in) :: self
+    type(system_uptime_info) :: info
+    integer(c_long_long) :: seconds
+    integer(c_int) :: sys_errno
+    integer(c_int) :: rc
+
+    associate(unused => self)
+    end associate
+
+    rc = c_ftop_freebsd_uptime_seconds(seconds, sys_errno)
+    if (rc == 0_c_int .and. seconds >= 0_c_long_long) then
+      info%valid = .true.
+      info%seconds = int(seconds, int64)
+    end if
+  end function freebsd_get_system_uptime
 
   function freebsd_cpu_state_from_c(c_ticks) result(ticks)
     type(freebsd_cpu_state_tick_sample), intent(in) :: c_ticks

@@ -134,7 +134,7 @@ contains
     else
       allocate(grid%rows(1))
       grid%rows(1) = make_layout_row(1, [ &
-        make_layout_column(LAYOUT_WIDGET_CPU, 1, 28, 8), &
+        make_layout_column(LAYOUT_WIDGET_CPU, 1, 28, 9), &
         make_layout_column(LAYOUT_WIDGET_MEMORY, 1, 28, 8) &
       ])
     end if

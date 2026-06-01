@@ -23,7 +23,8 @@ module ftop_collector
     cpu_topology_info, &
     load_average_info, &
     platform_backend, &
-    platform_memory_info => memory_info
+    platform_memory_info => memory_info, &
+    system_uptime_info
   use ftop_pthread, only : &
     ftop_mutex_destroy, &
     ftop_mutex_handle, &
@@ -69,6 +70,8 @@ module ftop_collector
     real(c_double) :: cpu_core_temp_c(FTOP_COLLECTOR_MAX_CPU_CORES)
     integer(c_int) :: load_valid
     real(c_double) :: load_average(3)
+    integer(c_int) :: uptime_valid
+    integer(c_long_long) :: uptime_seconds
     integer(c_int) :: memory_valid
     integer(c_long_long) :: memory_total_bytes
     integer(c_long_long) :: memory_used_bytes
@@ -90,6 +93,8 @@ module ftop_collector
     logical :: running = .false.
     logical :: warming_up = .true.
     integer :: sample_count = 0
+    logical :: system_uptime_valid = .false.
+    integer(int64) :: system_uptime_seconds = 0_int64
     type(cpu_total_info) :: cpu_total
     type(cpu_core_info), allocatable :: cpu_cores(:)
     type(metric_memory_info) :: memory
@@ -227,6 +232,8 @@ contains
     snapshot%cpu_total%load_avg = real(self%state%load_average, real64)
     snapshot%cpu_total%core_count = int(self%state%cpu_physical_core_count)
     snapshot%cpu_total%thread_count = int(self%state%cpu_count)
+    snapshot%system_uptime_valid = self%state%uptime_valid /= 0_c_int
+    snapshot%system_uptime_seconds = int(self%state%uptime_seconds, int64)
     call copy_c_chars_to_fortran(self%state%cpu_model_name, self%state%cpu_model_name_valid, &
                                  snapshot%cpu_total%model_name, snapshot%cpu_total%model_name_valid)
     snapshot%memory%valid = self%state%memory_valid /= 0_c_int
@@ -292,6 +299,7 @@ contains
     type(cpu_topology_info) :: topology
     type(platform_memory_info) :: memory
     type(load_average_info) :: load_average
+    type(system_uptime_info) :: system_uptime
     integer(c_long_long) :: deadline_ms
     integer(c_long_long) :: metadata_refresh_ms
     logical :: warming_up
@@ -312,7 +320,8 @@ contains
     topology = backend%get_cpu_topology()
     memory = backend%get_memory_info()
     load_average = backend%get_load_average()
-    call publish_sample(state, topology, total_cpu, core_cpus, .true., memory, load_average)
+    system_uptime = backend%get_system_uptime()
+    call publish_sample(state, topology, total_cpu, core_cpus, .true., memory, load_average, system_uptime)
 
     deadline_ms = monotonic_ms()
     metadata_refresh_ms = deadline_ms + 1000_c_long_long
@@ -322,6 +331,7 @@ contains
 
       memory = backend%get_memory_info()
       load_average = backend%get_load_average()
+      system_uptime = backend%get_system_uptime()
       topology = backend%get_cpu_topology()
       warming_up = .true.
       call make_invalid_cpu_infos(size(previous_core_cpus), total_cpu, core_cpus)
@@ -345,7 +355,7 @@ contains
       end if
       call merge_cpu_metadata(core_cpus, cpu_metadata)
 
-      call publish_sample(state, topology, total_cpu, core_cpus, warming_up, memory, load_average)
+      call publish_sample(state, topology, total_cpu, core_cpus, warming_up, memory, load_average, system_uptime)
       if (should_stop(state)) exit
     end do
 
@@ -422,6 +432,8 @@ contains
     state%cpu_core_temp_c = 0.0_c_double
     state%load_valid = 0_c_int
     state%load_average = 0.0_c_double
+    state%uptime_valid = 0_c_int
+    state%uptime_seconds = 0_c_long_long
     state%memory_valid = 0_c_int
     state%memory_total_bytes = 0_c_long_long
     state%memory_used_bytes = 0_c_long_long
@@ -466,6 +478,8 @@ contains
     state%cpu_core_temp_c = 0.0_c_double
     state%load_valid = 0_c_int
     state%load_average = 0.0_c_double
+    state%uptime_valid = 0_c_int
+    state%uptime_seconds = 0_c_long_long
     state%memory_valid = 0_c_int
     state%memory_total_bytes = 0_c_long_long
     state%memory_used_bytes = 0_c_long_long
@@ -499,6 +513,8 @@ contains
     snapshot%cpu_total%thread_count = 0
     snapshot%cpu_total%model_name_valid = .false.
     snapshot%cpu_total%model_name = ""
+    snapshot%system_uptime_valid = .false.
+    snapshot%system_uptime_seconds = 0_int64
     snapshot%memory%valid = .false.
     snapshot%memory%total_bytes = 0_int64
     snapshot%memory%used_bytes = 0_int64
@@ -663,7 +679,7 @@ contains
     if (.not. ftop_mutex_unlock(mutex)) stop_requested = .true.
   end function should_stop
 
-  subroutine publish_sample(state, topology, total_cpu, core_cpus, warming_up, memory, load_average)
+  subroutine publish_sample(state, topology, total_cpu, core_cpus, warming_up, memory, load_average, system_uptime)
     type(collector_shared_state), intent(inout) :: state
     type(cpu_topology_info), intent(in) :: topology
     type(cpu_core_info), intent(in) :: total_cpu
@@ -671,6 +687,7 @@ contains
     logical, intent(in) :: warming_up
     type(platform_memory_info), intent(in) :: memory
     type(load_average_info), intent(in) :: load_average
+    type(system_uptime_info), intent(in) :: system_uptime
     type(ftop_mutex_handle) :: mutex
     integer :: core_count
     integer :: physical_core_count
@@ -699,6 +716,8 @@ contains
     call publish_cpu_cores(state, core_cpus, core_count, warming_up)
     state%load_valid = merge(1_c_int, 0_c_int, load_average%valid)
     state%load_average = real(max(0.0_real64, load_average%values), c_double)
+    state%uptime_valid = merge(1_c_int, 0_c_int, system_uptime%valid)
+    state%uptime_seconds = int(max(0_int64, system_uptime%seconds), c_long_long)
     state%warming_up = merge(1_c_int, 0_c_int, warming_up)
     state%sample_count = state%sample_count + 1_c_int
     state%memory_valid = merge(1_c_int, 0_c_int, memory%valid)

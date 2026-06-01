@@ -82,6 +82,8 @@ contains
                  "collector valid core temperature must not be too high")
     call require(snapshot%cpu_total%load_valid, "collector load average must be valid")
     call require(all(snapshot%cpu_total%load_avg >= 0.0_real64), "collector load average must not be negative")
+    call require(snapshot%system_uptime_valid, "collector uptime must be valid")
+    call require(snapshot%system_uptime_seconds >= 0, "collector uptime must not be negative")
 
     call require(metrics%stop(), "collector stop failed")
     call require(.not. metrics%running(), "collector must stop running")

@@ -11,7 +11,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/sysctl.h>
+#include <sys/time.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 
 struct ftop_macos_processor_ticks {
@@ -544,6 +546,43 @@ int ftop_macos_load_average(double *loads, int *sys_errno) {
     return -1;
   }
 
+  return 0;
+}
+
+int ftop_macos_uptime_seconds(long long *uptime_seconds, int *sys_errno) {
+  struct timeval boottime;
+  size_t value_len;
+  time_t now;
+  long long uptime;
+
+  if (uptime_seconds == NULL || sys_errno == NULL) return -1;
+
+  *uptime_seconds = 0;
+  *sys_errno = 0;
+  memset(&boottime, 0, sizeof(boottime));
+  value_len = sizeof(boottime);
+  if (sysctlbyname("kern.boottime", &boottime, &value_len, NULL, 0) != 0) {
+    *sys_errno = errno;
+    return -1;
+  }
+  if (value_len < sizeof(boottime.tv_sec) || boottime.tv_sec <= 0) {
+    *sys_errno = EINVAL;
+    return -1;
+  }
+
+  now = time(NULL);
+  if (now == (time_t)-1) {
+    *sys_errno = errno != 0 ? errno : EINVAL;
+    return -1;
+  }
+
+  uptime = (long long)(now - boottime.tv_sec);
+  if (uptime < 0) {
+    *sys_errno = EINVAL;
+    return -1;
+  }
+
+  *uptime_seconds = uptime;
   return 0;
 }
 

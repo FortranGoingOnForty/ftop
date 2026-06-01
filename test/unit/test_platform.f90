@@ -8,7 +8,8 @@ program test_platform
     create_platform, &
     load_average_info, &
     memory_info, &
-    platform_backend
+    platform_backend, &
+    system_uptime_info
   implicit none
 
   class(platform_backend), allocatable :: backend
@@ -20,6 +21,7 @@ program test_platform
   type(cpu_core_info), allocatable :: cpu_metadata(:)
   type(memory_info) :: memory
   type(load_average_info) :: load_average
+  type(system_uptime_info) :: uptime
   integer :: cpu_count
   real(real64) :: usage
 
@@ -80,6 +82,10 @@ program test_platform
   load_average = backend%get_load_average()
   if (.not. load_average%valid) error stop "load average info must be valid"
   if (any(load_average%values < 0.0_real64)) error stop "load averages must not be negative"
+
+  uptime = backend%get_system_uptime()
+  if (.not. uptime%valid) error stop "system uptime must be valid"
+  if (uptime%seconds < 0) error stop "system uptime must not be negative"
 
 contains
 

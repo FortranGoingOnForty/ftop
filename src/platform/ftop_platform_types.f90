@@ -10,6 +10,7 @@ module ftop_platform_types
   public :: load_average_info
   public :: memory_info
   public :: platform_backend
+  public :: system_uptime_info
 
   type :: cpu_tick_sample
     logical :: valid = .false.
@@ -42,6 +43,11 @@ module ftop_platform_types
     real(real64) :: values(3) = 0.0_real64
   end type load_average_info
 
+  type :: system_uptime_info
+    logical :: valid = .false.
+    integer(int64) :: seconds = 0_int64
+  end type system_uptime_info
+
   type, abstract :: platform_backend
   contains
     procedure(get_cpu_count_interface), deferred :: get_cpu_count
@@ -51,6 +57,7 @@ module ftop_platform_types
     procedure(get_cpu_metadata_interface), deferred :: get_cpu_metadata
     procedure(get_memory_info_interface), deferred :: get_memory_info
     procedure(get_load_average_interface), deferred :: get_load_average
+    procedure(get_system_uptime_interface), deferred :: get_system_uptime
   end type platform_backend
 
   abstract interface
@@ -95,6 +102,12 @@ module ftop_platform_types
       class(platform_backend), intent(in) :: self
       type(load_average_info) :: info
     end function get_load_average_interface
+
+    function get_system_uptime_interface(self) result(info)
+      import :: platform_backend, system_uptime_info
+      class(platform_backend), intent(in) :: self
+      type(system_uptime_info) :: info
+    end function get_system_uptime_interface
   end interface
 
 contains

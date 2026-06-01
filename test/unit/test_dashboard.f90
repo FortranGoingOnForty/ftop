@@ -49,10 +49,12 @@ contains
     call require(index(text, "6.0 GiB / 16.0 GiB") > 0, "dashboard should render memory bytes")
     call require(index(text, "cores 4 threads 8") > 0, "dashboard should render cpu topology")
     call require(index(text, "Test CPU") > 0, "dashboard should render cpu model")
+    call require(index(text, "uptime 1d 02:03:04") > 0, "dashboard should render uptime")
     call require(index(text, "c0") > 0, "dashboard should render core labels")
     call require(index(text, "available 8.0 GiB") > 0, "dashboard should render available memory")
     call require(index(text, "swap 1.0 GiB / 2.0 GiB") > 0, "dashboard should render swap")
-    call require(index(text, "refresh 1000ms frame 7 samples 3") > 0, "dashboard should render footer")
+    call require(index(text, "refresh 1000ms frame 7 fps 1.0 samples 3") > 0, &
+                 "dashboard should render footer")
     call require(index(text, "ready") > 0, "dashboard should render status")
   end subroutine test_dashboard_renders_metrics
 
@@ -86,6 +88,8 @@ contains
     snapshot%running = .true.
     snapshot%warming_up = .false.
     snapshot%sample_count = 3
+    snapshot%system_uptime_valid = .true.
+    snapshot%system_uptime_seconds = 93784_int64
     snapshot%cpu_total%valid = .true.
     snapshot%cpu_total%usage_percent = 42.5_real64
     snapshot%cpu_total%load_valid = .true.
