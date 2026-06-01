@@ -94,6 +94,7 @@ add_library(
   src/shim/ftop_terminal_io.f90
   src/ftop_color.f90
   src/ftop_widgets.f90
+  src/ftop_layout.f90
   src/ftop_dashboard.f90
   src/ftop_app.f90
   src/widgets/ftop_text.f90
@@ -101,6 +102,8 @@ add_library(
   src/widgets/ftop_meter.f90
   src/widgets/ftop_sparkline.f90
   src/widgets/ftop_graph.f90
+  src/widgets/ftop_cpu.f90
+  src/widgets/ftop_memory.f90
   src/widgets/ftop_table.f90
   src/shim/ftop_dl.c
   src/shim/ftop_pthread.c

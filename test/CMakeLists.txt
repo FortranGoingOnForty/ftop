@@ -36,6 +36,11 @@ target_link_libraries(ftop_widgets_test PRIVATE ftop_core)
 
 add_test(NAME ftop_widgets COMMAND ftop_widgets_test)
 
+add_executable(ftop_layout_test unit/test_layout.f90)
+target_link_libraries(ftop_layout_test PRIVATE ftop_core)
+
+add_test(NAME ftop_layout COMMAND ftop_layout_test)
+
 add_executable(ftop_meter_test unit/test_meter.f90)
 target_link_libraries(ftop_meter_test PRIVATE ftop_core)
 

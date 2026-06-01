@@ -48,6 +48,7 @@ contains
     call require(index(text, "6.0 GiB / 16.0 GiB") > 0, "dashboard should render memory bytes")
     call require(index(text, "cores 4 threads 8") > 0, "dashboard should render cpu topology")
     call require(index(text, "Test CPU") > 0, "dashboard should render cpu model")
+    call require(index(text, "c0") > 0, "dashboard should render core labels")
     call require(index(text, "available 8.0 GiB") > 0, "dashboard should render available memory")
     call require(index(text, "swap 1.0 GiB / 2.0 GiB") > 0, "dashboard should render swap")
     call require(index(text, "refresh 1000ms frame 7 samples 3") > 0, "dashboard should render footer")
@@ -80,9 +81,20 @@ contains
     allocate(snapshot%cpu_cores(2))
     snapshot%cpu_cores(1)%valid = .true.
     snapshot%cpu_cores(1)%usage_percent = 25.0_real64
+    snapshot%cpu_cores(1)%freq_valid = .true.
+    snapshot%cpu_cores(1)%freq_mhz = 2400.0_real64
+    snapshot%cpu_cores(1)%temp_valid = .true.
+    snapshot%cpu_cores(1)%temp_c = 45.0_real64
     snapshot%cpu_cores(2)%valid = .true.
     snapshot%cpu_cores(2)%usage_percent = 75.0_real64
+    snapshot%cpu_cores(2)%freq_valid = .true.
+    snapshot%cpu_cores(2)%freq_mhz = 2600.0_real64
+    snapshot%cpu_cores(2)%temp_valid = .true.
+    snapshot%cpu_cores(2)%temp_c = 55.0_real64
     snapshot%cpu_usage_history = [10.0_real64, 20.0_real64, 30.0_real64, 42.5_real64]
+    allocate(snapshot%cpu_core_usage_history(2, 4))
+    snapshot%cpu_core_usage_history(1, :) = [10.0_real64, 15.0_real64, 20.0_real64, 25.0_real64]
+    snapshot%cpu_core_usage_history(2, :) = [40.0_real64, 50.0_real64, 65.0_real64, 75.0_real64]
 
     snapshot%memory%valid = .true.
     snapshot%memory%total_bytes = 16_int64 * GIB
