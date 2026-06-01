@@ -61,6 +61,13 @@ target_link_libraries(ftop_dashboard_test PRIVATE ftop_core)
 
 add_test(NAME ftop_dashboard COMMAND ftop_dashboard_test)
 
+add_executable(ftop_dashboard_snapshots_test unit/test_dashboard_snapshots.f90)
+target_link_libraries(ftop_dashboard_snapshots_test PRIVATE ftop_core)
+add_test(
+  NAME ftop_dashboard_snapshots
+  COMMAND ftop_dashboard_snapshots_test "${CMAKE_CURRENT_SOURCE_DIR}/golden"
+)
+
 add_executable(ftop_table_test unit/test_table.f90)
 target_link_libraries(ftop_table_test PRIVATE ftop_core)
 
