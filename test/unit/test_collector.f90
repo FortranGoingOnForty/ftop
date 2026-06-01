@@ -1,7 +1,15 @@
 program test_collector
+  use, intrinsic :: iso_c_binding, only : c_int
   use, intrinsic :: iso_fortran_env, only : real64
   use ftop_collector, only : FTOP_COLLECTOR_HISTORY_CAPACITY, collector, collector_snapshot
   implicit none
+
+  interface
+    integer(c_int) function c_usleep(useconds) bind(C, name="usleep")
+      import :: c_int
+      integer(c_int), value :: useconds
+    end function c_usleep
+  end interface
 
   call test_collector_lifecycle()
   call test_collector_restart()
@@ -213,6 +221,7 @@ contains
       if (rate <= 0) return
       elapsed_ms = int((real(current_count - start_count) / real(rate)) * 1000.0)
       if (elapsed_ms > 2000) return
+      call wait_poll_interval()
     end do
   end function wait_for_snapshot
 
@@ -234,6 +243,7 @@ contains
       if (rate <= 0) return
       elapsed_ms = int((real(current_count - start_count) / real(rate)) * 1000.0)
       if (elapsed_ms > 2000) return
+      call wait_poll_interval()
     end do
   end function wait_for_later_snapshot
 
@@ -255,6 +265,7 @@ contains
       if (rate <= 0) return
       elapsed_ms = int((real(current_count - start_count) / real(rate)) * 1000.0)
       if (elapsed_ms > 10000) return
+      call wait_poll_interval()
     end do
   end function wait_for_sample_count
 
@@ -272,8 +283,15 @@ contains
       call system_clock(current_count)
       if (elapsed_milliseconds(start_count, rate, current_count) >= target_elapsed_ms) return
       if (rate <= 0) return
+      call wait_poll_interval()
     end do
   end function wait_for_elapsed_snapshot
+
+  subroutine wait_poll_interval()
+    integer(c_int) :: rc
+
+    rc = c_usleep(1000_c_int)
+  end subroutine wait_poll_interval
 
   integer function elapsed_milliseconds(start_count, rate, current_count) result(elapsed_ms)
     integer, intent(in) :: start_count
