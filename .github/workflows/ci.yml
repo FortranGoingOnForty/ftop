@@ -13,6 +13,7 @@ env:
   FGOF_DEPENDENCIES: >-
     fgof-temp fgof-pty fgof-screen fgof-termios fgof-keys fgof-lineedit
     fgof-fs fgof-process fgof-watch fgof-state fgof-cache fgof-expect
+    fgof-toml
 
 jobs:
   linux:

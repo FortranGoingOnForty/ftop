@@ -50,6 +50,7 @@ ftop_add_fgof_dependency(fgof-watch fgof::watch)
 ftop_add_fgof_dependency(fgof-state fgof::state)
 ftop_add_fgof_dependency(fgof-cache fgof::cache)
 ftop_add_fgof_dependency(fgof-expect fgof::expect)
+ftop_add_fgof_dependency(fgof-toml fgof::toml)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   set(FTOP_PLATFORM "linux")
@@ -131,6 +132,7 @@ target_link_libraries(
     fgof::lineedit
     fgof::cache
     fgof::expect
+    fgof::toml
     ${FTOP_PLATFORM_LIBS}
 )
 
