@@ -25,6 +25,7 @@ struct ftop_freebsd_process_info {
   int ppid;
   int uid;
   int state;
+  int jid;
   char command[FTOP_FREEBSD_COMMAND_LEN];
   long long mem_rss_bytes;
   long long mem_virt_bytes;
@@ -411,6 +412,7 @@ int ftop_freebsd_kvm_getprocs(
     buffer[i].ppid = (int)processes[i].ki_ppid;
     buffer[i].uid = (int)processes[i].ki_uid;
     buffer[i].state = (int)processes[i].ki_stat;
+    buffer[i].jid = processes[i].ki_jid > 0 ? (int)processes[i].ki_jid : 0;
     ftop_copy_process_command(buffer[i].command, processes[i].ki_comm);
     buffer[i].mem_rss_bytes = processes[i].ki_rssize > 0 ? (long long)processes[i].ki_rssize * page_size : 0;
     buffer[i].mem_virt_bytes = processes[i].ki_size > 0 ? (long long)processes[i].ki_size : 0;

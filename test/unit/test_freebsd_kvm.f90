@@ -26,6 +26,7 @@ program test_freebsd_kvm
   found_current_process = .false.
   do i = 1, process_count
     if (processes(i)%pid < 0) error stop "kvm_getprocs returned invalid pid"
+    if (processes(i)%jid < 0) error stop "kvm_getprocs returned invalid jail id"
     if (processes(i)%pid == current_pid) found_current_process = .true.
   end do
   if (.not. found_current_process) error stop "kvm_getprocs did not include current process"

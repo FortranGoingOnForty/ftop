@@ -40,6 +40,7 @@ module ftop_platform
     integer(c_int) :: ppid
     integer(c_int) :: uid
     integer(c_int) :: state
+    integer(c_int) :: jid
     character(kind=c_char) :: command(FREEBSD_PROCESS_COMMAND_LEN)
     integer(c_long_long) :: mem_rss_bytes
     integer(c_long_long) :: mem_virt_bytes
@@ -493,6 +494,7 @@ contains
     process%pid = int(max(0_c_int, raw%pid))
     process%ppid = int(max(0_c_int, raw%ppid))
     process%uid = int(max(0_c_int, raw%uid))
+    process%jid = int(max(0_c_int, raw%jid))
     call assign_process_user(process)
     process%state = freebsd_state_label(int(raw%state))
     call c_chars_to_string(raw%command, command)
