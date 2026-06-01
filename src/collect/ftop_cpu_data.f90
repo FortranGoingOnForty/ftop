@@ -82,7 +82,11 @@ contains
     if (cpu_state_rolled_over(previous, current)) return
 
     total_delta = cpu_state_total_ticks(current) - cpu_state_total_ticks(previous)
-    if (total_delta <= 0_int64) return
+    if (total_delta == 0_int64) then
+      info%valid = .true.
+      return
+    end if
+    if (total_delta < 0_int64) return
 
     idle_delta = current%idle - previous%idle
     iowait_delta = current%iowait - previous%iowait

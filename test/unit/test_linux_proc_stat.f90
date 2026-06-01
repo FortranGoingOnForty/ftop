@@ -8,6 +8,7 @@ program test_linux_proc_stat
   call test_parse_partial_cpu_line()
   call test_reject_invalid_cpu_line()
   call test_cpu_state_delta_percentages()
+  call test_cpu_state_delta_no_change_is_zero_usage()
   call test_cpu_state_rollover_is_invalid()
 
 contains
@@ -80,6 +81,24 @@ contains
     call require_close(info%system_percent, 20.0_real64, "CPU system percent mismatch")
     call require_close(info%iowait_percent, 10.0_real64, "CPU iowait percent mismatch")
   end subroutine test_cpu_state_delta_percentages
+
+  subroutine test_cpu_state_delta_no_change_is_zero_usage()
+    type(cpu_state_ticks) :: previous
+    type(cpu_state_ticks) :: current
+    type(cpu_core_info) :: info
+
+    previous%valid = .true.
+    previous%user = 100_int64
+    previous%idle = 900_int64
+    current = previous
+
+    info = cpu_state_delta_info(previous, current)
+    call require(info%valid, "unchanged CPU delta must be valid")
+    call require_close(info%usage_percent, 0.0_real64, "unchanged CPU usage must be zero")
+    call require_close(info%user_percent, 0.0_real64, "unchanged CPU user must be zero")
+    call require_close(info%system_percent, 0.0_real64, "unchanged CPU system must be zero")
+    call require_close(info%iowait_percent, 0.0_real64, "unchanged CPU iowait must be zero")
+  end subroutine test_cpu_state_delta_no_change_is_zero_usage
 
   subroutine test_cpu_state_rollover_is_invalid()
     type(cpu_state_ticks) :: previous

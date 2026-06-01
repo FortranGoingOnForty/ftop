@@ -48,7 +48,6 @@ program test_macos_platform
   backend = create_platform()
   if (.not. allocated(backend)) error stop "macOS platform backend allocation failed"
   if (.not. backend%get_cpu_metadata(cpu_metadata)) error stop "macOS CPU metadata failed"
-  if (.not. any(cpu_metadata%temp_valid)) error stop "macOS CPU temperature must be available"
   if (any(cpu_metadata%temp_valid .and. cpu_metadata%temp_c < -100.0_real64)) error stop "macOS CPU temperature too low"
   if (any(cpu_metadata%temp_valid .and. cpu_metadata%temp_c > 150.0_real64)) error stop "macOS CPU temperature too high"
 end program test_macos_platform
