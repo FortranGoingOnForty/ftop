@@ -16,6 +16,7 @@ module ftop_platform
     process_table, &
     system_uptime_info
   use ftop_proc_data, only : &
+    PROCESS_CGROUP_LEN, &
     PROCESS_COMMAND_LEN, &
     PROCESS_NAME_LEN, &
     PROCESS_USER_LEN, &
@@ -30,6 +31,8 @@ module ftop_platform
   integer, parameter :: LINUX_PROCESS_CAPACITY = 4096
   integer, parameter :: LINUX_PROCESS_STAT_LEN = 512
   integer, parameter :: LINUX_PROCESS_STATUS_LEN = 2048
+  integer, parameter :: LINUX_PROCESS_IO_LEN = 512
+  integer, parameter :: LINUX_PROCESS_CGROUP_RAW_LEN = 1024
   integer, parameter :: LINUX_CPU_FREQ_BUFFER_LEN = 64
   integer, parameter, public :: LINUX_HWMON_NAME_LEN = 128
   integer, parameter, public :: LINUX_HWMON_PATH_LEN = 256
@@ -50,6 +53,10 @@ module ftop_platform
     integer(c_size_t) :: status_len
     character(kind=c_char) :: cmdline(PROCESS_COMMAND_LEN)
     integer(c_size_t) :: cmdline_len
+    character(kind=c_char) :: io(LINUX_PROCESS_IO_LEN)
+    integer(c_size_t) :: io_len
+    character(kind=c_char) :: cgroup(LINUX_PROCESS_CGROUP_RAW_LEN)
+    integer(c_size_t) :: cgroup_len
   end type linux_process_raw
 
   type, extends(platform_backend) :: linux_backend
@@ -426,6 +433,8 @@ contains
     integer(int64), intent(in), optional :: memory_total_bytes
     type(process_info) :: process
     character(len=:), allocatable :: cmdline
+    character(len=:), allocatable :: cgroup_text
+    character(len=:), allocatable :: io_text
     character(len=:), allocatable :: stat_text
     character(len=:), allocatable :: status_text
 
@@ -434,9 +443,13 @@ contains
     call c_chars_to_string(raw%stat, int(raw%stat_len), stat_text)
     call c_chars_to_string(raw%status, int(raw%status_len), status_text)
     call c_cmdline_to_string(raw%cmdline, int(raw%cmdline_len), cmdline)
+    call c_chars_to_string(raw%io, int(raw%io_len), io_text)
+    call c_chars_to_string(raw%cgroup, int(raw%cgroup_len), cgroup_text)
 
     call parse_linux_process_stat(stat_text, page_size, clock_ticks_per_second, process)
     call parse_linux_process_status(status_text, process)
+    call parse_linux_process_io(io_text, process)
+    call assign_linux_process_cgroup(cgroup_text, process)
     call assign_process_user(process)
     if (len_trim(cmdline) > 0) process%command = bounded_text(cmdline, len(process%command))
     if (len_trim(process%command) == 0) process%command = process%name
@@ -509,6 +522,43 @@ contains
     if (linux_status_int(status_text, "Threads:", value)) process%threads = max(0, value)
   end subroutine parse_linux_process_status
 
+  subroutine parse_linux_process_io(io_text, process)
+    character(len=*), intent(in) :: io_text
+    type(process_info), intent(inout) :: process
+    integer(int64) :: value
+
+    if (linux_text_int64(io_text, "read_bytes:", value)) process%io_read_bytes = max(0_int64, value)
+    if (linux_text_int64(io_text, "write_bytes:", value)) process%io_write_bytes = max(0_int64, value)
+  end subroutine parse_linux_process_io
+
+  subroutine assign_linux_process_cgroup(cgroup_text, process)
+    character(len=*), intent(in) :: cgroup_text
+    type(process_info), intent(inout) :: process
+    character(len=:), allocatable :: line
+    character(len=:), allocatable :: path
+    integer :: line_end
+    integer :: line_start
+    integer :: separator
+
+    line_start = 1
+    do while (line_start <= len(cgroup_text))
+      line_end = line_start
+      do while (line_end <= len(cgroup_text) .and. cgroup_text(line_end:line_end) /= new_line("a"))
+        line_end = line_end + 1
+      end do
+      line = cgroup_text(line_start:max(line_start, line_end - 1))
+      separator = last_index(line, ":")
+      if (separator > 0 .and. separator < len_trim(line)) then
+        path = trim(line(separator + 1:))
+        if (len_trim(path) > 0) then
+          process%cgroup = bounded_text(path, PROCESS_CGROUP_LEN)
+          return
+        end if
+      end if
+      line_start = line_end + 1
+    end do
+  end subroutine assign_linux_process_cgroup
+
   logical function linux_status_int(status_text, key, value) result(found)
     character(len=*), intent(in) :: status_text
     character(len=*), intent(in) :: key
@@ -537,6 +587,35 @@ contains
       line_start = line_end + 1
     end do
   end function linux_status_int
+
+  logical function linux_text_int64(text, key, value) result(found)
+    character(len=*), intent(in) :: text
+    character(len=*), intent(in) :: key
+    integer(int64), intent(out) :: value
+    character(len=:), allocatable :: line
+    integer :: line_end
+    integer :: line_start
+    integer :: read_status
+
+    value = 0_int64
+    found = .false.
+    line_start = 1
+    do while (line_start <= len(text))
+      line_end = line_start
+      do while (line_end <= len(text) .and. text(line_end:line_end) /= new_line("a"))
+        line_end = line_end + 1
+      end do
+      line = text(line_start:max(line_start, line_end - 1))
+      if (len_trim(line) > len(key)) then
+        if (line(1:len(key)) == key) then
+          read(line(len(key) + 1:), *, iostat=read_status) value
+          found = read_status == 0
+          return
+        end if
+      end if
+      line_start = line_end + 1
+    end do
+  end function linux_text_int64
 
   function linux_state_label(state) result(label)
     character(len=1), intent(in) :: state

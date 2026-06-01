@@ -15,6 +15,8 @@
 #define FTOP_LINUX_PROCESS_COMMAND_LEN 256
 #define FTOP_LINUX_PROCESS_STAT_LEN 512
 #define FTOP_LINUX_PROCESS_STATUS_LEN 2048
+#define FTOP_LINUX_PROCESS_IO_LEN 512
+#define FTOP_LINUX_PROCESS_CGROUP_LEN 1024
 #define FTOP_USER_LOOKUP_BUFFER_LEN 16384
 
 struct ftop_linux_hwmon_sensor {
@@ -30,6 +32,10 @@ struct ftop_linux_process_raw {
   size_t status_len;
   char cmdline[FTOP_LINUX_PROCESS_COMMAND_LEN];
   size_t cmdline_len;
+  char io[FTOP_LINUX_PROCESS_IO_LEN];
+  size_t io_len;
+  char cgroup[FTOP_LINUX_PROCESS_CGROUP_LEN];
+  size_t cgroup_len;
 };
 
 static int ftop_read_file_into_buffer(const char *path, char *buffer, size_t buffer_len, size_t *value_len, int *sys_errno) {
@@ -127,6 +133,8 @@ int ftop_linux_process_snapshot(
     if (ftop_linux_read_process_file(pid, "stat", process.stat, sizeof(process.stat), &process.stat_len) != 0) continue;
     (void)ftop_linux_read_process_file(pid, "status", process.status, sizeof(process.status), &process.status_len);
     (void)ftop_linux_read_process_file(pid, "cmdline", process.cmdline, sizeof(process.cmdline), &process.cmdline_len);
+    (void)ftop_linux_read_process_file(pid, "io", process.io, sizeof(process.io), &process.io_len);
+    (void)ftop_linux_read_process_file(pid, "cgroup", process.cgroup, sizeof(process.cgroup), &process.cgroup_len);
     buffer[count] = process;
     ++count;
   }

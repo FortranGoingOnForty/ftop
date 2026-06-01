@@ -1,6 +1,6 @@
 program test_linux_platform
   use, intrinsic :: iso_c_binding, only : c_null_char
-  use, intrinsic :: iso_fortran_env, only : real64
+  use, intrinsic :: iso_fortran_env, only : int64, real64
   use ftop_cpu_data, only : cpu_state_ticks, cpu_state_total_ticks
   use ftop_mem_data, only : metric_memory_info => memory_info, memory_usage_percent
   use ftop_platform, only : &
@@ -11,7 +11,10 @@ program test_linux_platform
     linux_hwmon_sensor, &
     load_average_info, &
     linux_load_average_snapshot, &
-    linux_memory_snapshot
+    linux_memory_snapshot, &
+    linux_process_snapshot, &
+    process_table
+  use ftop_signal, only : ftop_current_pid
   implicit none
 
   type(linux_hwmon_sensor), allocatable :: sensors(:)
@@ -19,11 +22,14 @@ program test_linux_platform
   type(cpu_state_ticks), allocatable :: cores(:)
   type(load_average_info) :: load_average
   type(metric_memory_info) :: memory
+  type(process_table) :: processes
   character(len=128) :: processor_id
+  integer :: current_pid
   integer :: i
   integer :: processor_count
   integer :: processor_id_len
   integer :: sensor_count
+  logical :: found_current_process
 
   if (.not. linux_cpuinfo_field_count("processor", processor_count)) error stop "processor count failed"
   if (processor_count <= 0) error stop "processor count must be positive"
@@ -62,4 +68,23 @@ program test_linux_platform
   if (.not. linux_load_average_snapshot(load_average)) error stop "Linux load average snapshot failed"
   if (.not. load_average%valid) error stop "Linux load average snapshot must be valid"
   if (any(load_average%values < 0.0_real64)) error stop "Linux load averages must not be negative"
+
+  if (.not. linux_process_snapshot(processes, memory%total_bytes)) error stop "Linux process snapshot failed"
+  if (.not. processes%valid) error stop "Linux process snapshot must be valid"
+  if (.not. allocated(processes%items)) error stop "Linux process snapshot items must be allocated"
+  if (size(processes%items) <= 0) error stop "Linux process snapshot must include processes"
+  if (any(processes%items%io_read_bytes < 0_int64)) error stop "Linux process read bytes must not be negative"
+  if (any(processes%items%io_write_bytes < 0_int64)) error stop "Linux process write bytes must not be negative"
+  if (.not. any(len_trim(processes%items%cgroup) > 0)) error stop "Linux process snapshot must include cgroups"
+
+  current_pid = ftop_current_pid()
+  found_current_process = .false.
+  do i = 1, size(processes%items)
+    if (processes%items(i)%pid /= current_pid) cycle
+    found_current_process = .true.
+    if (len_trim(processes%items(i)%cgroup) <= 0) error stop "current Linux process cgroup must not be empty"
+    if (processes%items(i)%io_read_bytes < 0_int64) error stop "current Linux process read bytes must not be negative"
+    if (processes%items(i)%io_write_bytes < 0_int64) error stop "current Linux process write bytes must not be negative"
+  end do
+  if (.not. found_current_process) error stop "Linux process snapshot must include current process"
 end program test_linux_platform
