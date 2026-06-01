@@ -23,29 +23,42 @@ module ftop_dashboard
 
 contains
 
-  subroutine render_dashboard(buffer, snapshot, refresh_ms, frame_count, status_text, grid)
+  subroutine render_dashboard(buffer, snapshot, refresh_ms, frame_count, status_text, grid, focused_widget, zoomed)
     type(screen_buffer), intent(inout) :: buffer
     type(collector_snapshot), intent(in) :: snapshot
     integer, intent(in) :: refresh_ms
     integer, intent(in) :: frame_count
     character(len=*), intent(in) :: status_text
     type(layout_grid), intent(in), optional :: grid
+    character(len=*), intent(in), optional :: focused_widget
+    logical, intent(in), optional :: zoomed
     type(dashboard_layout) :: layout
     type(screen_style) :: border_style
+    type(screen_style) :: cpu_border_style
     type(screen_style) :: title_style
     type(screen_style) :: dim_style
+    type(screen_style) :: focus_style
+    type(screen_style) :: memory_border_style
     type(widget_rect) :: title_rect
+    type(widget_rect) :: zoom_rect
+    character(len=:), allocatable :: focus
     integer :: height
     integer :: title_col
     integer :: width
+    logical :: is_zoomed
 
     width = buffer%size%width
     height = buffer%size%height
     if (width <= 0 .or. height <= 0) return
 
     border_style = style_from_rgb(fg=COLOR_UI_BORDER)
+    focus_style = style_from_rgb(fg=COLOR_UI_ACCENT, bold=.true.)
     title_style = style_from_rgb(fg=COLOR_UI_ACCENT, bg=COLOR_UI_PANEL, bold=.true.)
     dim_style = style_from_rgb(fg=COLOR_UI_DIM)
+    focus = ""
+    if (present(focused_widget)) focus = trim(focused_widget)
+    is_zoomed = .false.
+    if (present(zoomed)) is_zoomed = zoomed .and. len(focus) > 0
 
     call clear_screen(buffer)
     buffer%cursor_visible = .false.
@@ -62,23 +75,51 @@ contains
     end if
     call draw_box(buffer, layout%frame, BOX_STYLE_DOUBLE, border_style, "ftop", title_style, TEXT_ALIGN_CENTER)
 
-    if (layout%cpu_panel%height >= 3) then
-      call render_cpu_panel(buffer, layout%cpu_panel, snapshot, border_style, title_style, dim_style)
-    end if
-    if (layout%memory_panel%height >= 3) then
-      call render_memory_panel(buffer, layout%memory_panel, snapshot, border_style, title_style, dim_style)
+    if (is_zoomed) then
+      zoom_rect = widget_rect(3, 3, max(0, width - 4), max(0, height - 5))
+      call render_dashboard_panel(buffer, zoom_rect, focus, snapshot, focus_style, title_style, dim_style)
+    else
+      cpu_border_style = border_style
+      memory_border_style = border_style
+      if (focus == "cpu") cpu_border_style = focus_style
+      if (focus == "memory") memory_border_style = focus_style
+      if (layout%cpu_panel%height >= 3) then
+        call render_cpu_panel(buffer, layout%cpu_panel, snapshot, cpu_border_style, title_style, dim_style)
+      end if
+      if (layout%memory_panel%height >= 3) then
+        call render_memory_panel(buffer, layout%memory_panel, snapshot, memory_border_style, title_style, dim_style)
+      end if
     end if
 
-    if (layout%cpu_panel%height < 3 .or. layout%memory_panel%height < 3) then
+    if (.not. is_zoomed .and. (layout%cpu_panel%height < 3 .or. layout%memory_panel%height < 3)) then
       title_col = max(2, (width - len_trim("CPU / Memory")) / 2 + 1)
       title_rect = widget_rect(max(2, height / 2), title_col, width - title_col, 1)
       call render_text(buffer, title_rect, "CPU / Memory", title_style)
     end if
 
-    call render_footer(buffer, layout%footer, snapshot, refresh_ms, frame_count, status_text, dim_style)
+    call render_footer(buffer, layout%footer, snapshot, refresh_ms, frame_count, status_text, &
+                       dim_style, focus, is_zoomed)
   end subroutine render_dashboard
 
-  subroutine render_footer(buffer, footer, snapshot, refresh_ms, frame_count, status_text, dim_style)
+  subroutine render_dashboard_panel(buffer, rect, widget, snapshot, border_style, title_style, dim_style)
+    type(screen_buffer), intent(inout) :: buffer
+    type(widget_rect), intent(in) :: rect
+    character(len=*), intent(in) :: widget
+    type(collector_snapshot), intent(in) :: snapshot
+    type(screen_style), intent(in) :: border_style
+    type(screen_style), intent(in) :: title_style
+    type(screen_style), intent(in) :: dim_style
+
+    if (rect%height < 3 .or. rect%width <= 0) return
+    select case (trim(widget))
+    case ("cpu")
+      call render_cpu_panel(buffer, rect, snapshot, border_style, title_style, dim_style)
+    case ("memory")
+      call render_memory_panel(buffer, rect, snapshot, border_style, title_style, dim_style)
+    end select
+  end subroutine render_dashboard_panel
+
+  subroutine render_footer(buffer, footer, snapshot, refresh_ms, frame_count, status_text, dim_style, focused_widget, zoomed)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: footer
     type(collector_snapshot), intent(in) :: snapshot
@@ -86,13 +127,15 @@ contains
     integer, intent(in) :: frame_count
     character(len=*), intent(in) :: status_text
     type(screen_style), intent(in) :: dim_style
+    character(len=*), intent(in) :: focused_widget
+    logical, intent(in) :: zoomed
     type(widget_rect) :: line
     character(len=:), allocatable :: status
 
     if (footer%width <= 0 .or. footer%height <= 0) return
 
     line = widget_rect(footer%row, footer%col, footer%width, 1)
-    call render_text(buffer, line, footer_text(snapshot, refresh_ms, frame_count), dim_style)
+    call render_text(buffer, line, footer_text(snapshot, refresh_ms, frame_count, focused_widget, zoomed), dim_style)
 
     if (footer%height < 2) return
     status = trim(status_text)
@@ -101,11 +144,14 @@ contains
     call render_text(buffer, line, status, dim_style)
   end subroutine render_footer
 
-  function footer_text(snapshot, refresh_ms, frame_count) result(text)
+  function footer_text(snapshot, refresh_ms, frame_count, focused_widget, zoomed) result(text)
     type(collector_snapshot), intent(in) :: snapshot
     integer, intent(in) :: refresh_ms
     integer, intent(in) :: frame_count
+    character(len=*), intent(in) :: focused_widget
+    logical, intent(in) :: zoomed
     character(len=:), allocatable :: text
+    character(len=:), allocatable :: focus_text
     character(len=:), allocatable :: running_text
 
     if (snapshot%running) then
@@ -113,9 +159,18 @@ contains
     else
       running_text = "collector idle"
     end if
+    if (len_trim(focused_widget) > 0) then
+      if (zoomed) then
+        focus_text = " zoom " // trim(focused_widget)
+      else
+        focus_text = " focus " // trim(focused_widget)
+      end if
+    else
+      focus_text = ""
+    end if
     text = "refresh " // integer_text(refresh_ms) // "ms frame " // integer_text(frame_count) // &
            " samples " // integer_text(snapshot%sample_count) // "  " // running_text // &
-           "  q/Ctrl+C quit Ctrl+Z suspend"
+           focus_text // "  Tab focus z zoom q quit Ctrl+Z suspend"
   end function footer_text
 
   function integer_text(value) result(text)

@@ -10,6 +10,7 @@ program test_dashboard
 
   call test_default_layout()
   call test_dashboard_renders_metrics()
+  call test_dashboard_renders_zoomed_widget()
   call test_tiny_dashboard()
 
 contains
@@ -54,6 +55,21 @@ contains
     call require(index(text, "refresh 1000ms frame 7 samples 3") > 0, "dashboard should render footer")
     call require(index(text, "ready") > 0, "dashboard should render status")
   end subroutine test_dashboard_renders_metrics
+
+  subroutine test_dashboard_renders_zoomed_widget()
+    type(screen_buffer) :: buffer
+    type(collector_snapshot) :: snapshot
+    character(len=:), allocatable :: text
+
+    snapshot = sample_snapshot()
+    buffer = allocate_screen(80, 24)
+    call render_dashboard(buffer, snapshot, 1000, 7, "zoom-test", focused_widget="memory", zoomed=.true.)
+    text = buffer_text(buffer)
+
+    call require(index(text, "Memory") > 0, "zoomed dashboard should render focused memory widget")
+    call require(index(text, "CPU 42.5%") == 0, "zoomed dashboard should hide unfocused cpu widget")
+    call require(index(text, "zoom memory") > 0, "zoomed dashboard should render zoom status")
+  end subroutine test_dashboard_renders_zoomed_widget
 
   subroutine test_tiny_dashboard()
     type(screen_buffer) :: buffer

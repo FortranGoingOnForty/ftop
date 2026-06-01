@@ -12,6 +12,7 @@ module ftop_app
     FGOF_KEY_ESCAPE, &
     FGOF_KEY_LEFT, &
     FGOF_KEY_RIGHT, &
+    FGOF_KEY_TAB, &
     FGOF_KEY_UP, &
     key_decoder_state, &
     key_event
@@ -24,7 +25,13 @@ module ftop_app
   use fgof_termios_types, only : FGOF_TERMIOS_ERR_NONE, terminal_size, termios_guard
   use ftop_collector, only : collector, collector_snapshot
   use ftop_dashboard, only : render_dashboard
-  use ftop_layout, only : layout_error, layout_grid, parse_layout_file
+  use ftop_layout, only : &
+    default_dashboard_grid, &
+    layout_error, &
+    layout_focus_count, &
+    layout_focus_widget, &
+    layout_grid, &
+    parse_layout_file
   use ftop_signal, only : &
     FTOP_SIGNAL_CONT, &
     FTOP_SIGNAL_INT, &
@@ -60,12 +67,14 @@ module ftop_app
     character(len=:), allocatable :: status_text
     integer :: refresh_ms = DEFAULT_REFRESH_MS
     integer :: frame_count = 0
+    integer :: focus_index = 1
     integer :: last_refresh_count = 0
     integer :: clock_rate = 0
     logical :: guard_bound = .false.
     logical :: terminal_started = .false.
     logical :: collector_started = .false.
     logical :: layout_loaded = .false.
+    logical :: zoomed = .false.
     logical :: running = .true.
     logical :: needs_full_render = .true.
     logical :: dirty = .true.
@@ -214,15 +223,18 @@ contains
   subroutine draw_frame(session)
     type(terminal_session), intent(inout) :: session
     type(collector_snapshot) :: snapshot
+    character(len=:), allocatable :: focus
 
     if (allocated(session%metrics)) then
       if (session%metrics%initialized()) snapshot = session%metrics%snapshot()
     end if
+    focus = focused_widget_name(session)
     if (session%layout_loaded) then
       call render_dashboard(session%current, snapshot, session%refresh_ms, session%frame_count, &
-                            session%status_text, session%layout)
+                            session%status_text, session%layout, focus, session%zoomed)
     else
-      call render_dashboard(session%current, snapshot, session%refresh_ms, session%frame_count, session%status_text)
+      call render_dashboard(session%current, snapshot, session%refresh_ms, session%frame_count, &
+                            session%status_text, focused_widget=focus, zoomed=session%zoomed)
     end if
   end subroutine draw_frame
 
@@ -313,6 +325,75 @@ contains
     inquire(file=path, exist=exists)
   end function path_exists
 
+  integer function current_focus_count(session) result(count)
+    type(terminal_session), intent(in) :: session
+    type(layout_grid) :: fallback_grid
+
+    if (session%layout_loaded) then
+      count = layout_focus_count(session%layout)
+    else
+      fallback_grid = default_dashboard_grid(stacked=session%current%size%width < 72)
+      count = layout_focus_count(fallback_grid)
+    end if
+  end function current_focus_count
+
+  function focused_widget_name(session) result(widget)
+    type(terminal_session), intent(in) :: session
+    character(len=:), allocatable :: widget
+    type(layout_grid) :: fallback_grid
+    integer :: count
+    integer :: index
+
+    widget = ""
+    count = current_focus_count(session)
+    if (count <= 0) return
+    index = max(1, min(count, session%focus_index))
+    if (session%layout_loaded) then
+      widget = layout_focus_widget(session%layout, index)
+    else
+      fallback_grid = default_dashboard_grid(stacked=session%current%size%width < 72)
+      widget = layout_focus_widget(fallback_grid, index)
+    end if
+  end function focused_widget_name
+
+  subroutine cycle_focus(session, direction)
+    type(terminal_session), intent(inout) :: session
+    integer, intent(in) :: direction
+    integer :: count
+
+    if (session%zoomed) then
+      call set_status(session, "zoom active")
+      return
+    end if
+
+    count = current_focus_count(session)
+    if (count <= 0) then
+      call set_status(session, "no focusable widgets")
+      return
+    end if
+
+    session%focus_index = modulo(session%focus_index - 1 + direction, count) + 1
+    call set_status(session, "focus " // focused_widget_name(session))
+  end subroutine cycle_focus
+
+  subroutine toggle_zoom(session)
+    type(terminal_session), intent(inout) :: session
+    character(len=:), allocatable :: focus
+
+    focus = focused_widget_name(session)
+    if (len(focus) == 0) then
+      call set_status(session, "no focusable widgets")
+      return
+    end if
+
+    session%zoomed = .not. session%zoomed
+    if (session%zoomed) then
+      call set_status(session, "zoom " // focus)
+    else
+      call set_status(session, "grid " // focus)
+    end if
+  end subroutine toggle_zoom
+
   subroutine handle_input(session, bytes)
     type(terminal_session), intent(inout) :: session
     character(len=*), intent(in) :: bytes
@@ -351,6 +432,8 @@ contains
         session%running = .false.
       else if (event%modifiers%ctrl .and. text == "z") then
         call suspend_session(session)
+      else if (.not. event%modifiers%ctrl .and. text == "z") then
+        call toggle_zoom(session)
       else if (.not. event%modifiers%ctrl .and. text == "q") then
         call set_status(session, "q")
         session%running = .false.
@@ -365,7 +448,13 @@ contains
     case (FGOF_KEY_UP, FGOF_KEY_DOWN, FGOF_KEY_LEFT, FGOF_KEY_RIGHT)
       call set_status(session, "arrow: " // event%key_name)
     case (FGOF_KEY_ENTER)
-      call set_status(session, "enter")
+      call toggle_zoom(session)
+    case (FGOF_KEY_TAB)
+      if (event%modifiers%shift) then
+        call cycle_focus(session, -1)
+      else
+        call cycle_focus(session, 1)
+      end if
     case (FGOF_KEY_ESCAPE)
       call set_status(session, "escape")
     case default

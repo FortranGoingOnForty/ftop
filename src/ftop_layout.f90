@@ -17,6 +17,7 @@ module ftop_layout
 
   character(len=*), parameter, public :: LAYOUT_WIDGET_CPU = "cpu"
   character(len=*), parameter, public :: LAYOUT_WIDGET_MEMORY = "memory"
+  character(len=*), parameter, public :: LAYOUT_WIDGET_PROCESS = "process"
 
   type, public :: layout_column
     character(len=:), allocatable :: widget
@@ -57,6 +58,10 @@ module ftop_layout
   public :: default_dashboard_layout
   public :: default_dashboard_grid
   public :: distribute_weighted_space
+  public :: layout_focus_count
+  public :: layout_focus_widget
+  public :: layout_widget_registered
+  public :: layout_widget_renderable
   public :: make_layout_column
   public :: make_layout_row
   public :: parse_layout_file
@@ -280,6 +285,12 @@ contains
                             " column " // integer_text(column_index) // " widget cannot be empty")
       return
     end if
+    if (.not. layout_widget_registered(column%widget)) then
+      call set_layout_error(error, "layout row " // integer_text(row_index) // &
+                            " column " // integer_text(column_index) // &
+                            " unknown widget " // column%widget)
+      return
+    end if
     column%weight = integer_field(column_value, "weight", 1, error)
     if (error%failed) return
     column%min_size%width = integer_field(column_value, "min_width", 0, error)
@@ -426,6 +437,69 @@ contains
       height = max(height, row%columns(col)%min_size%height)
     end do
   end function row_min_height
+
+  logical function layout_widget_registered(widget) result(registered)
+    character(len=*), intent(in) :: widget
+
+    select case (trim(widget))
+    case (LAYOUT_WIDGET_CPU, LAYOUT_WIDGET_MEMORY, LAYOUT_WIDGET_PROCESS)
+      registered = .true.
+    case default
+      registered = .false.
+    end select
+  end function layout_widget_registered
+
+  logical function layout_widget_renderable(widget) result(renderable)
+    character(len=*), intent(in) :: widget
+
+    select case (trim(widget))
+    case (LAYOUT_WIDGET_CPU, LAYOUT_WIDGET_MEMORY)
+      renderable = .true.
+    case default
+      renderable = .false.
+    end select
+  end function layout_widget_renderable
+
+  integer function layout_focus_count(grid) result(count)
+    type(layout_grid), intent(in) :: grid
+    integer :: col
+    integer :: row
+
+    count = 0
+    if (.not. allocated(grid%rows)) return
+    do row = 1, size(grid%rows)
+      if (.not. allocated(grid%rows(row)%columns)) cycle
+      do col = 1, size(grid%rows(row)%columns)
+        if (layout_widget_renderable(grid%rows(row)%columns(col)%widget)) count = count + 1
+      end do
+    end do
+  end function layout_focus_count
+
+  function layout_focus_widget(grid, focus_index) result(widget)
+    type(layout_grid), intent(in) :: grid
+    integer, intent(in) :: focus_index
+    character(len=:), allocatable :: widget
+    integer :: col
+    integer :: current
+    integer :: row
+    integer :: target
+
+    widget = ""
+    target = max(1, focus_index)
+    current = 0
+    if (.not. allocated(grid%rows)) return
+    do row = 1, size(grid%rows)
+      if (.not. allocated(grid%rows(row)%columns)) cycle
+      do col = 1, size(grid%rows(row)%columns)
+        if (.not. layout_widget_renderable(grid%rows(row)%columns(col)%widget)) cycle
+        current = current + 1
+        if (current == target) then
+          widget = grid%rows(row)%columns(col)%widget
+          return
+        end if
+      end do
+    end do
+  end function layout_focus_widget
 
   integer function integer_field(table_value, key, default_value, error) result(value)
     type(toml_value), intent(in) :: table_value

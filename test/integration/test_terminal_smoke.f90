@@ -54,6 +54,18 @@ program test_terminal_smoke
   match = wait_for_string(session, "Memory", 2500)
   if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop frame did not render"
 
+  if (.not. send_text(session, achar(9))) error stop "failed to send Tab"
+  match = wait_for_string(session, "focus memory", 2500)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not cycle focus"
+
+  if (.not. send_text(session, "z")) error stop "failed to send zoom key"
+  match = wait_for_string(session, "zoom memory", 2500)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not zoom focused widget"
+
+  if (.not. send_text(session, "z")) error stop "failed to send unzoom key"
+  match = wait_for_string(session, "grid memory", 2500)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not return to grid view"
+
   resized_size%rows = 18
   resized_size%cols = 60
   if (.not. resize_pty(session%pty, resized_size)) error stop "failed to resize ftop PTY"

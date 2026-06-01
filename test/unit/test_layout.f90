@@ -2,6 +2,7 @@ program test_layout
   use ftop_layout, only : &
     LAYOUT_WIDGET_CPU, &
     LAYOUT_WIDGET_MEMORY, &
+    LAYOUT_WIDGET_PROCESS, &
     default_dashboard_layout, &
     distribute_weighted_space, &
     layout_assignment, &
@@ -9,12 +10,15 @@ program test_layout
     layout_grid, &
     make_layout_column, &
     make_layout_row, &
+    layout_widget_registered, &
+    layout_widget_renderable, &
     parse_layout_toml, &
     resolve_layout
   use ftop_widgets, only : widget_rect
   implicit none
 
   call test_weight_distribution()
+  call test_widget_registry()
   call test_parse_layout_toml()
   call test_reject_invalid_layout_toml()
   call test_grid_resolution()
@@ -33,6 +37,16 @@ contains
     sizes = distribute_weighted_space(4, [1, 1], [3, 3])
     call require(sizes(1) == 3 .and. sizes(2) == 3, "minimums should not be shrunk")
   end subroutine test_weight_distribution
+
+  subroutine test_widget_registry()
+    call require(layout_widget_registered(LAYOUT_WIDGET_CPU), "cpu should be registered")
+    call require(layout_widget_registered(LAYOUT_WIDGET_MEMORY), "memory should be registered")
+    call require(layout_widget_registered(LAYOUT_WIDGET_PROCESS), "process should be registered")
+    call require(layout_widget_renderable(LAYOUT_WIDGET_CPU), "cpu should be renderable")
+    call require(layout_widget_renderable(LAYOUT_WIDGET_MEMORY), "memory should be renderable")
+    call require(.not. layout_widget_renderable(LAYOUT_WIDGET_PROCESS), "process waits for Sprint 07 rendering")
+    call require(.not. layout_widget_registered("unknown"), "unknown widget should not be registered")
+  end subroutine test_widget_registry
 
   subroutine test_parse_layout_toml()
     character(len=1) :: nl
@@ -78,6 +92,14 @@ contains
 
     call require(error%failed, "layout TOML should reject missing widget")
     call require(index(error%message, "missing widget") > 0, "layout error should explain missing widget")
+
+    call parse_layout_toml(&
+      "[[row]]" // nl // &
+      "[[row.column]]" // nl // &
+      "widget = ""unknown""" // nl, &
+      grid, error)
+    call require(error%failed, "layout TOML should reject unknown widget")
+    call require(index(error%message, "unknown widget") > 0, "layout error should explain unknown widget")
   end subroutine test_reject_invalid_layout_toml
 
   subroutine test_grid_resolution()
