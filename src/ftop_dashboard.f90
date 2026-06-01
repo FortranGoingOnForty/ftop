@@ -10,7 +10,7 @@ module ftop_dashboard
     COLOR_UI_PANEL, &
     style_from_rgb
   use ftop_cpu, only : render_cpu_panel
-  use ftop_layout, only : dashboard_layout, default_dashboard_layout
+  use ftop_layout, only : dashboard_layout, dashboard_layout_from_grid, default_dashboard_layout, layout_grid
   use ftop_memory, only : render_memory_panel
   use ftop_text, only : TEXT_ALIGN_CENTER, render_text
   use ftop_widgets, only : widget_rect
@@ -23,12 +23,13 @@ module ftop_dashboard
 
 contains
 
-  subroutine render_dashboard(buffer, snapshot, refresh_ms, frame_count, status_text)
+  subroutine render_dashboard(buffer, snapshot, refresh_ms, frame_count, status_text, grid)
     type(screen_buffer), intent(inout) :: buffer
     type(collector_snapshot), intent(in) :: snapshot
     integer, intent(in) :: refresh_ms
     integer, intent(in) :: frame_count
     character(len=*), intent(in) :: status_text
+    type(layout_grid), intent(in), optional :: grid
     type(dashboard_layout) :: layout
     type(screen_style) :: border_style
     type(screen_style) :: title_style
@@ -54,7 +55,11 @@ contains
       return
     end if
 
-    layout = default_dashboard_layout(width, height)
+    if (present(grid)) then
+      layout = dashboard_layout_from_grid(width, height, grid)
+    else
+      layout = default_dashboard_layout(width, height)
+    end if
     call draw_box(buffer, layout%frame, BOX_STYLE_DOUBLE, border_style, "ftop", title_style, TEXT_ALIGN_CENTER)
 
     if (layout%cpu_panel%height >= 3) then

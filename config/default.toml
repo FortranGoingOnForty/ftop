@@ -1,0 +1,17 @@
+# Default Sprint 06 dashboard layout.
+# Future sprints will extend this with process, disk, network, and GPU widgets.
+
+[[row]]
+weight = 1
+
+[[row.column]]
+widget = "cpu"
+weight = 1
+min_width = 28
+min_height = 8
+
+[[row.column]]
+widget = "memory"
+weight = 1
+min_width = 28
+min_height = 8

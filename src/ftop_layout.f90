@@ -1,4 +1,16 @@
 module ftop_layout
+  use, intrinsic :: iso_fortran_env, only : int64
+  use fgof_toml, only : &
+    TOML_KIND_ARRAY, &
+    TOML_KIND_INTEGER, &
+    TOML_KIND_STRING, &
+    TOML_KIND_TABLE, &
+    parse_file, &
+    parse_string, &
+    toml_array, &
+    toml_document, &
+    toml_error, &
+    toml_value
   use ftop_widgets, only : widget_rect, widget_size
   implicit none
   private
@@ -33,11 +45,22 @@ module ftop_layout
     type(widget_rect) :: footer
   end type dashboard_layout
 
+  type, public :: layout_error
+    logical :: failed = .false.
+    integer :: line = 0
+    integer :: column = 0
+    character(len=:), allocatable :: message
+  end type layout_error
+
+  public :: clear_layout_error
+  public :: dashboard_layout_from_grid
   public :: default_dashboard_layout
   public :: default_dashboard_grid
   public :: distribute_weighted_space
   public :: make_layout_column
   public :: make_layout_row
+  public :: parse_layout_file
+  public :: parse_layout_toml
   public :: resolve_layout
 
 contains
@@ -46,23 +69,28 @@ contains
     integer, intent(in) :: width
     integer, intent(in) :: height
     type(dashboard_layout) :: layout
-    type(layout_assignment), allocatable :: assignments(:)
     type(layout_grid) :: grid
+
+    grid = default_dashboard_grid(stacked=width < 72)
+    layout = dashboard_layout_from_grid(width, height, grid)
+  end function default_dashboard_layout
+
+  function dashboard_layout_from_grid(width, height, grid) result(layout)
+    integer, intent(in) :: width
+    integer, intent(in) :: height
+    type(layout_grid), intent(in) :: grid
+    type(dashboard_layout) :: layout
+    type(layout_assignment), allocatable :: assignments(:)
     type(widget_rect) :: body
     integer :: item
 
-    layout%frame = widget_rect(1, 1, max(0, width), max(0, height))
-    layout%cpu_panel = widget_rect(0, 0, 0, 0)
-    layout%memory_panel = widget_rect(0, 0, 0, 0)
-    layout%footer = widget_rect(max(1, height - 2), 3, max(0, width - 4), &
-                                min(2, max(0, height - 2)))
+    layout = empty_dashboard_layout(width, height)
 
     if (width < 8 .or. height < 6) return
 
     body = widget_rect(3, 3, max(0, width - 4), max(0, height - 5))
     if (body%width <= 0 .or. body%height <= 0) return
 
-    grid = default_dashboard_grid(stacked=width < 72)
     assignments = resolve_layout(grid, body)
     do item = 1, size(assignments)
       select case (assignments(item)%widget)
@@ -72,7 +100,19 @@ contains
         layout%memory_panel = assignments(item)%rect
       end select
     end do
-  end function default_dashboard_layout
+  end function dashboard_layout_from_grid
+
+  function empty_dashboard_layout(width, height) result(layout)
+    integer, intent(in) :: width
+    integer, intent(in) :: height
+    type(dashboard_layout) :: layout
+
+    layout%frame = widget_rect(1, 1, max(0, width), max(0, height))
+    layout%cpu_panel = widget_rect(0, 0, 0, 0)
+    layout%memory_panel = widget_rect(0, 0, 0, 0)
+    layout%footer = widget_rect(max(1, height - 2), 3, max(0, width - 4), &
+                                min(2, max(0, height - 2)))
+  end function empty_dashboard_layout
 
   function default_dashboard_grid(stacked) result(grid)
     logical, intent(in), optional :: stacked
@@ -117,6 +157,135 @@ contains
     allocate(row%columns(size(columns)))
     row%columns = columns
   end function make_layout_row
+
+  subroutine parse_layout_file(path, grid, error)
+    character(len=*), intent(in) :: path
+    type(layout_grid), intent(out) :: grid
+    type(layout_error), intent(out) :: error
+    type(toml_document) :: document
+    type(toml_error) :: toml_status
+
+    call clear_layout_error(error)
+    call parse_file(path, document, toml_status)
+    if (toml_status%failed) then
+      call set_layout_error(error, toml_status%message, toml_status%line, toml_status%column)
+      return
+    end if
+    call parse_layout_document(document, grid, error)
+  end subroutine parse_layout_file
+
+  subroutine parse_layout_toml(content, grid, error)
+    character(len=*), intent(in) :: content
+    type(layout_grid), intent(out) :: grid
+    type(layout_error), intent(out) :: error
+    type(toml_document) :: document
+    type(toml_error) :: toml_status
+
+    call clear_layout_error(error)
+    call parse_string(content, document, toml_status)
+    if (toml_status%failed) then
+      call set_layout_error(error, toml_status%message, toml_status%line, toml_status%column)
+      return
+    end if
+    call parse_layout_document(document, grid, error)
+  end subroutine parse_layout_toml
+
+  subroutine parse_layout_document(document, grid, error)
+    type(toml_document), intent(in) :: document
+    type(layout_grid), intent(out) :: grid
+    type(layout_error), intent(inout) :: error
+    type(toml_array) :: rows
+    integer :: row_index
+
+    rows = document%get_array("row")
+    if (rows%length() <= 0) then
+      call set_layout_error(error, "layout must contain at least one [[row]] table")
+      return
+    end if
+
+    allocate(grid%rows(rows%length()))
+    do row_index = 1, rows%length()
+      call parse_row(rows%values(row_index), row_index, grid%rows(row_index), error)
+      if (error%failed) return
+    end do
+  end subroutine parse_layout_document
+
+  subroutine parse_row(row_value, row_index, row, error)
+    type(toml_value), intent(in) :: row_value
+    integer, intent(in) :: row_index
+    type(layout_row), intent(out) :: row
+    type(layout_error), intent(inout) :: error
+    integer :: column_index
+    integer :: columns_index
+
+    if (row_value%kind /= TOML_KIND_TABLE) then
+      call set_layout_error(error, "layout row " // integer_text(row_index) // " must be a table")
+      return
+    end if
+
+    row%weight = integer_field(row_value, "weight", 1, error)
+    if (error%failed) return
+
+    columns_index = table_entry_index(row_value, "column")
+    if (columns_index == 0) then
+      call set_layout_error(error, "layout row " // integer_text(row_index) // " must contain [[row.column]]")
+      return
+    end if
+    if (row_value%table_values(columns_index)%kind /= TOML_KIND_ARRAY) then
+      call set_layout_error(error, "layout row " // integer_text(row_index) // " column must be an array")
+      return
+    end if
+    if (size(row_value%table_values(columns_index)%array_values) <= 0) then
+      call set_layout_error(error, "layout row " // integer_text(row_index) // " must contain columns")
+      return
+    end if
+
+    allocate(row%columns(size(row_value%table_values(columns_index)%array_values)))
+    do column_index = 1, size(row%columns)
+      call parse_column(row_value%table_values(columns_index)%array_values(column_index), &
+                        row_index, column_index, row%columns(column_index), error)
+      if (error%failed) return
+    end do
+  end subroutine parse_row
+
+  subroutine parse_column(column_value, row_index, column_index, column, error)
+    type(toml_value), intent(in) :: column_value
+    integer, intent(in) :: row_index
+    integer, intent(in) :: column_index
+    type(layout_column), intent(out) :: column
+    type(layout_error), intent(inout) :: error
+    integer :: widget_index
+
+    if (column_value%kind /= TOML_KIND_TABLE) then
+      call set_layout_error(error, "layout row " // integer_text(row_index) // &
+                            " column " // integer_text(column_index) // " must be a table")
+      return
+    end if
+
+    widget_index = table_entry_index(column_value, "widget")
+    if (widget_index == 0) then
+      call set_layout_error(error, "layout row " // integer_text(row_index) // &
+                            " column " // integer_text(column_index) // " missing widget")
+      return
+    end if
+    if (column_value%table_values(widget_index)%kind /= TOML_KIND_STRING) then
+      call set_layout_error(error, "layout row " // integer_text(row_index) // &
+                            " column " // integer_text(column_index) // " widget must be a string")
+      return
+    end if
+
+    column%widget = trim(column_value%table_values(widget_index)%string_value%text)
+    if (len(column%widget) == 0) then
+      call set_layout_error(error, "layout row " // integer_text(row_index) // &
+                            " column " // integer_text(column_index) // " widget cannot be empty")
+      return
+    end if
+    column%weight = integer_field(column_value, "weight", 1, error)
+    if (error%failed) return
+    column%min_size%width = integer_field(column_value, "min_width", 0, error)
+    if (error%failed) return
+    column%min_size%height = integer_field(column_value, "min_height", 0, error)
+  end subroutine parse_column
 
   function resolve_layout(grid, rect) result(assignments)
     type(layout_grid), intent(in) :: grid
@@ -257,5 +426,73 @@ contains
       height = max(height, row%columns(col)%min_size%height)
     end do
   end function row_min_height
+
+  integer function integer_field(table_value, key, default_value, error) result(value)
+    type(toml_value), intent(in) :: table_value
+    character(len=*), intent(in) :: key
+    integer, intent(in) :: default_value
+    type(layout_error), intent(inout) :: error
+    integer :: index_value
+
+    value = default_value
+    index_value = table_entry_index(table_value, key)
+    if (index_value == 0) return
+    if (table_value%table_values(index_value)%kind /= TOML_KIND_INTEGER) then
+      call set_layout_error(error, "layout field " // trim(key) // " must be an integer")
+      return
+    end if
+    value = max(0, int(min(table_value%table_values(index_value)%integer_value, int(huge(value), int64))))
+    if (key == "weight") value = max(1, value)
+  end function integer_field
+
+  integer function table_entry_index(table_value, key) result(index_value)
+    type(toml_value), intent(in) :: table_value
+    character(len=*), intent(in) :: key
+    integer :: item
+
+    index_value = 0
+    if (table_value%kind /= TOML_KIND_TABLE) return
+    if (.not. allocated(table_value%table_keys)) return
+    do item = 1, size(table_value%table_keys)
+      if (allocated(table_value%table_keys(item)%text)) then
+        if (table_value%table_keys(item)%text == key) then
+          index_value = item
+          return
+        end if
+      end if
+    end do
+  end function table_entry_index
+
+  subroutine clear_layout_error(error)
+    type(layout_error), intent(out) :: error
+
+    error%failed = .false.
+    error%line = 0
+    error%column = 0
+    error%message = ""
+  end subroutine clear_layout_error
+
+  subroutine set_layout_error(error, message, line, column)
+    type(layout_error), intent(inout) :: error
+    character(len=*), intent(in) :: message
+    integer, intent(in), optional :: line
+    integer, intent(in), optional :: column
+
+    error%failed = .true.
+    error%line = 0
+    error%column = 0
+    if (present(line)) error%line = line
+    if (present(column)) error%column = column
+    error%message = trim(message)
+  end subroutine set_layout_error
+
+  function integer_text(value) result(text)
+    integer, intent(in) :: value
+    character(len=:), allocatable :: text
+    character(len=32) :: scratch
+
+    write(scratch, '(i0)') value
+    text = trim(scratch)
+  end function integer_text
 
 end module ftop_layout

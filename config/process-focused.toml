@@ -1,0 +1,26 @@
+# Process-focused layout scaffold.
+# The process widget is implemented in Sprint 07; Sprint 06 still parses this layout.
+
+[[row]]
+weight = 1
+
+[[row.column]]
+widget = "cpu"
+weight = 1
+min_width = 24
+min_height = 6
+
+[[row.column]]
+widget = "memory"
+weight = 1
+min_width = 24
+min_height = 6
+
+[[row]]
+weight = 2
+
+[[row.column]]
+widget = "process"
+weight = 1
+min_width = 40
+min_height = 8

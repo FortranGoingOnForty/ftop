@@ -5,14 +5,18 @@ program test_layout
     default_dashboard_layout, &
     distribute_weighted_space, &
     layout_assignment, &
+    layout_error, &
     layout_grid, &
     make_layout_column, &
     make_layout_row, &
+    parse_layout_toml, &
     resolve_layout
   use ftop_widgets, only : widget_rect
   implicit none
 
   call test_weight_distribution()
+  call test_parse_layout_toml()
+  call test_reject_invalid_layout_toml()
   call test_grid_resolution()
   call test_dashboard_fallback_layout()
 
@@ -29,6 +33,52 @@ contains
     sizes = distribute_weighted_space(4, [1, 1], [3, 3])
     call require(sizes(1) == 3 .and. sizes(2) == 3, "minimums should not be shrunk")
   end subroutine test_weight_distribution
+
+  subroutine test_parse_layout_toml()
+    character(len=1) :: nl
+    type(layout_error) :: error
+    type(layout_grid) :: grid
+
+    nl = new_line('a')
+    call parse_layout_toml(&
+      "[[row]]" // nl // &
+      "weight = 2" // nl // &
+      "[[row.column]]" // nl // &
+      "widget = ""cpu""" // nl // &
+      "weight = 1" // nl // &
+      "min_width = 28" // nl // &
+      "min_height = 8" // nl // &
+      "[[row.column]]" // nl // &
+      "widget = ""memory""" // nl // &
+      "weight = 2" // nl, &
+      grid, error)
+
+    call require(.not. error%failed, "layout TOML should parse")
+    call require(size(grid%rows) == 1, "layout TOML should produce one row")
+    call require(grid%rows(1)%weight == 2, "layout TOML should parse row weight")
+    call require(size(grid%rows(1)%columns) == 2, "layout TOML should produce columns")
+    call require(grid%rows(1)%columns(1)%widget == LAYOUT_WIDGET_CPU, "first column should be cpu")
+    call require(grid%rows(1)%columns(1)%min_size%width == 28, "column min_width should parse")
+    call require(grid%rows(1)%columns(1)%min_size%height == 8, "column min_height should parse")
+    call require(grid%rows(1)%columns(2)%widget == LAYOUT_WIDGET_MEMORY, "second column should be memory")
+    call require(grid%rows(1)%columns(2)%weight == 2, "column weight should parse")
+  end subroutine test_parse_layout_toml
+
+  subroutine test_reject_invalid_layout_toml()
+    character(len=1) :: nl
+    type(layout_error) :: error
+    type(layout_grid) :: grid
+
+    nl = new_line('a')
+    call parse_layout_toml(&
+      "[[row]]" // nl // &
+      "[[row.column]]" // nl // &
+      "weight = 1" // nl, &
+      grid, error)
+
+    call require(error%failed, "layout TOML should reject missing widget")
+    call require(index(error%message, "missing widget") > 0, "layout error should explain missing widget")
+  end subroutine test_reject_invalid_layout_toml
 
   subroutine test_grid_resolution()
     type(layout_assignment), allocatable :: assignments(:)

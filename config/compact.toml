@@ -1,0 +1,19 @@
+# Compact Sprint 06 dashboard layout.
+
+[[row]]
+weight = 1
+
+[[row.column]]
+widget = "cpu"
+weight = 1
+min_width = 24
+min_height = 6
+
+[[row]]
+weight = 1
+
+[[row.column]]
+widget = "memory"
+weight = 1
+min_width = 24
+min_height = 6

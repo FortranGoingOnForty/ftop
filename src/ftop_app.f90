@@ -24,6 +24,7 @@ module ftop_app
   use fgof_termios_types, only : FGOF_TERMIOS_ERR_NONE, terminal_size, termios_guard
   use ftop_collector, only : collector, collector_snapshot
   use ftop_dashboard, only : render_dashboard
+  use ftop_layout, only : layout_error, layout_grid, parse_layout_file
   use ftop_signal, only : &
     FTOP_SIGNAL_CONT, &
     FTOP_SIGNAL_INT, &
@@ -53,7 +54,9 @@ module ftop_app
     type(screen_buffer) :: current
     type(screen_buffer) :: previous
     type(collector), allocatable :: metrics
+    type(layout_grid) :: layout
     type(key_decoder_state) :: decoder
+    character(len=:), allocatable :: config_path
     character(len=:), allocatable :: status_text
     integer :: refresh_ms = DEFAULT_REFRESH_MS
     integer :: frame_count = 0
@@ -62,6 +65,7 @@ module ftop_app
     logical :: guard_bound = .false.
     logical :: terminal_started = .false.
     logical :: collector_started = .false.
+    logical :: layout_loaded = .false.
     logical :: running = .true.
     logical :: needs_full_render = .true.
     logical :: dirty = .true.
@@ -72,12 +76,16 @@ module ftop_app
 
 contains
 
-  integer function run_ftop(refresh_ms) result(status)
+  integer function run_ftop(refresh_ms, config_path) result(status)
     integer, intent(in), optional :: refresh_ms
+    character(len=*), intent(in), optional :: config_path
     type(terminal_session) :: session
     type(terminal_read_result) :: input
 
     if (present(refresh_ms)) session%refresh_ms = bounded_refresh_ms(refresh_ms)
+    if (present(config_path)) then
+      if (len_trim(config_path) > 0) session%config_path = trim(config_path)
+    end if
 
     status = start_terminal_session(session)
     if (status /= 0) then
@@ -130,6 +138,7 @@ contains
     session%decoder = clear_decoder_state()
     call set_status(session, "ready")
     call initialize_refresh_timer(session)
+    call initialize_layout(session)
 
     call bind_guard(session%guard)
     if (session%guard%last_error_code /= FGOF_TERMIOS_ERR_NONE) then
@@ -209,8 +218,100 @@ contains
     if (allocated(session%metrics)) then
       if (session%metrics%initialized()) snapshot = session%metrics%snapshot()
     end if
-    call render_dashboard(session%current, snapshot, session%refresh_ms, session%frame_count, session%status_text)
+    if (session%layout_loaded) then
+      call render_dashboard(session%current, snapshot, session%refresh_ms, session%frame_count, &
+                            session%status_text, session%layout)
+    else
+      call render_dashboard(session%current, snapshot, session%refresh_ms, session%frame_count, session%status_text)
+    end if
   end subroutine draw_frame
+
+  subroutine initialize_layout(session)
+    type(terminal_session), intent(inout) :: session
+    type(layout_error) :: error
+    character(len=:), allocatable :: path
+
+    if (allocated(session%config_path)) then
+      path = session%config_path
+      call parse_layout_file(path, session%layout, error)
+      if (error%failed) then
+        call set_status(session, "layout config failed: " // error%message)
+      else
+        session%layout_loaded = .true.
+        call set_status(session, "layout config " // path)
+      end if
+      return
+    end if
+
+    path = discover_layout_config_path()
+    if (len(path) == 0) return
+    call parse_layout_file(path, session%layout, error)
+    if (error%failed) then
+      call set_status(session, "layout config failed: " // error%message)
+    else
+      session%layout_loaded = .true.
+      call set_status(session, "layout config " // path)
+    end if
+  end subroutine initialize_layout
+
+  function discover_layout_config_path() result(path)
+    character(len=:), allocatable :: path
+    character(len=:), allocatable :: config_home
+    character(len=:), allocatable :: home
+
+    config_home = environment_value("XDG_CONFIG_HOME")
+    if (len(config_home) > 0) then
+      path = join_path(config_home, "ftop/config.toml")
+      if (path_exists(path)) return
+    end if
+
+    home = environment_value("HOME")
+    if (len(home) > 0) then
+      path = join_path(home, ".config/ftop/config.toml")
+      if (path_exists(path)) return
+    end if
+
+    path = "config/default.toml"
+    if (path_exists(path)) return
+    path = ""
+  end function discover_layout_config_path
+
+  function environment_value(name) result(value)
+    character(len=*), intent(in) :: name
+    character(len=:), allocatable :: value
+    character(len=4096) :: scratch
+    integer :: length
+    integer :: status
+
+    call get_environment_variable(name, scratch, length=length, status=status)
+    if (status == 0 .and. length > 0) then
+      value = scratch(:min(length, len(scratch)))
+    else
+      value = ""
+    end if
+  end function environment_value
+
+  function join_path(root, relative) result(path)
+    character(len=*), intent(in) :: root
+    character(len=*), intent(in) :: relative
+    character(len=:), allocatable :: path
+    integer :: root_len
+
+    root_len = len_trim(root)
+    if (root_len <= 0) then
+      path = trim(relative)
+    else if (root(root_len:root_len) == "/") then
+      path = root(:root_len) // trim(relative)
+    else
+      path = root(:root_len) // "/" // trim(relative)
+    end if
+  end function join_path
+
+  logical function path_exists(path) result(exists)
+    character(len=*), intent(in) :: path
+
+    inquire(file=path, exist=exists)
+  end function path_exists
 
   subroutine handle_input(session, bytes)
     type(terminal_session), intent(inout) :: session
