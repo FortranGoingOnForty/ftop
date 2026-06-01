@@ -4,12 +4,15 @@ module ftop_process_table
   use ftop_box, only : BOX_STYLE_ROUNDED, box_content_rect, draw_box
   use ftop_collector, only : collector_snapshot
   use ftop_proc_data, only : &
+    PROCESS_SORT_PID, &
     process_display_command, &
     process_info, &
     process_state_label, &
     process_table, &
-    process_user_label
+    process_user_label, &
+    sort_process_table
   use ftop_table, only : &
+    TABLE_SORT_ASCENDING, &
     TABLE_SEPARATOR_SPACE, &
     TABLE_WIDTH_FIXED, &
     TABLE_WIDTH_WEIGHT, &
@@ -45,6 +48,7 @@ contains
     type(screen_style), intent(in) :: dim_style
     type(table_cell), allocatable :: cells(:, :)
     type(table_column), allocatable :: columns(:)
+    type(process_table) :: sorted_processes
     type(widget_rect) :: content
 
     call draw_box(buffer, panel, BOX_STYLE_ROUNDED, border_style, "Processes", title_style)
@@ -61,7 +65,9 @@ contains
     end if
 
     columns = process_columns()
-    cells = process_cells(snapshot%processes)
+    sorted_processes = snapshot%processes
+    call sort_process_table(sorted_processes, PROCESS_SORT_PID)
+    cells = process_cells(sorted_processes)
     if (size(cells, 1) <= 0) then
       call render_text(buffer, content_line_rect(content, 1), "no processes", dim_style)
       return
@@ -80,6 +86,7 @@ contains
     columns(1)%width_mode = TABLE_WIDTH_FIXED
     columns(1)%width = 6
     columns(1)%alignment = TEXT_ALIGN_RIGHT
+    columns(1)%sort_direction = TABLE_SORT_ASCENDING
     columns(2)%name = "USER"
     columns(2)%width_mode = TABLE_WIDTH_FIXED
     columns(2)%width = 8

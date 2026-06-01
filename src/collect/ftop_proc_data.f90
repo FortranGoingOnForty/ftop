@@ -9,6 +9,13 @@ module ftop_proc_data
   integer, parameter, public :: PROCESS_STATE_LEN = 16
   integer, parameter, public :: PROCESS_CGROUP_LEN = 128
 
+  integer, parameter, public :: PROCESS_SORT_PID = 1
+  integer, parameter, public :: PROCESS_SORT_USER = 2
+  integer, parameter, public :: PROCESS_SORT_CPU = 3
+  integer, parameter, public :: PROCESS_SORT_MEMORY = 4
+  integer, parameter, public :: PROCESS_SORT_RSS = 5
+  integer, parameter, public :: PROCESS_SORT_COMMAND = 6
+
   type, public :: process_info
     logical :: valid = .false.
     integer :: pid = 0
@@ -43,6 +50,7 @@ module ftop_proc_data
   public :: process_display_command
   public :: process_state_label
   public :: process_user_label
+  public :: sort_process_table
 
 contains
 
@@ -87,6 +95,124 @@ contains
       text = "?"
     end if
   end function process_state_label
+
+  subroutine sort_process_table(table, sort_key, descending)
+    type(process_table), intent(inout) :: table
+    integer, intent(in) :: sort_key
+    logical, intent(in), optional :: descending
+    type(process_info) :: current
+    integer :: item_index
+    integer :: scan_index
+    logical :: use_descending
+
+    if (.not. allocated(table%items)) return
+    if (size(table%items) <= 1) return
+    use_descending = .false.
+    if (present(descending)) use_descending = descending
+
+    do item_index = 2, size(table%items)
+      current = table%items(item_index)
+      scan_index = item_index - 1
+      do while (scan_index >= 1)
+        if (.not. process_out_of_order(table%items(scan_index), current, sort_key, use_descending)) exit
+        table%items(scan_index + 1) = table%items(scan_index)
+        scan_index = scan_index - 1
+      end do
+      table%items(scan_index + 1) = current
+    end do
+  end subroutine sort_process_table
+
+  logical function process_out_of_order(left, right, sort_key, descending) result(out_of_order)
+    type(process_info), intent(in) :: left
+    type(process_info), intent(in) :: right
+    integer, intent(in) :: sort_key
+    logical, intent(in) :: descending
+    integer :: comparison
+
+    comparison = compare_processes(left, right, sort_key)
+    if (descending) then
+      out_of_order = comparison < 0
+    else
+      out_of_order = comparison > 0
+    end if
+  end function process_out_of_order
+
+  integer function compare_processes(left, right, sort_key) result(comparison)
+    type(process_info), intent(in) :: left
+    type(process_info), intent(in) :: right
+    integer, intent(in) :: sort_key
+
+    select case (sort_key)
+    case (PROCESS_SORT_USER)
+      comparison = compare_text(process_user_label(left), process_user_label(right))
+    case (PROCESS_SORT_CPU)
+      comparison = compare_real(left%cpu_percent, right%cpu_percent)
+    case (PROCESS_SORT_MEMORY)
+      comparison = compare_real(left%mem_percent, right%mem_percent)
+    case (PROCESS_SORT_RSS)
+      comparison = compare_int64(left%mem_rss_bytes, right%mem_rss_bytes)
+    case (PROCESS_SORT_COMMAND)
+      comparison = compare_text(process_display_command(left), process_display_command(right))
+    case default
+      comparison = compare_integer(left%pid, right%pid)
+    end select
+  end function compare_processes
+
+  integer function compare_integer(left, right) result(comparison)
+    integer, intent(in) :: left
+    integer, intent(in) :: right
+
+    if (left < right) then
+      comparison = -1
+    else if (left > right) then
+      comparison = 1
+    else
+      comparison = 0
+    end if
+  end function compare_integer
+
+  integer function compare_int64(left, right) result(comparison)
+    integer(int64), intent(in) :: left
+    integer(int64), intent(in) :: right
+
+    if (left < right) then
+      comparison = -1
+    else if (left > right) then
+      comparison = 1
+    else
+      comparison = 0
+    end if
+  end function compare_int64
+
+  integer function compare_real(left, right) result(comparison)
+    real(real64), intent(in) :: left
+    real(real64), intent(in) :: right
+
+    if (left < right) then
+      comparison = -1
+    else if (left > right) then
+      comparison = 1
+    else
+      comparison = 0
+    end if
+  end function compare_real
+
+  integer function compare_text(left, right) result(comparison)
+    character(len=*), intent(in) :: left
+    character(len=*), intent(in) :: right
+    character(len=:), allocatable :: left_trimmed
+    character(len=:), allocatable :: right_trimmed
+
+    left_trimmed = trim(left)
+    right_trimmed = trim(right)
+    if (left_trimmed < right_trimmed) then
+      comparison = -1
+    else if (left_trimmed > right_trimmed) then
+      comparison = 1
+    else
+      comparison = 0
+    end if
+  end function compare_text
 
   function integer_text(value) result(text)
     integer, intent(in) :: value
