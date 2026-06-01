@@ -18,6 +18,7 @@ module ftop_platform
   use ftop_proc_data, only : &
     PROCESS_COMMAND_LEN, &
     PROCESS_NAME_LEN, &
+    PROCESS_USER_LEN, &
     process_info
   implicit none
   private
@@ -32,6 +33,9 @@ module ftop_platform
   integer, parameter :: LINUX_CPU_FREQ_BUFFER_LEN = 64
   integer, parameter, public :: LINUX_HWMON_NAME_LEN = 128
   integer, parameter, public :: LINUX_HWMON_PATH_LEN = 256
+
+  integer, allocatable, save :: user_cache_uids(:)
+  character(len=PROCESS_USER_LEN), allocatable, save :: user_cache_names(:)
 
   type, bind(C), public :: linux_hwmon_sensor
     character(kind=c_char) :: path(LINUX_HWMON_PATH_LEN)
@@ -179,6 +183,16 @@ module ftop_platform
       integer(c_long_long), intent(out) :: page_size
       integer(c_int), intent(out) :: sys_errno
     end function c_ftop_linux_page_size
+
+    integer(c_int) function c_ftop_linux_user_name(uid, value, value_capacity, value_len, sys_errno) &
+        bind(C, name="ftop_linux_user_name")
+      import :: c_char, c_int, c_size_t
+      integer(c_int), value :: uid
+      character(kind=c_char), intent(out) :: value(*)
+      integer(c_size_t), value :: value_capacity
+      integer(c_size_t), intent(out) :: value_len
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_linux_user_name
   end interface
 
 contains
@@ -412,6 +426,7 @@ contains
 
     call parse_linux_process_stat(stat_text, page_size, process)
     call parse_linux_process_status(status_text, process)
+    call assign_process_user(process)
     if (len_trim(cmdline) > 0) process%command = bounded_text(cmdline, len(process%command))
     if (len_trim(process%command) == 0) process%command = process%name
     if (present(memory_total_bytes)) call assign_memory_percent(process, memory_total_bytes)
@@ -531,6 +546,71 @@ contains
     process%mem_percent = 100.0_real64 * real(max(0_int64, process%mem_rss_bytes), real64) / &
                           real(memory_total_bytes, real64)
   end subroutine assign_memory_percent
+
+  subroutine assign_process_user(process)
+    type(process_info), intent(inout) :: process
+    character(kind=c_char) :: c_value(PROCESS_USER_LEN + 1)
+    character(len=:), allocatable :: user_name
+    integer(c_size_t) :: value_len
+    integer(c_int) :: sys_errno
+    integer(c_int) :: rc
+
+    if (cached_process_user(process%uid, process%user)) then
+      process%user_valid = .true.
+      return
+    end if
+
+    rc = c_ftop_linux_user_name(int(process%uid, c_int), c_value, int(size(c_value), c_size_t), value_len, sys_errno)
+    if (rc /= 0_c_int .or. value_len <= 0_c_size_t) return
+    call c_chars_to_string(c_value, int(value_len), user_name)
+    process%user = bounded_text(user_name, len(process%user))
+    process%user_valid = len_trim(process%user) > 0
+    if (process%user_valid) call cache_process_user(process%uid, process%user)
+  end subroutine assign_process_user
+
+  logical function cached_process_user(uid, user) result(found)
+    integer, intent(in) :: uid
+    character(len=*), intent(out) :: user
+    integer :: cache_index
+
+    user = ""
+    found = .false.
+    if (.not. allocated(user_cache_uids)) return
+    do cache_index = 1, size(user_cache_uids)
+      if (user_cache_uids(cache_index) == uid) then
+        user = user_cache_names(cache_index)
+        found = len_trim(user) > 0
+        return
+      end if
+    end do
+  end function cached_process_user
+
+  subroutine cache_process_user(uid, user)
+    integer, intent(in) :: uid
+    character(len=*), intent(in) :: user
+    integer, allocatable :: next_uids(:)
+    character(len=PROCESS_USER_LEN), allocatable :: next_names(:)
+    integer :: cache_size
+
+    if (len_trim(user) <= 0) return
+    if (allocated(user_cache_uids)) then
+      if (any(user_cache_uids == uid)) return
+      cache_size = size(user_cache_uids)
+    else
+      cache_size = 0
+    end if
+
+    allocate(next_uids(cache_size + 1))
+    allocate(next_names(cache_size + 1))
+    if (cache_size > 0) then
+      next_uids(1:cache_size) = user_cache_uids
+      next_names(1:cache_size) = user_cache_names
+    end if
+    next_uids(cache_size + 1) = uid
+    next_names(cache_size + 1) = bounded_text(user, PROCESS_USER_LEN)
+    call move_alloc(next_uids, user_cache_uids)
+    call move_alloc(next_names, user_cache_names)
+  end subroutine cache_process_user
 
   integer(c_long_long) function linux_page_size() result(page_size)
     integer(c_int) :: sys_errno

@@ -11,6 +11,7 @@ program test_platform
     platform_backend, &
     system_uptime_info
   use ftop_proc_data, only : process_table
+  use ftop_signal, only : ftop_current_pid
   implicit none
 
   class(platform_backend), allocatable :: backend
@@ -25,7 +26,10 @@ program test_platform
   type(system_uptime_info) :: uptime
   type(process_table) :: processes
   integer :: cpu_count
+  integer :: current_pid
+  integer :: process_index
   real(real64) :: usage
+  logical :: found_current_process
 
   backend = create_platform()
   if (.not. allocated(backend)) error stop "platform factory did not allocate a backend"
@@ -96,6 +100,15 @@ program test_platform
   if (.not. any(processes%items%valid)) error stop "process table must include valid processes"
   if (any(processes%items%valid .and. processes%items%pid <= 0)) error stop "valid process pid must be positive"
   if (any(processes%items%mem_rss_bytes < 0)) error stop "process RSS must not be negative"
+  current_pid = ftop_current_pid()
+  found_current_process = .false.
+  do process_index = 1, size(processes%items)
+    if (processes%items(process_index)%pid /= current_pid) cycle
+    found_current_process = .true.
+    if (.not. processes%items(process_index)%user_valid) error stop "current process user must be valid"
+    if (len_trim(processes%items(process_index)%user) <= 0) error stop "current process user must not be empty"
+  end do
+  if (.not. found_current_process) error stop "process table must include current process"
 
 contains
 

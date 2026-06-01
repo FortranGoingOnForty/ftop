@@ -2,6 +2,7 @@
 #include <devstat.h>
 #include <fcntl.h>
 #include <kvm.h>
+#include <pwd.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,6 +18,7 @@
 
 #define FTOP_FREEBSD_COMMAND_LEN 32
 #define FTOP_FREEBSD_DEVSTAT_NAME_LEN 16
+#define FTOP_USER_LOOKUP_BUFFER_LEN 16384
 
 struct ftop_freebsd_process_info {
   int pid;
@@ -478,6 +480,43 @@ int ftop_freebsd_devstat_getdevs(
   *device_count = copy_count;
   *generation = (long long)devinfo.generation;
   free(devinfo.mem_ptr);
+  return 0;
+}
+
+int ftop_freebsd_user_name(int uid, char *buffer, size_t buffer_len, size_t *value_len, int *sys_errno) {
+  char scratch[FTOP_USER_LOOKUP_BUFFER_LEN];
+  struct passwd password;
+  struct passwd *result;
+  size_t copied_len;
+  int rc;
+
+  if (buffer == NULL || value_len == NULL || sys_errno == NULL || buffer_len == 0) return -1;
+
+  buffer[0] = '\0';
+  *value_len = 0U;
+  *sys_errno = 0;
+  if (uid < 0) {
+    *sys_errno = EINVAL;
+    return -1;
+  }
+
+  memset(&password, 0, sizeof(password));
+  result = NULL;
+  rc = getpwuid_r((uid_t)uid, &password, scratch, sizeof(scratch), &result);
+  if (rc != 0) {
+    *sys_errno = rc;
+    return -1;
+  }
+  if (result == NULL || password.pw_name == NULL) {
+    *sys_errno = ENOENT;
+    return -1;
+  }
+
+  copied_len = strlen(password.pw_name);
+  if (copied_len >= buffer_len) copied_len = buffer_len - 1U;
+  memcpy(buffer, password.pw_name, copied_len);
+  buffer[copied_len] = '\0';
+  *value_len = copied_len;
   return 0;
 }
 
