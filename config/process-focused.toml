@@ -1,5 +1,4 @@
-# Process-focused layout scaffold.
-# The process widget is implemented in Sprint 07; Sprint 06 still parses this layout.
+# Process-focused layout.
 
 [[row]]
 weight = 1

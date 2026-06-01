@@ -84,6 +84,11 @@ contains
     call require(all(snapshot%cpu_total%load_avg >= 0.0_real64), "collector load average must not be negative")
     call require(snapshot%system_uptime_valid, "collector uptime must be valid")
     call require(snapshot%system_uptime_seconds >= 0, "collector uptime must not be negative")
+    call require(snapshot%processes%valid, "collector process table must be valid")
+    call require(allocated(snapshot%processes%items), "collector process table must be allocated")
+    call require(size(snapshot%processes%items) > 0, "collector process table must include processes")
+    call require(any(snapshot%processes%items%valid), "collector process table must include valid processes")
+    call require(any(snapshot%processes%items%pid > 0), "collector process table must include positive pids")
 
     call require(metrics%stop(), "collector stop failed")
     call require(.not. metrics%running(), "collector must stop running")

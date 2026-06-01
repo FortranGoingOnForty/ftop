@@ -12,6 +12,7 @@ module ftop_dashboard
   use ftop_cpu, only : render_cpu_panel
   use ftop_layout, only : dashboard_layout, dashboard_layout_from_grid, default_dashboard_layout, layout_grid
   use ftop_memory, only : render_memory_panel
+  use ftop_process_table, only : render_process_panel
   use ftop_text, only : TEXT_ALIGN_CENTER, render_text
   use ftop_widgets, only : widget_rect
   implicit none
@@ -40,6 +41,7 @@ contains
     type(screen_style) :: dim_style
     type(screen_style) :: focus_style
     type(screen_style) :: memory_border_style
+    type(screen_style) :: process_border_style
     type(widget_rect) :: title_rect
     type(widget_rect) :: zoom_rect
     character(len=:), allocatable :: focus
@@ -82,17 +84,23 @@ contains
     else
       cpu_border_style = border_style
       memory_border_style = border_style
+      process_border_style = border_style
       if (focus == "cpu") cpu_border_style = focus_style
       if (focus == "memory") memory_border_style = focus_style
+      if (focus == "process") process_border_style = focus_style
       if (layout%cpu_panel%height >= 3) then
         call render_cpu_panel(buffer, layout%cpu_panel, snapshot, cpu_border_style, title_style, dim_style)
       end if
       if (layout%memory_panel%height >= 3) then
         call render_memory_panel(buffer, layout%memory_panel, snapshot, memory_border_style, title_style, dim_style)
       end if
+      if (layout%process_panel%height >= 3) then
+        call render_process_panel(buffer, layout%process_panel, snapshot, process_border_style, title_style, dim_style)
+      end if
     end if
 
-    if (.not. is_zoomed .and. (layout%cpu_panel%height < 3 .or. layout%memory_panel%height < 3)) then
+    if (.not. is_zoomed .and. layout%cpu_panel%height < 3 .and. layout%memory_panel%height < 3 .and. &
+        layout%process_panel%height < 3) then
       title_col = max(2, (width - len_trim("CPU / Memory")) / 2 + 1)
       title_rect = widget_rect(max(2, height / 2), title_col, width - title_col, 1)
       call render_text(buffer, title_rect, "CPU / Memory", title_style)
@@ -117,6 +125,8 @@ contains
       call render_cpu_panel(buffer, rect, snapshot, border_style, title_style, dim_style)
     case ("memory")
       call render_memory_panel(buffer, rect, snapshot, border_style, title_style, dim_style)
+    case ("process")
+      call render_process_panel(buffer, rect, snapshot, border_style, title_style, dim_style)
     end select
   end subroutine render_dashboard_panel
 

@@ -44,7 +44,7 @@ contains
     call require(layout_widget_registered(LAYOUT_WIDGET_PROCESS), "process should be registered")
     call require(layout_widget_renderable(LAYOUT_WIDGET_CPU), "cpu should be renderable")
     call require(layout_widget_renderable(LAYOUT_WIDGET_MEMORY), "memory should be renderable")
-    call require(.not. layout_widget_renderable(LAYOUT_WIDGET_PROCESS), "process waits for Sprint 07 rendering")
+    call require(layout_widget_renderable(LAYOUT_WIDGET_PROCESS), "process should be renderable")
     call require(.not. layout_widget_registered("unknown"), "unknown widget should not be registered")
   end subroutine test_widget_registry
 

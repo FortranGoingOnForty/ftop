@@ -1,5 +1,5 @@
 module ftop_platform
-  use, intrinsic :: iso_c_binding, only : c_char, c_double, c_int, c_null_char, c_size_t
+  use, intrinsic :: iso_c_binding, only : c_char, c_double, c_int, c_long_long, c_null_char, c_size_t
   use, intrinsic :: iso_fortran_env, only : int64, real64
   use ftop_cpu_data, only : cpu_core_info, cpu_state_ticks, cpu_state_total_ticks
   use ftop_linux_loadavg, only : linux_loadavg_parse
@@ -13,7 +13,12 @@ module ftop_platform
     load_average_info, &
     memory_info, &
     platform_backend, &
+    process_table, &
     system_uptime_info
+  use ftop_proc_data, only : &
+    PROCESS_COMMAND_LEN, &
+    PROCESS_NAME_LEN, &
+    process_info
   implicit none
   private
 
@@ -21,6 +26,9 @@ module ftop_platform
   integer, parameter :: LINUX_PROC_MEMINFO_BUFFER_LEN = 65536
   integer, parameter :: LINUX_PROC_LOADAVG_BUFFER_LEN = 256
   integer, parameter :: LINUX_PROC_UPTIME_BUFFER_LEN = 128
+  integer, parameter :: LINUX_PROCESS_CAPACITY = 4096
+  integer, parameter :: LINUX_PROCESS_STAT_LEN = 512
+  integer, parameter :: LINUX_PROCESS_STATUS_LEN = 2048
   integer, parameter :: LINUX_CPU_FREQ_BUFFER_LEN = 64
   integer, parameter, public :: LINUX_HWMON_NAME_LEN = 128
   integer, parameter, public :: LINUX_HWMON_PATH_LEN = 256
@@ -29,6 +37,16 @@ module ftop_platform
     character(kind=c_char) :: path(LINUX_HWMON_PATH_LEN)
     character(kind=c_char) :: name(LINUX_HWMON_NAME_LEN)
   end type linux_hwmon_sensor
+
+  type, bind(C), public :: linux_process_raw
+    integer(c_int) :: pid
+    character(kind=c_char) :: stat(LINUX_PROCESS_STAT_LEN)
+    integer(c_size_t) :: stat_len
+    character(kind=c_char) :: status(LINUX_PROCESS_STATUS_LEN)
+    integer(c_size_t) :: status_len
+    character(kind=c_char) :: cmdline(PROCESS_COMMAND_LEN)
+    integer(c_size_t) :: cmdline_len
+  end type linux_process_raw
 
   type, extends(platform_backend) :: linux_backend
   contains
@@ -40,6 +58,7 @@ module ftop_platform
     procedure :: get_memory_info => linux_get_memory_info
     procedure :: get_load_average => linux_get_load_average
     procedure :: get_system_uptime => linux_get_system_uptime
+    procedure :: get_process_table => linux_get_process_table
   end type linux_backend
 
   public :: create_platform
@@ -52,9 +71,11 @@ module ftop_platform
   public :: linux_hwmon_discover
   public :: linux_load_average_snapshot
   public :: linux_memory_snapshot
+  public :: linux_process_snapshot
   public :: load_average_info
   public :: memory_info
   public :: platform_backend
+  public :: process_table
   public :: system_uptime_info
 
   interface
@@ -143,6 +164,21 @@ module ftop_platform
       integer(c_size_t), intent(out) :: sensor_count
       integer(c_int), intent(out) :: sys_errno
     end function c_ftop_linux_hwmon_discover
+
+    integer(c_int) function c_ftop_linux_process_snapshot(processes, capacity, process_count, sys_errno) &
+        bind(C, name="ftop_linux_process_snapshot")
+      import :: c_int, c_size_t, linux_process_raw
+      type(linux_process_raw), intent(out) :: processes(*)
+      integer(c_size_t), value :: capacity
+      integer(c_size_t), intent(out) :: process_count
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_linux_process_snapshot
+
+    integer(c_int) function c_ftop_linux_page_size(page_size, sys_errno) bind(C, name="ftop_linux_page_size")
+      import :: c_int, c_long_long
+      integer(c_long_long), intent(out) :: page_size
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_linux_page_size
   end interface
 
 contains
@@ -317,6 +353,192 @@ contains
     info%valid = .true.
     info%seconds = int(seconds, int64)
   end function linux_get_system_uptime
+
+  function linux_get_process_table(self) result(table)
+    class(linux_backend), intent(in) :: self
+    type(process_table) :: table
+    type(memory_info) :: memory
+
+    memory = linux_get_memory_info(self)
+    if (.not. linux_process_snapshot(table, memory%total_bytes)) table = process_table()
+  end function linux_get_process_table
+
+  logical function linux_process_snapshot(table, memory_total_bytes, error_code) result(success)
+    type(process_table), intent(out) :: table
+    integer(int64), intent(in), optional :: memory_total_bytes
+    integer, intent(out), optional :: error_code
+    type(linux_process_raw), allocatable :: raw_processes(:)
+    integer(c_long_long) :: page_size
+    integer(c_size_t) :: c_process_count
+    integer(c_int) :: sys_errno
+    integer(c_int) :: rc
+    integer :: process_count
+    integer :: process_index
+
+    table = process_table()
+    allocate(raw_processes(LINUX_PROCESS_CAPACITY))
+    rc = c_ftop_linux_process_snapshot(raw_processes, int(size(raw_processes), c_size_t), c_process_count, sys_errno)
+    success = rc == 0_c_int
+    if (.not. success) then
+      allocate(table%items(0))
+      call assign_error(error_code, sys_errno)
+      return
+    end if
+
+    page_size = linux_page_size()
+    process_count = max(0, min(int(c_process_count), size(raw_processes)))
+    allocate(table%items(process_count))
+    table%valid = .true.
+    do process_index = 1, process_count
+      table%items(process_index) = linux_process_from_raw(raw_processes(process_index), page_size, memory_total_bytes)
+    end do
+    call assign_error(error_code, sys_errno)
+  end function linux_process_snapshot
+
+  function linux_process_from_raw(raw, page_size, memory_total_bytes) result(process)
+    type(linux_process_raw), intent(in) :: raw
+    integer(c_long_long), intent(in) :: page_size
+    integer(int64), intent(in), optional :: memory_total_bytes
+    type(process_info) :: process
+    character(len=:), allocatable :: cmdline
+    character(len=:), allocatable :: stat_text
+    character(len=:), allocatable :: status_text
+
+    process%pid = int(raw%pid)
+    process%valid = process%pid > 0
+    call c_chars_to_string(raw%stat, int(raw%stat_len), stat_text)
+    call c_chars_to_string(raw%status, int(raw%status_len), status_text)
+    call c_cmdline_to_string(raw%cmdline, int(raw%cmdline_len), cmdline)
+
+    call parse_linux_process_stat(stat_text, page_size, process)
+    call parse_linux_process_status(status_text, process)
+    if (len_trim(cmdline) > 0) process%command = bounded_text(cmdline, len(process%command))
+    if (len_trim(process%command) == 0) process%command = process%name
+    if (present(memory_total_bytes)) call assign_memory_percent(process, memory_total_bytes)
+  end function linux_process_from_raw
+
+  subroutine parse_linux_process_stat(stat_text, page_size, process)
+    character(len=*), intent(in) :: stat_text
+    integer(c_long_long), intent(in) :: page_size
+    type(process_info), intent(inout) :: process
+    character(len=:), allocatable :: remainder
+    character(len=1) :: state
+    integer :: close_paren
+    integer :: open_paren
+    integer :: read_status
+    integer(int64) :: cmajflt
+    integer(int64) :: cminflt
+    integer(int64) :: cstime
+    integer(int64) :: cutime
+    integer(int64) :: flags
+    integer(int64) :: itrealvalue
+    integer(int64) :: majflt
+    integer(int64) :: minflt
+    integer(int64) :: nice
+    integer(int64) :: num_threads
+    integer(int64) :: pgrp
+    integer(int64) :: ppid
+    integer(int64) :: priority
+    integer(int64) :: rss_pages
+    integer(int64) :: session
+    integer(int64) :: starttime
+    integer(int64) :: stime
+    integer(int64) :: tpgid
+    integer(int64) :: tty_nr
+    integer(int64) :: utime
+    integer(int64) :: vsize
+
+    open_paren = index(stat_text, "(")
+    close_paren = last_index(stat_text, ")")
+    if (open_paren <= 0 .or. close_paren <= open_paren) return
+
+    process%name = bounded_text(stat_text(open_paren + 1:close_paren - 1), len(process%name))
+    if (close_paren + 2 > len(stat_text)) return
+
+    remainder = stat_text(close_paren + 2:)
+    state = "?"
+    read(remainder, *, iostat=read_status) state, ppid, pgrp, session, tty_nr, tpgid, flags, &
+      minflt, cminflt, majflt, cmajflt, utime, stime, cutime, cstime, priority, nice, num_threads, &
+      itrealvalue, starttime, vsize, rss_pages
+    if (read_status /= 0) return
+
+    process%state = linux_state_label(state)
+    process%ppid = int(max(0_int64, ppid))
+    process%threads = int(max(0_int64, num_threads))
+    process%nice = int(nice)
+    process%priority = int(priority)
+    process%start_time = max(0_int64, starttime)
+    process%cpu_time = max(0_int64, utime + stime)
+    process%mem_virt_bytes = max(0_int64, vsize)
+    process%mem_rss_bytes = max(0_int64, rss_pages) * int(max(0_c_long_long, page_size), int64)
+  end subroutine parse_linux_process_stat
+
+  subroutine parse_linux_process_status(status_text, process)
+    character(len=*), intent(in) :: status_text
+    type(process_info), intent(inout) :: process
+    integer :: value
+
+    if (linux_status_int(status_text, "Uid:", value)) process%uid = max(0, value)
+    if (linux_status_int(status_text, "Threads:", value)) process%threads = max(0, value)
+  end subroutine parse_linux_process_status
+
+  logical function linux_status_int(status_text, key, value) result(found)
+    character(len=*), intent(in) :: status_text
+    character(len=*), intent(in) :: key
+    integer, intent(out) :: value
+    character(len=:), allocatable :: line
+    integer :: line_end
+    integer :: line_start
+    integer :: read_status
+
+    value = 0
+    found = .false.
+    line_start = 1
+    do while (line_start <= len(status_text))
+      line_end = line_start
+      do while (line_end <= len(status_text) .and. status_text(line_end:line_end) /= new_line("a"))
+        line_end = line_end + 1
+      end do
+      line = status_text(line_start:max(line_start, line_end - 1))
+      if (len_trim(line) > len(key)) then
+        if (line(1:len(key)) == key) then
+          read(line(len(key) + 1:), *, iostat=read_status) value
+          found = read_status == 0
+          return
+        end if
+      end if
+      line_start = line_end + 1
+    end do
+  end function linux_status_int
+
+  function linux_state_label(state) result(label)
+    character(len=1), intent(in) :: state
+    character(len=:), allocatable :: label
+
+    select case (state)
+    case ("R", "S", "D", "T", "Z", "I")
+      label = state
+    case default
+      label = "?"
+    end select
+  end function linux_state_label
+
+  subroutine assign_memory_percent(process, memory_total_bytes)
+    type(process_info), intent(inout) :: process
+    integer(int64), intent(in) :: memory_total_bytes
+
+    if (memory_total_bytes <= 0_int64) return
+    process%mem_percent = 100.0_real64 * real(max(0_int64, process%mem_rss_bytes), real64) / &
+                          real(memory_total_bytes, real64)
+  end subroutine assign_memory_percent
+
+  integer(c_long_long) function linux_page_size() result(page_size)
+    integer(c_int) :: sys_errno
+    integer(c_int) :: rc
+
+    rc = c_ftop_linux_page_size(page_size, sys_errno)
+    if (rc /= 0_c_int .or. page_size <= 0_c_long_long) page_size = 4096_c_long_long
+  end function linux_page_size
 
   logical function linux_cpu_state_snapshot(total, cores, error_code) result(success)
     type(cpu_state_ticks), intent(out) :: total
@@ -506,6 +728,57 @@ contains
       text(i:i) = achar(iachar(c_buffer(i)))
     end do
   end subroutine c_chars_to_string
+
+  subroutine c_cmdline_to_string(c_buffer, value_len, text)
+    character(kind=c_char), intent(in) :: c_buffer(:)
+    integer, intent(in) :: value_len
+    character(len=:), allocatable, intent(out) :: text
+    integer :: copied_len
+    integer :: i
+
+    copied_len = max(0, min(value_len, size(c_buffer)))
+    allocate(character(len=copied_len) :: text)
+    do i = 1, copied_len
+      if (c_buffer(i) == c_null_char) then
+        text(i:i) = " "
+      else
+        text(i:i) = achar(iachar(c_buffer(i)))
+      end if
+    end do
+    text = trim(adjustl(text))
+  end subroutine c_cmdline_to_string
+
+  integer function last_index(text, needle) result(position)
+    character(len=*), intent(in) :: text
+    character(len=*), intent(in) :: needle
+    integer :: candidate
+    integer :: offset
+
+    position = 0
+    if (len(needle) <= 0) return
+    offset = 0
+    do
+      candidate = index(text(offset + 1:), needle)
+      if (candidate <= 0) exit
+      position = offset + candidate
+      offset = position
+      if (offset >= len(text)) exit
+    end do
+  end function last_index
+
+  function bounded_text(source, capacity) result(text)
+    character(len=*), intent(in) :: source
+    integer, intent(in) :: capacity
+    character(len=:), allocatable :: text
+    integer :: copied_len
+
+    copied_len = max(0, min(len_trim(source), capacity))
+    if (copied_len <= 0) then
+      text = ""
+    else
+      text = source(1:copied_len)
+    end if
+  end function bounded_text
 
   subroutine assign_error(error_code, sys_errno)
     integer, intent(out), optional :: error_code

@@ -6,6 +6,7 @@
 #include <mach/mach_init.h>
 #include <mach/processor_info.h>
 #include <mach/vm_map.h>
+#include <libproc.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -21,6 +22,20 @@ struct ftop_macos_processor_ticks {
   long long system;
   long long idle;
   long long nice;
+};
+
+#define FTOP_MACOS_PROCESS_COMMAND_LEN 256
+
+struct ftop_macos_process_info {
+  int pid;
+  int ppid;
+  int uid;
+  int state;
+  char command[FTOP_MACOS_PROCESS_COMMAND_LEN];
+  long long mem_rss_bytes;
+  long long mem_virt_bytes;
+  int threads;
+  int nice;
 };
 
 typedef struct __IOHIDEvent *IOHIDEventRef;
@@ -625,6 +640,77 @@ int ftop_macos_processor_ticks(
   }
 
   *processor_count = copy_count;
+  return 0;
+}
+
+static void ftop_macos_copy_process_command(char *destination, const char *source) {
+  size_t i;
+
+  for (i = 0U; i + 1U < FTOP_MACOS_PROCESS_COMMAND_LEN && source[i] != '\0'; ++i) destination[i] = source[i];
+  destination[i] = '\0';
+}
+
+int ftop_macos_process_snapshot(
+    struct ftop_macos_process_info *buffer, size_t capacity, size_t *process_count, int *sys_errno) {
+  struct proc_bsdinfo bsd;
+  struct proc_taskinfo task;
+  pid_t *pids;
+  int byte_count;
+  int pid_count;
+  int rc;
+  int i;
+  size_t count;
+
+  if (buffer == NULL || process_count == NULL || sys_errno == NULL || capacity == 0) return -1;
+
+  *process_count = 0U;
+  *sys_errno = 0;
+  byte_count = proc_listpids(PROC_ALL_PIDS, 0, NULL, 0);
+  if (byte_count <= 0) {
+    *sys_errno = errno != 0 ? errno : EINVAL;
+    return -1;
+  }
+
+  pids = (pid_t *)malloc((size_t)byte_count);
+  if (pids == NULL) {
+    *sys_errno = errno != 0 ? errno : ENOMEM;
+    return -1;
+  }
+
+  byte_count = proc_listpids(PROC_ALL_PIDS, 0, pids, byte_count);
+  if (byte_count <= 0) {
+    *sys_errno = errno != 0 ? errno : EINVAL;
+    free(pids);
+    return -1;
+  }
+
+  pid_count = byte_count / (int)sizeof(pid_t);
+  count = 0U;
+  for (i = 0; i < pid_count && count < capacity; ++i) {
+    if (pids[i] <= 0) continue;
+    memset(&bsd, 0, sizeof(bsd));
+    rc = proc_pidinfo(pids[i], PROC_PIDTBSDINFO, 0, &bsd, sizeof(bsd));
+    if (rc != (int)sizeof(bsd)) continue;
+
+    memset(&task, 0, sizeof(task));
+    rc = proc_pidinfo(pids[i], PROC_PIDTASKINFO, 0, &task, sizeof(task));
+    memset(&buffer[count], 0, sizeof(buffer[count]));
+    buffer[count].pid = (int)bsd.pbi_pid;
+    buffer[count].ppid = (int)bsd.pbi_ppid;
+    buffer[count].uid = (int)bsd.pbi_uid;
+    buffer[count].state = (int)bsd.pbi_status;
+    buffer[count].nice = (int)bsd.pbi_nice;
+    ftop_macos_copy_process_command(buffer[count].command, bsd.pbi_comm);
+    if (rc == (int)sizeof(task)) {
+      buffer[count].mem_rss_bytes = task.pti_resident_size > 0 ? (long long)task.pti_resident_size : 0;
+      buffer[count].mem_virt_bytes = task.pti_virtual_size > 0 ? (long long)task.pti_virtual_size : 0;
+      buffer[count].threads = task.pti_threadnum > 0 ? (int)task.pti_threadnum : 0;
+    }
+    ++count;
+  }
+
+  free(pids);
+  *process_count = count;
   return 0;
 }
 

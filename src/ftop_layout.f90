@@ -43,6 +43,7 @@ module ftop_layout
     type(widget_rect) :: frame
     type(widget_rect) :: cpu_panel
     type(widget_rect) :: memory_panel
+    type(widget_rect) :: process_panel
     type(widget_rect) :: footer
   end type dashboard_layout
 
@@ -103,6 +104,8 @@ contains
         layout%cpu_panel = assignments(item)%rect
       case (LAYOUT_WIDGET_MEMORY)
         layout%memory_panel = assignments(item)%rect
+      case (LAYOUT_WIDGET_PROCESS)
+        layout%process_panel = assignments(item)%rect
       end select
     end do
   end function dashboard_layout_from_grid
@@ -115,6 +118,7 @@ contains
     layout%frame = widget_rect(1, 1, max(0, width), max(0, height))
     layout%cpu_panel = widget_rect(0, 0, 0, 0)
     layout%memory_panel = widget_rect(0, 0, 0, 0)
+    layout%process_panel = widget_rect(0, 0, 0, 0)
     layout%footer = widget_rect(max(1, height - 2), 3, max(0, width - 4), &
                                 min(2, max(0, height - 2)))
   end function empty_dashboard_layout
@@ -453,7 +457,7 @@ contains
     character(len=*), intent(in) :: widget
 
     select case (trim(widget))
-    case (LAYOUT_WIDGET_CPU, LAYOUT_WIDGET_MEMORY)
+    case (LAYOUT_WIDGET_CPU, LAYOUT_WIDGET_MEMORY, LAYOUT_WIDGET_PROCESS)
       renderable = .true.
     case default
       renderable = .false.

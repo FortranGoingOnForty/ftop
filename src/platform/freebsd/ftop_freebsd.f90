@@ -19,12 +19,17 @@ module ftop_platform
     load_average_info, &
     memory_info, &
     platform_backend, &
+    process_table, &
     system_uptime_info
+  use ftop_proc_data, only : &
+    PROCESS_NAME_LEN, &
+    process_info
   implicit none
   private
 
   integer, parameter, public :: FREEBSD_PROCESS_COMMAND_LEN = 32
   integer, parameter, public :: FREEBSD_DEVSTAT_NAME_LEN = 16
+  integer, parameter :: FREEBSD_PROCESS_CAPACITY = 4096
 
   type, bind(C), public :: freebsd_process_info
     integer(c_int) :: pid
@@ -32,6 +37,12 @@ module ftop_platform
     integer(c_int) :: uid
     integer(c_int) :: state
     character(kind=c_char) :: command(FREEBSD_PROCESS_COMMAND_LEN)
+    integer(c_long_long) :: mem_rss_bytes
+    integer(c_long_long) :: mem_virt_bytes
+    integer(c_int) :: threads
+    integer(c_int) :: nice
+    integer(c_int) :: priority
+    integer(c_long_long) :: start_time
   end type freebsd_process_info
 
   type, public :: freebsd_kvm_handle
@@ -71,6 +82,7 @@ module ftop_platform
     procedure :: get_memory_info => freebsd_get_memory_info
     procedure :: get_load_average => freebsd_get_load_average
     procedure :: get_system_uptime => freebsd_get_system_uptime
+    procedure :: get_process_table => freebsd_get_process_table
   end type freebsd_backend
 
   public :: create_platform
@@ -88,6 +100,7 @@ module ftop_platform
   public :: load_average_info
   public :: memory_info
   public :: platform_backend
+  public :: process_table
   public :: system_uptime_info
 
   interface
@@ -422,6 +435,93 @@ contains
     end if
   end function freebsd_get_system_uptime
 
+  function freebsd_get_process_table(self) result(table)
+    class(freebsd_backend), intent(in) :: self
+    type(process_table) :: table
+    type(freebsd_kvm_handle) :: handle
+    type(freebsd_process_info), allocatable :: raw_processes(:)
+    type(memory_info) :: memory
+    integer :: process_count
+    integer :: process_index
+    logical :: ignored
+
+    table = process_table()
+    allocate(raw_processes(FREEBSD_PROCESS_CAPACITY))
+    if (.not. freebsd_kvm_open(handle)) then
+      allocate(table%items(0))
+      return
+    end if
+
+    if (.not. freebsd_kvm_getprocs(handle, raw_processes, process_count)) then
+      ignored = freebsd_kvm_close(handle)
+      allocate(table%items(0))
+      return
+    end if
+    ignored = freebsd_kvm_close(handle)
+
+    memory = freebsd_get_memory_info(self)
+    process_count = max(0, min(process_count, size(raw_processes)))
+    allocate(table%items(process_count))
+    table%valid = .true.
+    do process_index = 1, process_count
+      table%items(process_index) = freebsd_process_from_c(raw_processes(process_index), memory%total_bytes)
+    end do
+  end function freebsd_get_process_table
+
+  function freebsd_process_from_c(raw, memory_total_bytes) result(process)
+    type(freebsd_process_info), intent(in) :: raw
+    integer(int64), intent(in) :: memory_total_bytes
+    type(process_info) :: process
+    character(len=:), allocatable :: command
+
+    process%valid = raw%pid > 0_c_int
+    process%pid = int(max(0_c_int, raw%pid))
+    process%ppid = int(max(0_c_int, raw%ppid))
+    process%uid = int(max(0_c_int, raw%uid))
+    process%state = freebsd_state_label(int(raw%state))
+    call c_chars_to_string(raw%command, command)
+    process%name = bounded_text(command, len(process%name))
+    process%command = bounded_text(command, len(process%command))
+    process%mem_rss_bytes = int(max(0_c_long_long, raw%mem_rss_bytes), int64)
+    process%mem_virt_bytes = int(max(0_c_long_long, raw%mem_virt_bytes), int64)
+    process%threads = int(max(0_c_int, raw%threads))
+    process%nice = int(raw%nice)
+    process%priority = int(raw%priority)
+    process%start_time = int(max(0_c_long_long, raw%start_time), int64)
+    call assign_memory_percent(process, memory_total_bytes)
+  end function freebsd_process_from_c
+
+  function freebsd_state_label(state) result(label)
+    integer, intent(in) :: state
+    character(len=:), allocatable :: label
+
+    select case (state)
+    case (1)
+      label = "S"
+    case (2)
+      label = "R"
+    case (3)
+      label = "T"
+    case (4)
+      label = "Z"
+    case (5)
+      label = "W"
+    case (6)
+      label = "L"
+    case default
+      label = "?"
+    end select
+  end function freebsd_state_label
+
+  subroutine assign_memory_percent(process, memory_total_bytes)
+    type(process_info), intent(inout) :: process
+    integer(int64), intent(in) :: memory_total_bytes
+
+    if (memory_total_bytes <= 0_int64) return
+    process%mem_percent = 100.0_real64 * real(max(0_int64, process%mem_rss_bytes), real64) / &
+                          real(memory_total_bytes, real64)
+  end subroutine assign_memory_percent
+
   function freebsd_cpu_state_from_c(c_ticks) result(ticks)
     type(freebsd_cpu_state_tick_sample), intent(in) :: c_ticks
     type(cpu_state_ticks) :: ticks
@@ -626,6 +726,38 @@ contains
     end if
     call assign_error(error_code, sys_errno)
   end function freebsd_devstat_getdevs
+
+  subroutine c_chars_to_string(c_buffer, text)
+    character(kind=c_char), intent(in) :: c_buffer(:)
+    character(len=:), allocatable, intent(out) :: text
+    integer :: copied_len
+    integer :: i
+
+    copied_len = 0
+    do i = 1, size(c_buffer)
+      if (c_buffer(i) == c_null_char) exit
+      copied_len = copied_len + 1
+    end do
+
+    allocate(character(len=copied_len) :: text)
+    do i = 1, copied_len
+      text(i:i) = achar(iachar(c_buffer(i)))
+    end do
+  end subroutine c_chars_to_string
+
+  function bounded_text(source, capacity) result(text)
+    character(len=*), intent(in) :: source
+    integer, intent(in) :: capacity
+    character(len=:), allocatable :: text
+    integer :: copied_len
+
+    copied_len = max(0, min(len_trim(source), capacity))
+    if (copied_len <= 0) then
+      text = ""
+    else
+      text = source(1:copied_len)
+    end if
+  end function bounded_text
 
   subroutine to_c_string(text, buffer)
     character(len=*), intent(in) :: text

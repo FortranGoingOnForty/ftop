@@ -24,6 +24,12 @@ struct ftop_freebsd_process_info {
   int uid;
   int state;
   char command[FTOP_FREEBSD_COMMAND_LEN];
+  long long mem_rss_bytes;
+  long long mem_virt_bytes;
+  int threads;
+  int nice;
+  int priority;
+  long long start_time;
 };
 
 struct ftop_freebsd_devstat_info {
@@ -379,6 +385,7 @@ static void ftop_copy_process_command(char *destination, const char *source) {
 int ftop_freebsd_kvm_getprocs(
     void *handle, struct ftop_freebsd_process_info *buffer, size_t capacity, size_t *process_count, int *sys_errno) {
   struct kinfo_proc *processes;
+  long long page_size;
   size_t copy_count;
   int count;
   size_t i;
@@ -394,6 +401,7 @@ int ftop_freebsd_kvm_getprocs(
     return -1;
   }
 
+  page_size = (long long)getpagesize();
   copy_count = (size_t)count < capacity ? (size_t)count : capacity;
   for (i = 0U; i < copy_count; ++i) {
     buffer[i].pid = (int)processes[i].ki_pid;
@@ -401,6 +409,12 @@ int ftop_freebsd_kvm_getprocs(
     buffer[i].uid = (int)processes[i].ki_uid;
     buffer[i].state = (int)processes[i].ki_stat;
     ftop_copy_process_command(buffer[i].command, processes[i].ki_comm);
+    buffer[i].mem_rss_bytes = processes[i].ki_rssize > 0 ? (long long)processes[i].ki_rssize * page_size : 0;
+    buffer[i].mem_virt_bytes = processes[i].ki_size > 0 ? (long long)processes[i].ki_size : 0;
+    buffer[i].threads = processes[i].ki_numthreads > 0 ? (int)processes[i].ki_numthreads : 0;
+    buffer[i].nice = (int)processes[i].ki_nice;
+    buffer[i].priority = (int)processes[i].ki_pri.pri_level;
+    buffer[i].start_time = processes[i].ki_start.tv_sec > 0 ? (long long)processes[i].ki_start.tv_sec : 0;
   }
 
   *process_count = copy_count;

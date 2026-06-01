@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <ctype.h>
 #include <dirent.h>
 #include <fcntl.h>
 #include <stddef.h>
@@ -10,10 +11,23 @@
 #define FTOP_LINUX_CPUINFO_BUFFER_LEN 1048576U
 #define FTOP_LINUX_HWMON_NAME_LEN 128
 #define FTOP_LINUX_HWMON_PATH_LEN 256
+#define FTOP_LINUX_PROCESS_COMMAND_LEN 256
+#define FTOP_LINUX_PROCESS_STAT_LEN 512
+#define FTOP_LINUX_PROCESS_STATUS_LEN 2048
 
 struct ftop_linux_hwmon_sensor {
   char path[FTOP_LINUX_HWMON_PATH_LEN];
   char name[FTOP_LINUX_HWMON_NAME_LEN];
+};
+
+struct ftop_linux_process_raw {
+  int pid;
+  char stat[FTOP_LINUX_PROCESS_STAT_LEN];
+  size_t stat_len;
+  char status[FTOP_LINUX_PROCESS_STATUS_LEN];
+  size_t status_len;
+  char cmdline[FTOP_LINUX_PROCESS_COMMAND_LEN];
+  size_t cmdline_len;
 };
 
 static int ftop_read_file_into_buffer(const char *path, char *buffer, size_t buffer_len, size_t *value_len, int *sys_errno) {
@@ -59,6 +73,82 @@ int ftop_linux_read_proc_loadavg(char *buffer, size_t buffer_len, size_t *value_
 
 int ftop_linux_read_proc_uptime(char *buffer, size_t buffer_len, size_t *value_len, int *sys_errno) {
   return ftop_read_file_into_buffer("/proc/uptime", buffer, buffer_len, value_len, sys_errno);
+}
+
+static int ftop_linux_pid_from_name(const char *name, int *pid) {
+  char *end;
+  long value;
+
+  if (name == NULL || pid == NULL || !isdigit((unsigned char)name[0])) return 0;
+  errno = 0;
+  value = strtol(name, &end, 10);
+  if (end == name || *end != '\0' || errno != 0 || value <= 0 || value > 2147483647L) return 0;
+  *pid = (int)value;
+  return 1;
+}
+
+static int ftop_linux_read_process_file(
+    int pid, const char *name, char *buffer, size_t buffer_len, size_t *value_len) {
+  char path[128];
+  int read_errno;
+  int written;
+
+  written = snprintf(path, sizeof(path), "/proc/%d/%s", pid, name);
+  if (written < 0 || (size_t)written >= sizeof(path)) return -1;
+  read_errno = 0;
+  return ftop_read_file_into_buffer(path, buffer, buffer_len, value_len, &read_errno);
+}
+
+int ftop_linux_process_snapshot(
+    struct ftop_linux_process_raw *buffer, size_t capacity, size_t *process_count, int *sys_errno) {
+  DIR *directory;
+  struct dirent *entry;
+  struct ftop_linux_process_raw process;
+  int pid;
+  size_t count;
+
+  if (buffer == NULL || process_count == NULL || sys_errno == NULL || capacity == 0) return -1;
+
+  *process_count = 0U;
+  *sys_errno = 0;
+  directory = opendir("/proc");
+  if (directory == NULL) {
+    *sys_errno = errno;
+    return -1;
+  }
+
+  count = 0U;
+  while ((entry = readdir(directory)) != NULL && count < capacity) {
+    if (!ftop_linux_pid_from_name(entry->d_name, &pid)) continue;
+    memset(&process, 0, sizeof(process));
+    process.pid = pid;
+    if (ftop_linux_read_process_file(pid, "stat", process.stat, sizeof(process.stat), &process.stat_len) != 0) continue;
+    (void)ftop_linux_read_process_file(pid, "status", process.status, sizeof(process.status), &process.status_len);
+    (void)ftop_linux_read_process_file(pid, "cmdline", process.cmdline, sizeof(process.cmdline), &process.cmdline_len);
+    buffer[count] = process;
+    ++count;
+  }
+
+  closedir(directory);
+  *process_count = count;
+  return 0;
+}
+
+int ftop_linux_page_size(long long *page_size, int *sys_errno) {
+  long value;
+
+  if (page_size == NULL || sys_errno == NULL) return -1;
+
+  *page_size = 0;
+  *sys_errno = 0;
+  value = sysconf(_SC_PAGESIZE);
+  if (value <= 0L) {
+    *sys_errno = errno != 0 ? errno : EINVAL;
+    return -1;
+  }
+
+  *page_size = (long long)value;
+  return 0;
 }
 
 int ftop_linux_read_cpu_frequency(int cpu_index, char *buffer, size_t buffer_len, size_t *value_len, int *sys_errno) {

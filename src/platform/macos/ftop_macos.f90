@@ -9,9 +9,15 @@ module ftop_platform
     load_average_info, &
     memory_info, &
     platform_backend, &
+    process_table, &
     system_uptime_info
+  use ftop_proc_data, only : &
+    PROCESS_COMMAND_LEN, &
+    process_info
   implicit none
   private
+
+  integer, parameter :: MACOS_PROCESS_CAPACITY = 4096
 
   type, bind(C), public :: macos_processor_ticks
     integer(c_long_long) :: user
@@ -19,6 +25,18 @@ module ftop_platform
     integer(c_long_long) :: idle
     integer(c_long_long) :: nice
   end type macos_processor_ticks
+
+  type, bind(C), public :: macos_process_info
+    integer(c_int) :: pid
+    integer(c_int) :: ppid
+    integer(c_int) :: uid
+    integer(c_int) :: state
+    character(kind=c_char) :: command(PROCESS_COMMAND_LEN)
+    integer(c_long_long) :: mem_rss_bytes
+    integer(c_long_long) :: mem_virt_bytes
+    integer(c_int) :: threads
+    integer(c_int) :: nice
+  end type macos_process_info
 
   type, extends(platform_backend) :: macos_backend
   contains
@@ -30,6 +48,7 @@ module ftop_platform
     procedure :: get_memory_info => macos_get_memory_info
     procedure :: get_load_average => macos_get_load_average
     procedure :: get_system_uptime => macos_get_system_uptime
+    procedure :: get_process_table => macos_get_process_table
   end type macos_backend
 
   public :: create_platform
@@ -39,6 +58,7 @@ module ftop_platform
   public :: load_average_info
   public :: macos_iokit_disk_count
   public :: macos_iokit_gpu_count
+  public :: macos_process_snapshot
   public :: macos_processor_tick_samples
   public :: macos_sysctl_bytes
   public :: macos_sysctl_int
@@ -46,6 +66,7 @@ module ftop_platform
   public :: macos_sysctl_string
   public :: memory_info
   public :: platform_backend
+  public :: process_table
   public :: system_uptime_info
 
   interface
@@ -152,6 +173,15 @@ module ftop_platform
       integer(c_int), intent(out) :: count
       integer(c_int), intent(out) :: sys_errno
     end function c_ftop_macos_iokit_disk_count
+
+    integer(c_int) function c_ftop_macos_process_snapshot(processes, capacity, process_count, sys_errno) &
+        bind(C, name="ftop_macos_process_snapshot")
+      import :: c_int, c_size_t, macos_process_info
+      type(macos_process_info), intent(out) :: processes(*)
+      integer(c_size_t), value :: capacity
+      integer(c_size_t), intent(out) :: process_count
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_macos_process_snapshot
   end interface
 
 contains
@@ -342,6 +372,93 @@ contains
     end if
   end function macos_get_system_uptime
 
+  function macos_get_process_table(self) result(table)
+    class(macos_backend), intent(in) :: self
+    type(process_table) :: table
+    type(memory_info) :: memory
+
+    memory = macos_get_memory_info(self)
+    if (.not. macos_process_snapshot(table, memory%total_bytes)) table = process_table()
+  end function macos_get_process_table
+
+  logical function macos_process_snapshot(table, memory_total_bytes, error_code) result(success)
+    type(process_table), intent(out) :: table
+    integer(int64), intent(in), optional :: memory_total_bytes
+    integer, intent(out), optional :: error_code
+    type(macos_process_info), allocatable :: raw_processes(:)
+    integer(c_size_t) :: c_process_count
+    integer(c_int) :: sys_errno
+    integer(c_int) :: rc
+    integer :: process_count
+    integer :: process_index
+
+    table = process_table()
+    allocate(raw_processes(MACOS_PROCESS_CAPACITY))
+    rc = c_ftop_macos_process_snapshot(raw_processes, int(size(raw_processes), c_size_t), c_process_count, sys_errno)
+    success = rc == 0_c_int
+    if (.not. success) then
+      allocate(table%items(0))
+      call assign_error(error_code, sys_errno)
+      return
+    end if
+
+    process_count = max(0, min(int(c_process_count), size(raw_processes)))
+    allocate(table%items(process_count))
+    table%valid = .true.
+    do process_index = 1, process_count
+      table%items(process_index) = macos_process_from_c(raw_processes(process_index), memory_total_bytes)
+    end do
+    call assign_error(error_code, sys_errno)
+  end function macos_process_snapshot
+
+  function macos_process_from_c(raw, memory_total_bytes) result(process)
+    type(macos_process_info), intent(in) :: raw
+    integer(int64), intent(in), optional :: memory_total_bytes
+    type(process_info) :: process
+    character(len=:), allocatable :: command
+
+    process%valid = raw%pid > 0_c_int
+    process%pid = int(max(0_c_int, raw%pid))
+    process%ppid = int(max(0_c_int, raw%ppid))
+    process%uid = int(max(0_c_int, raw%uid))
+    process%state = macos_state_label(int(raw%state))
+    call c_chars_to_string(raw%command, command)
+    process%name = bounded_text(command, len(process%name))
+    process%command = bounded_text(command, len(process%command))
+    process%mem_rss_bytes = int(max(0_c_long_long, raw%mem_rss_bytes), int64)
+    process%mem_virt_bytes = int(max(0_c_long_long, raw%mem_virt_bytes), int64)
+    process%threads = int(max(0_c_int, raw%threads))
+    process%nice = int(raw%nice)
+    if (present(memory_total_bytes)) call assign_memory_percent(process, memory_total_bytes)
+  end function macos_process_from_c
+
+  function macos_state_label(state) result(label)
+    integer, intent(in) :: state
+    character(len=:), allocatable :: label
+
+    select case (state)
+    case (2)
+      label = "R"
+    case (3)
+      label = "S"
+    case (4)
+      label = "T"
+    case (5)
+      label = "Z"
+    case default
+      label = "?"
+    end select
+  end function macos_state_label
+
+  subroutine assign_memory_percent(process, memory_total_bytes)
+    type(process_info), intent(inout) :: process
+    integer(int64), intent(in) :: memory_total_bytes
+
+    if (memory_total_bytes <= 0_int64) return
+    process%mem_percent = 100.0_real64 * real(max(0_int64, process%mem_rss_bytes), real64) / &
+                          real(memory_total_bytes, real64)
+  end subroutine assign_memory_percent
+
   function macos_cpu_state_from_c(c_ticks) result(ticks)
     type(macos_processor_ticks), intent(in) :: c_ticks
     type(cpu_state_ticks) :: ticks
@@ -525,6 +642,38 @@ contains
     end if
     call assign_error(error_code, sys_errno)
   end function macos_iokit_disk_count
+
+  subroutine c_chars_to_string(c_buffer, text)
+    character(kind=c_char), intent(in) :: c_buffer(:)
+    character(len=:), allocatable, intent(out) :: text
+    integer :: copied_len
+    integer :: i
+
+    copied_len = 0
+    do i = 1, size(c_buffer)
+      if (c_buffer(i) == c_null_char) exit
+      copied_len = copied_len + 1
+    end do
+
+    allocate(character(len=copied_len) :: text)
+    do i = 1, copied_len
+      text(i:i) = achar(iachar(c_buffer(i)))
+    end do
+  end subroutine c_chars_to_string
+
+  function bounded_text(source, capacity) result(text)
+    character(len=*), intent(in) :: source
+    integer, intent(in) :: capacity
+    character(len=:), allocatable :: text
+    integer :: copied_len
+
+    copied_len = max(0, min(len_trim(source), capacity))
+    if (copied_len <= 0) then
+      text = ""
+    else
+      text = source(1:copied_len)
+    end if
+  end function bounded_text
 
   subroutine to_c_string(text, buffer)
     character(len=*), intent(in) :: text

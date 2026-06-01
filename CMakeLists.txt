@@ -81,8 +81,9 @@ endif()
 
 add_library(
   ftop_core STATIC
-  src/collect/ftop_collector.f90
   src/collect/ftop_cpu_data.f90
+  src/collect/ftop_proc_data.f90
+  src/collect/ftop_collector.f90
   src/collect/ftop_linux_loadavg.f90
   src/collect/ftop_linux_meminfo.f90
   src/collect/ftop_linux_proc_stat.f90
@@ -104,6 +105,7 @@ add_library(
   src/widgets/ftop_graph.f90
   src/widgets/ftop_cpu.f90
   src/widgets/ftop_memory.f90
+  src/widgets/ftop_process_table.f90
   src/widgets/ftop_table.f90
   src/shim/ftop_dl.c
   src/shim/ftop_pthread.c

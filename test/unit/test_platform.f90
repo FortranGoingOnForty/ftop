@@ -10,6 +10,7 @@ program test_platform
     memory_info, &
     platform_backend, &
     system_uptime_info
+  use ftop_proc_data, only : process_table
   implicit none
 
   class(platform_backend), allocatable :: backend
@@ -22,6 +23,7 @@ program test_platform
   type(memory_info) :: memory
   type(load_average_info) :: load_average
   type(system_uptime_info) :: uptime
+  type(process_table) :: processes
   integer :: cpu_count
   real(real64) :: usage
 
@@ -86,6 +88,14 @@ program test_platform
   uptime = backend%get_system_uptime()
   if (.not. uptime%valid) error stop "system uptime must be valid"
   if (uptime%seconds < 0) error stop "system uptime must not be negative"
+
+  processes = backend%get_process_table()
+  if (.not. processes%valid) error stop "process table must be valid"
+  if (.not. allocated(processes%items)) error stop "process table items must be allocated"
+  if (size(processes%items) <= 0) error stop "process table must include processes"
+  if (.not. any(processes%items%valid)) error stop "process table must include valid processes"
+  if (any(processes%items%valid .and. processes%items%pid <= 0)) error stop "valid process pid must be positive"
+  if (any(processes%items%mem_rss_bytes < 0)) error stop "process RSS must not be negative"
 
 contains
 
