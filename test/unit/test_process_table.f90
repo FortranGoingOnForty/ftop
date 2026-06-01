@@ -9,7 +9,7 @@ program test_process_table
                                  process_table_clear_filter, process_table_cycle_sort_key, &
                                  process_table_delete_filter_char, process_table_page_delta, &
                                  process_table_select_delta, process_table_state, process_table_status, &
-                                 process_table_toggle_sort_direction, render_process_panel
+                                 process_table_toggle_selected_node, process_table_toggle_sort_direction, render_process_panel
   use ftop_table, only : TABLE_SORT_DESCENDING
   use ftop_widgets, only : widget_rect
   implicit none
@@ -19,6 +19,7 @@ program test_process_table
   type(screen_style) :: dim_style
   type(screen_style) :: title_style
   type(process_table_state) :: state
+  logical :: toggled
 
   call test_process_state_updates()
 
@@ -51,6 +52,28 @@ program test_process_table
                             state)
   call require(index(row_text(buffer, 3), "child --task") > 0, "flat process table should sort by command")
   call require(index(row_text(buffer, 3), "└") == 0, "flat process table should omit tree branch")
+
+  buffer = allocate_screen(80, 10)
+  state = process_table_state(selected_row=1)
+  call render_process_panel(buffer, widget_rect(1, 1, 80, 10), sample_snapshot(), border_style, title_style, dim_style, &
+                            state)
+  call require(state%selected_pid == 100, "process table should track selected pid")
+  call require(state%selected_has_children, "process table should track selected child state")
+  toggled = process_table_toggle_selected_node(state)
+  call require(toggled, "process table should collapse selected parent")
+  buffer = allocate_screen(80, 10)
+  call render_process_panel(buffer, widget_rect(1, 1, 80, 10), sample_snapshot(), border_style, title_style, dim_style, &
+                            state)
+  call require(state%row_count == 1, "process table collapse should hide descendants")
+  call require(state%collapsed_count == 1, "process table collapse should track collapsed node")
+  call require(index(row_text(buffer, 3), "parent --test") > 0, "collapsed process table should keep parent")
+  call require(index(row_text(buffer, 4), "child --task") == 0, "collapsed process table should hide child")
+  toggled = process_table_toggle_selected_node(state)
+  call require(toggled, "process table should expand selected parent")
+  buffer = allocate_screen(80, 10)
+  call render_process_panel(buffer, widget_rect(1, 1, 80, 10), sample_snapshot(), border_style, title_style, dim_style, &
+                            state)
+  call require(state%row_count == 2, "expanded process table should show descendants")
 
   buffer = allocate_screen(80, 10)
   state = process_table_state(tree_view=.false.)

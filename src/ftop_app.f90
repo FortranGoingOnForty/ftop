@@ -49,6 +49,7 @@ module ftop_app
     process_table_select_delta, &
     process_table_state, &
     process_table_status, &
+    process_table_toggle_selected_node, &
     process_table_toggle_sort_direction, &
     process_table_toggle_tree
   use ftop_signal, only : &
@@ -522,6 +523,7 @@ contains
   logical function handle_process_named_key(session, key_name) result(handled)
     type(terminal_session), intent(inout) :: session
     character(len=*), intent(in) :: key_name
+    logical :: node_toggled
 
     handled = .false.
     if (.not. process_widget_focused(session)) return
@@ -530,8 +532,12 @@ contains
       if (.not. session%process_state%filter_active) return
       call process_table_delete_filter_char(session%process_state)
     case (FGOF_KEY_ENTER)
-      if (.not. session%process_state%filter_active) return
-      call process_table_finish_filter(session%process_state)
+      if (session%process_state%filter_active) then
+        call process_table_finish_filter(session%process_state)
+      else
+        node_toggled = process_table_toggle_selected_node(session%process_state)
+        if (.not. node_toggled) return
+      end if
     case (FGOF_KEY_ESCAPE)
       if (.not. session%process_state%filter_active .and. session%process_state%filter_length <= 0) return
       call process_table_clear_filter(session%process_state)

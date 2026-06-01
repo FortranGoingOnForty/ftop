@@ -36,6 +36,7 @@ module ftop_process_table
 
   integer, parameter :: PROCESS_TABLE_COLUMNS = 7
   integer, parameter :: PROCESS_SORT_KEY_COUNT = 6
+  integer, parameter :: PROCESS_COLLAPSED_CAPACITY = 256
   integer, parameter, public :: PROCESS_FILTER_LEN = 96
 
   type, public :: process_table_state
@@ -46,6 +47,12 @@ module ftop_process_table
     integer :: row_count = 0
     integer :: total_row_count = 0
     integer :: viewport_rows = 0
+    integer :: selected_pid = 0
+    integer(int64) :: selected_start_time = 0_int64
+    logical :: selected_has_children = .false.
+    integer :: collapsed_count = 0
+    integer :: collapsed_pid(PROCESS_COLLAPSED_CAPACITY) = 0
+    integer(int64) :: collapsed_start_time(PROCESS_COLLAPSED_CAPACITY) = 0_int64
     integer :: filter_length = 0
     character(len=PROCESS_FILTER_LEN) :: filter_text = ""
     logical :: filter_active = .false.
@@ -64,6 +71,7 @@ module ftop_process_table
   public :: process_table_sort_key_label
   public :: process_table_status
   public :: process_table_finish_filter
+  public :: process_table_toggle_selected_node
   public :: process_table_toggle_sort_direction
   public :: process_table_toggle_tree
   public :: render_process_panel
@@ -89,6 +97,7 @@ contains
     type(table_column), allocatable :: columns(:)
     type(process_table_state) :: active_state
     type(process_table) :: sorted_processes
+    type(process_table) :: tree_processes
     type(widget_rect) :: content
     type(widget_rect) :: table_content
     logical :: show_filter_bar
@@ -126,10 +135,17 @@ contains
     columns = process_columns(active_state)
     sorted_processes = snapshot%processes
     active_state%total_row_count = count_valid_processes(sorted_processes)
+    call prune_collapsed_nodes(active_state, sorted_processes)
     call sort_process_table(sorted_processes, active_state%sort_key, &
                             descending=active_state%sort_direction == TABLE_SORT_DESCENDING)
     call filter_process_table(sorted_processes, active_state)
-    if (active_state%tree_view) call build_process_tree(sorted_processes)
+    if (active_state%tree_view) then
+      call build_process_tree(sorted_processes)
+      tree_processes = sorted_processes
+      call apply_collapsed_nodes(sorted_processes, active_state)
+    else
+      tree_processes = sorted_processes
+    end if
     cells = process_cells(sorted_processes)
     if (size(cells, 1) <= 0) then
       if (active_state%filter_length > 0) then
@@ -146,6 +162,7 @@ contains
     end if
 
     call normalize_process_table_state(active_state, size(cells, 1), table_viewport_row_count(table_content, .true.))
+    call update_selected_process_state(active_state, sorted_processes, tree_processes)
 
     call render_table(buffer, table_content, columns, cells, separator=TABLE_SEPARATOR_SPACE, &
                       show_header=.true., striped=.false., style=dim_style, &
@@ -307,6 +324,171 @@ contains
     matches = index(ascii_lower(process_user_label(process)), needle) > 0
   end function process_matches_filter
 
+  subroutine apply_collapsed_nodes(table, state)
+    type(process_table), intent(inout) :: table
+    type(process_table_state), intent(in) :: state
+    type(process_info), allocatable :: visible(:)
+    integer :: hidden_depth
+    integer :: process_index
+    integer :: row
+
+    if (.not. allocated(table%items)) return
+    if (state%collapsed_count <= 0) return
+
+    allocate(visible(size(table%items)))
+    visible = process_info()
+    hidden_depth = -1
+    row = 0
+    do process_index = 1, size(table%items)
+      if (.not. table%items(process_index)%valid) cycle
+      if (hidden_depth >= 0) then
+        if (table%items(process_index)%tree_depth > hidden_depth) cycle
+        hidden_depth = -1
+      end if
+
+      row = row + 1
+      visible(row) = table%items(process_index)
+      if (process_collapsed(state, table%items(process_index))) hidden_depth = table%items(process_index)%tree_depth
+    end do
+
+    call replace_process_items(table, visible, row)
+  end subroutine apply_collapsed_nodes
+
+  subroutine prune_collapsed_nodes(state, table)
+    type(process_table_state), intent(inout) :: state
+    type(process_table), intent(in) :: table
+    integer :: collapsed_index
+    integer :: kept_count
+
+    call normalize_collapsed_state(state)
+    if (state%collapsed_count <= 0) return
+
+    kept_count = 0
+    do collapsed_index = 1, state%collapsed_count
+      if (.not. process_identity_exists(table, state%collapsed_pid(collapsed_index), &
+                                        state%collapsed_start_time(collapsed_index))) cycle
+      kept_count = kept_count + 1
+      state%collapsed_pid(kept_count) = state%collapsed_pid(collapsed_index)
+      state%collapsed_start_time(kept_count) = state%collapsed_start_time(collapsed_index)
+    end do
+
+    state%collapsed_count = kept_count
+    if (kept_count < PROCESS_COLLAPSED_CAPACITY) then
+      state%collapsed_pid(kept_count + 1:) = 0
+      state%collapsed_start_time(kept_count + 1:) = 0_int64
+    end if
+  end subroutine prune_collapsed_nodes
+
+  subroutine replace_process_items(table, items, item_count)
+    type(process_table), intent(inout) :: table
+    type(process_info), intent(in) :: items(:)
+    integer, intent(in) :: item_count
+    type(process_info), allocatable :: compact(:)
+
+    allocate(compact(max(0, item_count)))
+    if (item_count > 0) compact = items(:item_count)
+    call move_alloc(compact, table%items)
+  end subroutine replace_process_items
+
+  subroutine update_selected_process_state(state, visible_table, full_tree_table)
+    type(process_table_state), intent(inout) :: state
+    type(process_table), intent(in) :: visible_table
+    type(process_table), intent(in) :: full_tree_table
+    integer :: process_index
+    integer :: row
+
+    state%selected_pid = 0
+    state%selected_start_time = 0_int64
+    state%selected_has_children = .false.
+    if (state%selected_row <= 0) return
+    if (.not. allocated(visible_table%items)) return
+
+    row = 0
+    do process_index = 1, size(visible_table%items)
+      if (.not. visible_table%items(process_index)%valid) cycle
+      row = row + 1
+      if (row /= state%selected_row) cycle
+      state%selected_pid = visible_table%items(process_index)%pid
+      state%selected_start_time = visible_table%items(process_index)%start_time
+      state%selected_has_children = process_has_child(full_tree_table, visible_table%items(process_index))
+      return
+    end do
+  end subroutine update_selected_process_state
+
+  logical function process_has_child(table, parent) result(has_child)
+    type(process_table), intent(in) :: table
+    type(process_info), intent(in) :: parent
+    integer :: process_index
+
+    has_child = .false.
+    if (.not. allocated(table%items)) return
+    do process_index = 1, size(table%items)
+      if (.not. table%items(process_index)%valid) cycle
+      if (table%items(process_index)%pid == parent%pid) cycle
+      if (table%items(process_index)%ppid == parent%pid) then
+        has_child = .true.
+        return
+      end if
+    end do
+  end function process_has_child
+
+  logical function process_collapsed(state, process) result(collapsed)
+    type(process_table_state), intent(in) :: state
+    type(process_info), intent(in) :: process
+
+    collapsed = collapsed_node_index(state, process%pid, process%start_time) > 0
+  end function process_collapsed
+
+  integer function collapsed_node_index(state, pid, start_time) result(node_index)
+    type(process_table_state), intent(in) :: state
+    integer, intent(in) :: pid
+    integer(int64), intent(in) :: start_time
+    integer :: collapsed_index
+
+    node_index = 0
+    if (pid <= 0) return
+    do collapsed_index = 1, max(0, min(PROCESS_COLLAPSED_CAPACITY, state%collapsed_count))
+      if (process_identity_matches(state%collapsed_pid(collapsed_index), state%collapsed_start_time(collapsed_index), &
+                                   pid, start_time)) then
+        node_index = collapsed_index
+        return
+      end if
+    end do
+  end function collapsed_node_index
+
+  logical function process_identity_exists(table, pid, start_time) result(exists)
+    type(process_table), intent(in) :: table
+    integer, intent(in) :: pid
+    integer(int64), intent(in) :: start_time
+    integer :: process_index
+
+    exists = .false.
+    if (.not. allocated(table%items)) return
+    do process_index = 1, size(table%items)
+      if (.not. table%items(process_index)%valid) cycle
+      if (process_identity_matches(table%items(process_index)%pid, table%items(process_index)%start_time, &
+                                   pid, start_time)) then
+        exists = .true.
+        return
+      end if
+    end do
+  end function process_identity_exists
+
+  logical function process_identity_matches(left_pid, left_start_time, right_pid, right_start_time) result(matches)
+    integer, intent(in) :: left_pid
+    integer(int64), intent(in) :: left_start_time
+    integer, intent(in) :: right_pid
+    integer(int64), intent(in) :: right_start_time
+
+    matches = .false.
+    if (left_pid /= right_pid) return
+    if (left_start_time > 0_int64 .and. right_start_time > 0_int64) then
+      matches = left_start_time == right_start_time
+    else
+      matches = .true.
+    end if
+  end function process_identity_matches
+
   subroutine fill_process_row(cells, row_index, process)
     type(table_cell), intent(inout) :: cells(:, :)
     integer, intent(in) :: row_index
@@ -431,6 +613,28 @@ contains
     call normalize_process_table_state(state, state%row_count, state%viewport_rows)
   end subroutine process_table_toggle_tree
 
+  logical function process_table_toggle_selected_node(state) result(toggled)
+    type(process_table_state), intent(inout) :: state
+    integer :: node_index
+
+    toggled = .false.
+    call normalize_collapsed_state(state)
+    if (.not. state%tree_view) return
+    if (.not. state%selected_has_children) return
+    if (state%selected_pid <= 0) return
+
+    node_index = collapsed_node_index(state, state%selected_pid, state%selected_start_time)
+    if (node_index > 0) then
+      call remove_collapsed_node(state, node_index)
+    else
+      if (state%collapsed_count >= PROCESS_COLLAPSED_CAPACITY) return
+      state%collapsed_count = state%collapsed_count + 1
+      state%collapsed_pid(state%collapsed_count) = state%selected_pid
+      state%collapsed_start_time(state%collapsed_count) = state%selected_start_time
+    end if
+    toggled = .true.
+  end function process_table_toggle_selected_node
+
   function process_table_status(state) result(text)
     type(process_table_state), intent(in) :: state
     character(len=:), allocatable :: text
@@ -444,6 +648,9 @@ contains
     text = "process " // view_text // " row " // integer_text(max(0, state%selected_row)) // "/" // &
            integer_text(max(0, state%row_count)) // " sort " // process_table_sort_key_label(state) // " " // &
            process_table_sort_direction_label(state)
+    if (state%tree_view .and. state%collapsed_count > 0) then
+      text = text // " collapsed " // integer_text(max(0, state%collapsed_count))
+    end if
     if (process_table_filter_visible(state)) then
       text = text // " filter " // process_table_filter_text(state) // " showing " // &
              integer_text(max(0, state%row_count)) // "/" // integer_text(max(0, state%total_row_count))
@@ -491,10 +698,14 @@ contains
     state%total_row_count = max(state%row_count, state%total_row_count)
     state%viewport_rows = max(0, viewport_rows)
     call normalize_filter_state(state)
+    call normalize_collapsed_state(state)
     if (state%sort_direction /= TABLE_SORT_DESCENDING) state%sort_direction = TABLE_SORT_ASCENDING
     if (state%row_count <= 0) then
       state%selected_row = 0
       state%scroll_row = 1
+      state%selected_pid = 0
+      state%selected_start_time = 0_int64
+      state%selected_has_children = .false.
       return
     end if
 
@@ -552,6 +763,32 @@ contains
       state%filter_text(state%filter_length + 1:) = ""
     end if
   end subroutine normalize_filter_state
+
+  subroutine normalize_collapsed_state(state)
+    type(process_table_state), intent(inout) :: state
+
+    state%collapsed_count = max(0, min(PROCESS_COLLAPSED_CAPACITY, state%collapsed_count))
+    if (state%collapsed_count < PROCESS_COLLAPSED_CAPACITY) then
+      state%collapsed_pid(state%collapsed_count + 1:) = 0
+      state%collapsed_start_time(state%collapsed_count + 1:) = 0_int64
+    end if
+  end subroutine normalize_collapsed_state
+
+  subroutine remove_collapsed_node(state, node_index)
+    type(process_table_state), intent(inout) :: state
+    integer, intent(in) :: node_index
+
+    if (node_index < 1 .or. node_index > state%collapsed_count) return
+    if (node_index < state%collapsed_count) then
+      state%collapsed_pid(node_index:state%collapsed_count - 1) = &
+        state%collapsed_pid(node_index + 1:state%collapsed_count)
+      state%collapsed_start_time(node_index:state%collapsed_count - 1) = &
+        state%collapsed_start_time(node_index + 1:state%collapsed_count)
+    end if
+    state%collapsed_pid(state%collapsed_count) = 0
+    state%collapsed_start_time(state%collapsed_count) = 0_int64
+    state%collapsed_count = state%collapsed_count - 1
+  end subroutine remove_collapsed_node
 
   logical function process_table_filter_visible(state) result(visible)
     type(process_table_state), intent(in) :: state
