@@ -10,7 +10,11 @@ module ftop_app
     FGOF_KEY_DOWN, &
     FGOF_KEY_ENTER, &
     FGOF_KEY_ESCAPE, &
+    FGOF_KEY_END, &
+    FGOF_KEY_HOME, &
     FGOF_KEY_LEFT, &
+    FGOF_KEY_PAGEDOWN, &
+    FGOF_KEY_PAGEUP, &
     FGOF_KEY_RIGHT, &
     FGOF_KEY_TAB, &
     FGOF_KEY_UP, &
@@ -32,6 +36,14 @@ module ftop_app
     layout_focus_widget, &
     layout_grid, &
     parse_layout_file
+  use ftop_process_table, only : &
+    process_table_cycle_sort_key, &
+    process_table_page_delta, &
+    process_table_select_delta, &
+    process_table_state, &
+    process_table_status, &
+    process_table_toggle_sort_direction, &
+    process_table_toggle_tree
   use ftop_signal, only : &
     FTOP_SIGNAL_CONT, &
     FTOP_SIGNAL_INT, &
@@ -63,6 +75,7 @@ module ftop_app
     type(collector), allocatable :: metrics
     type(layout_grid) :: layout
     type(key_decoder_state) :: decoder
+    type(process_table_state) :: process_state
     character(len=:), allocatable :: config_path
     character(len=:), allocatable :: status_text
     integer :: refresh_ms = DEFAULT_REFRESH_MS
@@ -236,11 +249,11 @@ contains
     if (session%layout_loaded) then
       call render_dashboard(session%current, snapshot, session%refresh_ms, session%frame_count, &
                             session%status_text, session%layout, focus, session%zoomed, &
-                            render_fps=session%render_fps)
+                            render_fps=session%render_fps, process_state=session%process_state)
     else
       call render_dashboard(session%current, snapshot, session%refresh_ms, session%frame_count, &
                             session%status_text, focused_widget=focus, zoomed=session%zoomed, &
-                            render_fps=session%render_fps)
+                            render_fps=session%render_fps, process_state=session%process_state)
     end if
   end subroutine draw_frame
 
@@ -443,6 +456,10 @@ contains
       else if (.not. event%modifiers%ctrl .and. text == "q") then
         call set_status(session, "q")
         session%running = .false.
+      else if (event%modifiers%ctrl) then
+        if (len(text) > 0) call set_status(session, "key: " // text)
+      else if (handle_process_printable_key(session, text)) then
+        continue
       else if (len(text) > 0) then
         call set_status(session, "key: " // text)
       end if
@@ -450,6 +467,7 @@ contains
     end if
 
     if (.not. allocated(event%key_name)) return
+    if (handle_process_named_key(session, event%key_name)) return
     select case (event%key_name)
     case (FGOF_KEY_UP, FGOF_KEY_DOWN, FGOF_KEY_LEFT, FGOF_KEY_RIGHT)
       call set_status(session, "arrow: " // event%key_name)
@@ -467,6 +485,60 @@ contains
       call set_status(session, "key: " // event%key_name)
     end select
   end subroutine handle_key_event
+
+  logical function handle_process_printable_key(session, text) result(handled)
+    type(terminal_session), intent(inout) :: session
+    character(len=*), intent(in) :: text
+
+    handled = .false.
+    if (.not. process_widget_focused(session)) return
+    select case (text)
+    case ("s")
+      call process_table_toggle_sort_direction(session%process_state)
+    case ("t")
+      call process_table_toggle_tree(session%process_state)
+    case default
+      return
+    end select
+    handled = .true.
+    call set_status(session, process_table_status(session%process_state))
+  end function handle_process_printable_key
+
+  logical function handle_process_named_key(session, key_name) result(handled)
+    type(terminal_session), intent(inout) :: session
+    character(len=*), intent(in) :: key_name
+
+    handled = .false.
+    if (.not. process_widget_focused(session)) return
+    select case (key_name)
+    case (FGOF_KEY_UP)
+      call process_table_select_delta(session%process_state, -1)
+    case (FGOF_KEY_DOWN)
+      call process_table_select_delta(session%process_state, 1)
+    case (FGOF_KEY_PAGEUP)
+      call process_table_page_delta(session%process_state, -1)
+    case (FGOF_KEY_PAGEDOWN)
+      call process_table_page_delta(session%process_state, 1)
+    case (FGOF_KEY_HOME)
+      call process_table_select_delta(session%process_state, -session%process_state%row_count)
+    case (FGOF_KEY_END)
+      call process_table_select_delta(session%process_state, session%process_state%row_count)
+    case (FGOF_KEY_LEFT)
+      call process_table_cycle_sort_key(session%process_state, -1)
+    case (FGOF_KEY_RIGHT)
+      call process_table_cycle_sort_key(session%process_state, 1)
+    case default
+      return
+    end select
+    handled = .true.
+    call set_status(session, process_table_status(session%process_state))
+  end function handle_process_named_key
+
+  logical function process_widget_focused(session) result(focused)
+    type(terminal_session), intent(in) :: session
+
+    focused = focused_widget_name(session) == "process"
+  end function process_widget_focused
 
   subroutine handle_pending_signals(session)
     type(terminal_session), intent(inout) :: session

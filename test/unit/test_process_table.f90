@@ -4,7 +4,11 @@ program test_process_table
   use fgof_screen_types, only : screen_buffer, screen_style
   use ftop_collector, only : collector_snapshot
   use ftop_color, only : COLOR_UI_ACCENT, COLOR_UI_BORDER, COLOR_UI_DIM, COLOR_UI_PANEL, style_from_rgb
-  use ftop_process_table, only : render_process_panel
+  use ftop_proc_data, only : PROCESS_SORT_COMMAND, PROCESS_SORT_USER
+  use ftop_process_table, only : process_table_cycle_sort_key, process_table_page_delta, process_table_select_delta, &
+                                 process_table_state, process_table_status, process_table_toggle_sort_direction, &
+                                 render_process_panel
+  use ftop_table, only : TABLE_SORT_DESCENDING
   use ftop_widgets, only : widget_rect
   implicit none
 
@@ -12,6 +16,9 @@ program test_process_table
   type(screen_style) :: border_style
   type(screen_style) :: dim_style
   type(screen_style) :: title_style
+  type(process_table_state) :: state
+
+  call test_process_state_updates()
 
   buffer = allocate_screen(80, 10)
   border_style = style_from_rgb(fg=COLOR_UI_BORDER)
@@ -28,7 +35,42 @@ program test_process_table
   call require(index(row_text(buffer, 4), "└") > 0, "process table should render child branch")
   call require(index(row_text(buffer, 4), "child --task") > 0, "process table should render child command")
 
+  buffer = allocate_screen(80, 10)
+  state%selected_row = 2
+  call render_process_panel(buffer, widget_rect(1, 1, 80, 10), sample_snapshot(), border_style, title_style, dim_style, &
+                            state)
+  call require(state%row_count == 2, "process table state should track row count")
+  call require(state%viewport_rows > 0, "process table state should track viewport rows")
+  call require(row_has_bold(buffer, 4), "process table should highlight selected row")
+
+  buffer = allocate_screen(80, 10)
+  state = process_table_state(tree_view=.false., sort_key=PROCESS_SORT_COMMAND)
+  call render_process_panel(buffer, widget_rect(1, 1, 80, 10), sample_snapshot(), border_style, title_style, dim_style, &
+                            state)
+  call require(index(row_text(buffer, 3), "child --task") > 0, "flat process table should sort by command")
+  call require(index(row_text(buffer, 3), "└") == 0, "flat process table should omit tree branch")
+
 contains
+
+  subroutine test_process_state_updates()
+    type(process_table_state) :: local_state
+
+    local_state%row_count = 5
+    local_state%viewport_rows = 2
+    call process_table_select_delta(local_state, 3)
+    call require(local_state%selected_row == 4, "process table selection should move by delta")
+    call require(local_state%scroll_row == 3, "process table scroll should follow selection")
+
+    call process_table_page_delta(local_state, -1)
+    call require(local_state%selected_row == 2, "process table page movement should use viewport")
+
+    call process_table_cycle_sort_key(local_state, 1)
+    call require(local_state%sort_key == PROCESS_SORT_USER, "process table sort key should cycle")
+    call process_table_toggle_sort_direction(local_state)
+    call require(local_state%sort_direction == TABLE_SORT_DESCENDING, "process table sort direction should toggle")
+    call require(index(process_table_status(local_state), "sort user desc") > 0, &
+                 "process table status should describe sort state")
+  end subroutine test_process_state_updates
 
   function sample_snapshot() result(snapshot)
     type(collector_snapshot) :: snapshot
@@ -72,6 +114,20 @@ contains
       end if
     end do
   end function row_text
+
+  logical function row_has_bold(buffer, row) result(found)
+    type(screen_buffer), intent(in) :: buffer
+    integer, intent(in) :: row
+    integer :: col
+
+    found = .false.
+    do col = 1, buffer%size%width
+      if (buffer%cells(row, col)%style%bold) then
+        found = .true.
+        return
+      end if
+    end do
+  end function row_has_bold
 
   subroutine require(condition, message)
     logical, intent(in) :: condition

@@ -12,7 +12,7 @@ module ftop_dashboard
   use ftop_cpu, only : render_cpu_panel
   use ftop_layout, only : dashboard_layout, dashboard_layout_from_grid, default_dashboard_layout, layout_grid
   use ftop_memory, only : render_memory_panel
-  use ftop_process_table, only : render_process_panel
+  use ftop_process_table, only : process_table_state, render_process_panel
   use ftop_text, only : TEXT_ALIGN_CENTER, render_text
   use ftop_widgets, only : widget_rect
   implicit none
@@ -24,7 +24,8 @@ module ftop_dashboard
 
 contains
 
-  subroutine render_dashboard(buffer, snapshot, refresh_ms, frame_count, status_text, grid, focused_widget, zoomed, render_fps)
+  subroutine render_dashboard(buffer, snapshot, refresh_ms, frame_count, status_text, grid, focused_widget, zoomed, render_fps, &
+                              process_state)
     type(screen_buffer), intent(inout) :: buffer
     type(collector_snapshot), intent(in) :: snapshot
     integer, intent(in) :: refresh_ms
@@ -34,6 +35,7 @@ contains
     character(len=*), intent(in), optional :: focused_widget
     logical, intent(in), optional :: zoomed
     real, intent(in), optional :: render_fps
+    type(process_table_state), intent(inout), optional :: process_state
     type(dashboard_layout) :: layout
     type(screen_style) :: border_style
     type(screen_style) :: cpu_border_style
@@ -80,7 +82,11 @@ contains
 
     if (is_zoomed) then
       zoom_rect = widget_rect(3, 3, max(0, width - 4), max(0, height - 5))
-      call render_dashboard_panel(buffer, zoom_rect, focus, snapshot, focus_style, title_style, dim_style)
+      if (present(process_state)) then
+        call render_dashboard_panel(buffer, zoom_rect, focus, snapshot, focus_style, title_style, dim_style, process_state)
+      else
+        call render_dashboard_panel(buffer, zoom_rect, focus, snapshot, focus_style, title_style, dim_style)
+      end if
     else
       cpu_border_style = border_style
       memory_border_style = border_style
@@ -95,7 +101,12 @@ contains
         call render_memory_panel(buffer, layout%memory_panel, snapshot, memory_border_style, title_style, dim_style)
       end if
       if (layout%process_panel%height >= 3) then
-        call render_process_panel(buffer, layout%process_panel, snapshot, process_border_style, title_style, dim_style)
+        if (present(process_state)) then
+          call render_process_panel(buffer, layout%process_panel, snapshot, process_border_style, title_style, dim_style, &
+                                    process_state)
+        else
+          call render_process_panel(buffer, layout%process_panel, snapshot, process_border_style, title_style, dim_style)
+        end if
       end if
     end if
 
@@ -110,7 +121,7 @@ contains
                        dim_style, focus, is_zoomed, render_fps=render_fps)
   end subroutine render_dashboard
 
-  subroutine render_dashboard_panel(buffer, rect, widget, snapshot, border_style, title_style, dim_style)
+  subroutine render_dashboard_panel(buffer, rect, widget, snapshot, border_style, title_style, dim_style, process_state)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: rect
     character(len=*), intent(in) :: widget
@@ -118,6 +129,7 @@ contains
     type(screen_style), intent(in) :: border_style
     type(screen_style), intent(in) :: title_style
     type(screen_style), intent(in) :: dim_style
+    type(process_table_state), intent(inout), optional :: process_state
 
     if (rect%height < 3 .or. rect%width <= 0) return
     select case (trim(widget))
@@ -126,7 +138,11 @@ contains
     case ("memory")
       call render_memory_panel(buffer, rect, snapshot, border_style, title_style, dim_style)
     case ("process")
-      call render_process_panel(buffer, rect, snapshot, border_style, title_style, dim_style)
+      if (present(process_state)) then
+        call render_process_panel(buffer, rect, snapshot, border_style, title_style, dim_style, process_state)
+      else
+        call render_process_panel(buffer, rect, snapshot, border_style, title_style, dim_style)
+      end if
     end select
   end subroutine render_dashboard_panel
 
