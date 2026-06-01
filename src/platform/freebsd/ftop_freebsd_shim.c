@@ -32,6 +32,7 @@ struct ftop_freebsd_process_info {
   int nice;
   int priority;
   long long start_time;
+  long long cpu_time;
 };
 
 struct ftop_freebsd_devstat_info {
@@ -417,6 +418,7 @@ int ftop_freebsd_kvm_getprocs(
     buffer[i].nice = (int)processes[i].ki_nice;
     buffer[i].priority = (int)processes[i].ki_pri.pri_level;
     buffer[i].start_time = processes[i].ki_start.tv_sec > 0 ? (long long)processes[i].ki_start.tv_sec : 0;
+    buffer[i].cpu_time = processes[i].ki_runtime > 0 ? (long long)(processes[i].ki_runtime / 1000ULL) : 0;
   }
 
   *process_count = copy_count;

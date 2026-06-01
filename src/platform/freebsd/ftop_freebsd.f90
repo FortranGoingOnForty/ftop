@@ -47,6 +47,7 @@ module ftop_platform
     integer(c_int) :: nice
     integer(c_int) :: priority
     integer(c_long_long) :: start_time
+    integer(c_long_long) :: cpu_time
   end type freebsd_process_info
 
   type, public :: freebsd_kvm_handle
@@ -503,6 +504,7 @@ contains
     process%nice = int(raw%nice)
     process%priority = int(raw%priority)
     process%start_time = int(max(0_c_long_long, raw%start_time), int64)
+    process%cpu_time = int(max(0_c_long_long, raw%cpu_time), int64)
     call assign_memory_percent(process, memory_total_bytes)
   end function freebsd_process_from_c
 

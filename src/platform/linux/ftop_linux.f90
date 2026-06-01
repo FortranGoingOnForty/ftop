@@ -184,6 +184,13 @@ module ftop_platform
       integer(c_int), intent(out) :: sys_errno
     end function c_ftop_linux_page_size
 
+    integer(c_int) function c_ftop_linux_clock_ticks_per_second(clock_ticks, sys_errno) &
+        bind(C, name="ftop_linux_clock_ticks_per_second")
+      import :: c_int, c_long_long
+      integer(c_long_long), intent(out) :: clock_ticks
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_linux_clock_ticks_per_second
+
     integer(c_int) function c_ftop_linux_user_name(uid, value, value_capacity, value_len, sys_errno) &
         bind(C, name="ftop_linux_user_name")
       import :: c_char, c_int, c_size_t
@@ -382,6 +389,7 @@ contains
     integer(int64), intent(in), optional :: memory_total_bytes
     integer, intent(out), optional :: error_code
     type(linux_process_raw), allocatable :: raw_processes(:)
+    integer(c_long_long) :: clock_ticks_per_second
     integer(c_long_long) :: page_size
     integer(c_size_t) :: c_process_count
     integer(c_int) :: sys_errno
@@ -400,18 +408,21 @@ contains
     end if
 
     page_size = linux_page_size()
+    clock_ticks_per_second = linux_clock_ticks_per_second()
     process_count = max(0, min(int(c_process_count), size(raw_processes)))
     allocate(table%items(process_count))
     table%valid = .true.
     do process_index = 1, process_count
-      table%items(process_index) = linux_process_from_raw(raw_processes(process_index), page_size, memory_total_bytes)
+      table%items(process_index) = linux_process_from_raw(raw_processes(process_index), page_size, &
+                                                          clock_ticks_per_second, memory_total_bytes)
     end do
     call assign_error(error_code, sys_errno)
   end function linux_process_snapshot
 
-  function linux_process_from_raw(raw, page_size, memory_total_bytes) result(process)
+  function linux_process_from_raw(raw, page_size, clock_ticks_per_second, memory_total_bytes) result(process)
     type(linux_process_raw), intent(in) :: raw
     integer(c_long_long), intent(in) :: page_size
+    integer(c_long_long), intent(in) :: clock_ticks_per_second
     integer(int64), intent(in), optional :: memory_total_bytes
     type(process_info) :: process
     character(len=:), allocatable :: cmdline
@@ -424,7 +435,7 @@ contains
     call c_chars_to_string(raw%status, int(raw%status_len), status_text)
     call c_cmdline_to_string(raw%cmdline, int(raw%cmdline_len), cmdline)
 
-    call parse_linux_process_stat(stat_text, page_size, process)
+    call parse_linux_process_stat(stat_text, page_size, clock_ticks_per_second, process)
     call parse_linux_process_status(status_text, process)
     call assign_process_user(process)
     if (len_trim(cmdline) > 0) process%command = bounded_text(cmdline, len(process%command))
@@ -432,9 +443,10 @@ contains
     if (present(memory_total_bytes)) call assign_memory_percent(process, memory_total_bytes)
   end function linux_process_from_raw
 
-  subroutine parse_linux_process_stat(stat_text, page_size, process)
+  subroutine parse_linux_process_stat(stat_text, page_size, clock_ticks_per_second, process)
     character(len=*), intent(in) :: stat_text
     integer(c_long_long), intent(in) :: page_size
+    integer(c_long_long), intent(in) :: clock_ticks_per_second
     type(process_info), intent(inout) :: process
     character(len=:), allocatable :: remainder
     character(len=1) :: state
@@ -483,7 +495,7 @@ contains
     process%nice = int(nice)
     process%priority = int(priority)
     process%start_time = max(0_int64, starttime)
-    process%cpu_time = max(0_int64, utime + stime)
+    process%cpu_time = ticks_to_milliseconds(max(0_int64, utime + stime), clock_ticks_per_second)
     process%mem_virt_bytes = max(0_int64, vsize)
     process%mem_rss_bytes = max(0_int64, rss_pages) * int(max(0_c_long_long, page_size), int64)
   end subroutine parse_linux_process_stat
@@ -619,6 +631,23 @@ contains
     rc = c_ftop_linux_page_size(page_size, sys_errno)
     if (rc /= 0_c_int .or. page_size <= 0_c_long_long) page_size = 4096_c_long_long
   end function linux_page_size
+
+  integer(c_long_long) function linux_clock_ticks_per_second() result(clock_ticks)
+    integer(c_int) :: sys_errno
+    integer(c_int) :: rc
+
+    rc = c_ftop_linux_clock_ticks_per_second(clock_ticks, sys_errno)
+    if (rc /= 0_c_int .or. clock_ticks <= 0_c_long_long) clock_ticks = 100_c_long_long
+  end function linux_clock_ticks_per_second
+
+  integer(int64) function ticks_to_milliseconds(ticks, clock_ticks_per_second) result(milliseconds)
+    integer(int64), intent(in) :: ticks
+    integer(c_long_long), intent(in) :: clock_ticks_per_second
+
+    milliseconds = 0_int64
+    if (ticks <= 0_int64 .or. clock_ticks_per_second <= 0_c_long_long) return
+    milliseconds = (ticks * 1000_int64) / int(clock_ticks_per_second, int64)
+  end function ticks_to_milliseconds
 
   logical function linux_cpu_state_snapshot(total, cores, error_code) result(success)
     type(cpu_state_ticks), intent(out) :: total

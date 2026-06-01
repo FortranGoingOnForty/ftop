@@ -31,6 +31,7 @@ module ftop_collector
     PROCESS_NAME_LEN, &
     PROCESS_STATE_LEN, &
     PROCESS_USER_LEN, &
+    assign_process_cpu_percent, &
     process_table
   use ftop_pthread, only : &
     ftop_mutex_destroy, &
@@ -338,9 +339,11 @@ contains
     type(platform_memory_info) :: memory
     type(load_average_info) :: load_average
     type(process_table) :: processes
+    type(process_table) :: previous_processes
     type(system_uptime_info) :: system_uptime
     integer(c_long_long) :: deadline_ms
     integer(c_long_long) :: metadata_refresh_ms
+    integer(c_long_long) :: previous_process_sample_ms
     integer(c_long_long) :: process_refresh_ms
     logical :: warming_up
 
@@ -362,9 +365,11 @@ contains
     load_average = backend%get_load_average()
     system_uptime = backend%get_system_uptime()
     processes = backend%get_process_table()
+    deadline_ms = monotonic_ms()
+    previous_processes = processes
+    previous_process_sample_ms = deadline_ms
     call publish_sample(state, topology, total_cpu, core_cpus, .true., memory, load_average, system_uptime, processes)
 
-    deadline_ms = monotonic_ms()
     metadata_refresh_ms = deadline_ms + 1000_c_long_long
     process_refresh_ms = deadline_ms + 1000_c_long_long
     do
@@ -397,6 +402,10 @@ contains
       end if
       if (deadline_ms >= process_refresh_ms) then
         processes = backend%get_process_table()
+        call assign_process_cpu_percent(processes, previous_processes, &
+                                        int(max(0_c_long_long, deadline_ms - previous_process_sample_ms), int64))
+        previous_processes = processes
+        previous_process_sample_ms = deadline_ms
         process_refresh_ms = deadline_ms + 1000_c_long_long
       end if
       call merge_cpu_metadata(core_cpus, cpu_metadata)

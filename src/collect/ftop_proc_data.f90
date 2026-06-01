@@ -36,7 +36,7 @@ module ftop_proc_data
     integer(int64) :: io_read_bytes = 0_int64
     integer(int64) :: io_write_bytes = 0_int64
     integer(int64) :: start_time = 0_int64
-    integer(int64) :: cpu_time = 0_int64
+    integer(int64) :: cpu_time = 0_int64 ! Cumulative CPU time in milliseconds.
     character(len=PROCESS_CGROUP_LEN) :: cgroup = ""
     integer :: jid = 0
   end type process_info
@@ -50,6 +50,7 @@ module ftop_proc_data
   public :: process_display_command
   public :: process_state_label
   public :: process_user_label
+  public :: assign_process_cpu_percent
   public :: sort_process_table
 
 contains
@@ -95,6 +96,48 @@ contains
       text = "?"
     end if
   end function process_state_label
+
+  subroutine assign_process_cpu_percent(current, previous, elapsed_ms)
+    type(process_table), intent(inout) :: current
+    type(process_table), intent(in) :: previous
+    integer(int64), intent(in) :: elapsed_ms
+    integer :: current_index
+    integer :: previous_index
+    integer(int64) :: cpu_delta_ms
+
+    if (.not. allocated(current%items)) return
+    current%items%cpu_percent = 0.0_real64
+    if (.not. current%valid .or. .not. previous%valid) return
+    if (.not. allocated(previous%items)) return
+    if (elapsed_ms <= 0_int64) return
+
+    do current_index = 1, size(current%items)
+      previous_index = matching_previous_process(previous, current%items(current_index))
+      if (previous_index <= 0) cycle
+
+      cpu_delta_ms = current%items(current_index)%cpu_time - previous%items(previous_index)%cpu_time
+      if (cpu_delta_ms <= 0_int64) cycle
+      current%items(current_index)%cpu_percent = 100.0_real64 * real(cpu_delta_ms, real64) / real(elapsed_ms, real64)
+    end do
+  end subroutine assign_process_cpu_percent
+
+  integer function matching_previous_process(previous, current) result(match_index)
+    type(process_table), intent(in) :: previous
+    type(process_info), intent(in) :: current
+    integer :: previous_index
+
+    match_index = 0
+    if (.not. current%valid) return
+    if (current%pid <= 0 .or. current%start_time <= 0_int64) return
+
+    do previous_index = 1, size(previous%items)
+      if (.not. previous%items(previous_index)%valid) cycle
+      if (previous%items(previous_index)%pid /= current%pid) cycle
+      if (previous%items(previous_index)%start_time /= current%start_time) cycle
+      match_index = previous_index
+      return
+    end do
+  end function matching_previous_process
 
   subroutine sort_process_table(table, sort_key, descending)
     type(process_table), intent(inout) :: table

@@ -38,6 +38,8 @@ struct ftop_macos_process_info {
   long long mem_virt_bytes;
   int threads;
   int nice;
+  long long start_time;
+  long long cpu_time;
 };
 
 typedef struct __IOHIDEvent *IOHIDEventRef;
@@ -662,6 +664,7 @@ int ftop_macos_process_snapshot(
   int rc;
   int i;
   size_t count;
+  uint64_t total_time;
 
   if (buffer == NULL || process_count == NULL || sys_errno == NULL || capacity == 0) return -1;
 
@@ -702,11 +705,14 @@ int ftop_macos_process_snapshot(
     buffer[count].uid = (int)bsd.pbi_uid;
     buffer[count].state = (int)bsd.pbi_status;
     buffer[count].nice = (int)bsd.pbi_nice;
+    buffer[count].start_time = bsd.pbi_start_tvsec > 0 ? (long long)bsd.pbi_start_tvsec : 0;
     ftop_macos_copy_process_command(buffer[count].command, bsd.pbi_comm);
     if (rc == (int)sizeof(task)) {
       buffer[count].mem_rss_bytes = task.pti_resident_size > 0 ? (long long)task.pti_resident_size : 0;
       buffer[count].mem_virt_bytes = task.pti_virtual_size > 0 ? (long long)task.pti_virtual_size : 0;
       buffer[count].threads = task.pti_threadnum > 0 ? (int)task.pti_threadnum : 0;
+      total_time = task.pti_total_user + task.pti_total_system;
+      buffer[count].cpu_time = total_time > 0 ? (long long)(total_time / 1000000ULL) : 0;
     }
     ++count;
   }

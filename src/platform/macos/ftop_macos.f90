@@ -40,6 +40,8 @@ module ftop_platform
     integer(c_long_long) :: mem_virt_bytes
     integer(c_int) :: threads
     integer(c_int) :: nice
+    integer(c_long_long) :: start_time
+    integer(c_long_long) :: cpu_time
   end type macos_process_info
 
   type, extends(platform_backend) :: macos_backend
@@ -444,6 +446,8 @@ contains
     process%mem_virt_bytes = int(max(0_c_long_long, raw%mem_virt_bytes), int64)
     process%threads = int(max(0_c_int, raw%threads))
     process%nice = int(raw%nice)
+    process%start_time = int(max(0_c_long_long, raw%start_time), int64)
+    process%cpu_time = int(max(0_c_long_long, raw%cpu_time), int64)
     if (present(memory_total_bytes)) call assign_memory_percent(process, memory_total_bytes)
   end function macos_process_from_c
 

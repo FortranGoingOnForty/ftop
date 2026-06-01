@@ -153,6 +153,23 @@ int ftop_linux_page_size(long long *page_size, int *sys_errno) {
   return 0;
 }
 
+int ftop_linux_clock_ticks_per_second(long long *clock_ticks, int *sys_errno) {
+  long value;
+
+  if (clock_ticks == NULL || sys_errno == NULL) return -1;
+
+  *clock_ticks = 0;
+  *sys_errno = 0;
+  value = sysconf(_SC_CLK_TCK);
+  if (value <= 0L) {
+    *sys_errno = errno != 0 ? errno : EINVAL;
+    return -1;
+  }
+
+  *clock_ticks = (long long)value;
+  return 0;
+}
+
 int ftop_linux_user_name(int uid, char *buffer, size_t buffer_len, size_t *value_len, int *sys_errno) {
   char scratch[FTOP_USER_LOOKUP_BUFFER_LEN];
   struct passwd password;
