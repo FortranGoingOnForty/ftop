@@ -8,6 +8,8 @@ module ftop_proc_data
   integer, parameter, public :: PROCESS_COMMAND_LEN = 256
   integer, parameter, public :: PROCESS_STATE_LEN = 16
   integer, parameter, public :: PROCESS_CGROUP_LEN = 128
+  integer, parameter, public :: PROCESS_TREE_PREFIX_LEN = 128
+  integer, parameter :: PROCESS_TREE_MAX_DEPTH = 24
 
   integer, parameter, public :: PROCESS_SORT_PID = 1
   integer, parameter, public :: PROCESS_SORT_USER = 2
@@ -39,6 +41,8 @@ module ftop_proc_data
     integer(int64) :: cpu_time = 0_int64 ! Cumulative CPU time in milliseconds.
     character(len=PROCESS_CGROUP_LEN) :: cgroup = ""
     integer :: jid = 0
+    integer :: tree_depth = 0
+    character(len=PROCESS_TREE_PREFIX_LEN) :: tree_prefix = ""
   end type process_info
 
   type, public :: process_table
@@ -51,6 +55,7 @@ module ftop_proc_data
   public :: process_state_label
   public :: process_user_label
   public :: assign_process_cpu_percent
+  public :: build_process_tree
   public :: sort_process_table
 
 contains
@@ -120,6 +125,192 @@ contains
       current%items(current_index)%cpu_percent = 100.0_real64 * real(cpu_delta_ms, real64) / real(elapsed_ms, real64)
     end do
   end subroutine assign_process_cpu_percent
+
+  subroutine build_process_tree(table)
+    type(process_table), intent(inout) :: table
+    type(process_info), allocatable :: ordered(:)
+    logical, allocatable :: emitted(:)
+    integer :: item_count
+    integer :: item_index
+    integer :: output_count
+
+    if (.not. allocated(table%items)) return
+    item_count = size(table%items)
+    if (item_count <= 0) return
+
+    table%items%tree_depth = 0
+    table%items%tree_prefix = ""
+    allocate(ordered(item_count))
+    ordered = process_info()
+    allocate(emitted(item_count))
+    emitted = .false.
+    output_count = 0
+
+    do item_index = 1, item_count
+      if (emitted(item_index)) cycle
+      if (.not. table%items(item_index)%valid) cycle
+      if (.not. process_is_tree_root(table, item_index)) cycle
+      call append_tree_process(table, item_index, 0, "", .true., emitted, ordered, output_count)
+    end do
+
+    do item_index = 1, item_count
+      if (emitted(item_index)) cycle
+      if (.not. table%items(item_index)%valid) cycle
+      call append_tree_process(table, item_index, 0, "", .true., emitted, ordered, output_count)
+    end do
+
+    do item_index = 1, item_count
+      if (emitted(item_index)) cycle
+      output_count = output_count + 1
+      ordered(output_count) = table%items(item_index)
+      emitted(item_index) = .true.
+    end do
+
+    table%items = ordered
+  end subroutine build_process_tree
+
+  recursive subroutine append_tree_process(table, item_index, depth, ancestor_prefix, is_last, emitted, ordered, &
+                                           output_count)
+    type(process_table), intent(in) :: table
+    integer, intent(in) :: item_index
+    integer, intent(in) :: depth
+    character(len=*), intent(in) :: ancestor_prefix
+    logical, intent(in) :: is_last
+    logical, intent(inout) :: emitted(:)
+    type(process_info), intent(inout) :: ordered(:)
+    integer, intent(inout) :: output_count
+    character(len=:), allocatable :: child_ancestor_prefix
+    integer :: child_index
+    integer :: item_count
+
+    if (item_index < 1 .or. item_index > size(table%items)) return
+    if (emitted(item_index)) return
+    if (.not. table%items(item_index)%valid) return
+
+    output_count = output_count + 1
+    ordered(output_count) = table%items(item_index)
+    ordered(output_count)%tree_depth = min(depth, PROCESS_TREE_MAX_DEPTH)
+    ordered(output_count)%tree_prefix = tree_branch_prefix(depth, ancestor_prefix, is_last)
+    emitted(item_index) = .true.
+
+    if (depth >= PROCESS_TREE_MAX_DEPTH) then
+      child_ancestor_prefix = ancestor_prefix
+    else
+      child_ancestor_prefix = next_ancestor_prefix(depth, ancestor_prefix, is_last)
+    end if
+    item_count = size(table%items)
+    do child_index = 1, item_count
+      if (.not. process_is_child_of(table, child_index, item_index, emitted)) cycle
+      call append_tree_process(table, child_index, depth + 1, child_ancestor_prefix, &
+                               process_is_last_child(table, child_index, item_index, emitted), emitted, ordered, &
+                               output_count)
+    end do
+  end subroutine append_tree_process
+
+  logical function process_is_tree_root(table, item_index) result(is_root)
+    type(process_table), intent(in) :: table
+    integer, intent(in) :: item_index
+
+    is_root = .false.
+    if (item_index < 1 .or. item_index > size(table%items)) return
+    if (.not. table%items(item_index)%valid) return
+    if (table%items(item_index)%ppid <= 0) then
+      is_root = .true.
+    else if (table%items(item_index)%ppid == table%items(item_index)%pid) then
+      is_root = .true.
+    else
+      is_root = .not. process_parent_exists(table, item_index)
+    end if
+  end function process_is_tree_root
+
+  logical function process_parent_exists(table, item_index) result(found)
+    type(process_table), intent(in) :: table
+    integer, intent(in) :: item_index
+    integer :: candidate_index
+    integer :: parent_pid
+
+    found = .false.
+    parent_pid = table%items(item_index)%ppid
+    do candidate_index = 1, size(table%items)
+      if (candidate_index == item_index) cycle
+      if (.not. table%items(candidate_index)%valid) cycle
+      if (table%items(candidate_index)%pid == parent_pid) then
+        found = .true.
+        return
+      end if
+    end do
+  end function process_parent_exists
+
+  logical function process_is_child_of(table, child_index, parent_index, emitted) result(is_child)
+    type(process_table), intent(in) :: table
+    integer, intent(in) :: child_index
+    integer, intent(in) :: parent_index
+    logical, intent(in) :: emitted(:)
+
+    is_child = .false.
+    if (child_index < 1 .or. child_index > size(table%items)) return
+    if (parent_index < 1 .or. parent_index > size(table%items)) return
+    if (emitted(child_index)) return
+    if (.not. table%items(child_index)%valid) return
+    if (.not. table%items(parent_index)%valid) return
+    if (table%items(child_index)%pid == table%items(parent_index)%pid) return
+    is_child = table%items(child_index)%ppid == table%items(parent_index)%pid
+  end function process_is_child_of
+
+  logical function process_is_last_child(table, child_index, parent_index, emitted) result(is_last)
+    type(process_table), intent(in) :: table
+    integer, intent(in) :: child_index
+    integer, intent(in) :: parent_index
+    logical, intent(in) :: emitted(:)
+    integer :: candidate_index
+
+    is_last = .true.
+    do candidate_index = child_index + 1, size(table%items)
+      if (process_is_child_of(table, candidate_index, parent_index, emitted)) then
+        is_last = .false.
+        return
+      end if
+    end do
+  end function process_is_last_child
+
+  function tree_branch_prefix(depth, ancestor_prefix, is_last) result(prefix)
+    integer, intent(in) :: depth
+    character(len=*), intent(in) :: ancestor_prefix
+    logical, intent(in) :: is_last
+    character(len=:), allocatable :: prefix
+
+    if (depth <= 0) then
+      prefix = ""
+    else if (is_last) then
+      prefix = bounded_prefix(ancestor_prefix // "└─ ")
+    else
+      prefix = bounded_prefix(ancestor_prefix // "├─ ")
+    end if
+  end function tree_branch_prefix
+
+  function next_ancestor_prefix(depth, ancestor_prefix, is_last) result(prefix)
+    integer, intent(in) :: depth
+    character(len=*), intent(in) :: ancestor_prefix
+    logical, intent(in) :: is_last
+    character(len=:), allocatable :: prefix
+
+    if (depth <= 0) then
+      prefix = ""
+    else if (is_last) then
+      prefix = bounded_prefix(ancestor_prefix // "   ")
+    else
+      prefix = bounded_prefix(ancestor_prefix // "│  ")
+    end if
+  end function next_ancestor_prefix
+
+  function bounded_prefix(source) result(prefix)
+    character(len=*), intent(in) :: source
+    character(len=:), allocatable :: prefix
+    integer :: copied_len
+
+    copied_len = min(len(source), PROCESS_TREE_PREFIX_LEN)
+    prefix = source(1:copied_len)
+  end function bounded_prefix
 
   integer function matching_previous_process(previous, current) result(match_index)
     type(process_table), intent(in) :: previous

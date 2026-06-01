@@ -5,6 +5,7 @@ module ftop_process_table
   use ftop_collector, only : collector_snapshot
   use ftop_proc_data, only : &
     PROCESS_SORT_PID, &
+    build_process_tree, &
     process_display_command, &
     process_info, &
     process_state_label, &
@@ -67,6 +68,7 @@ contains
     columns = process_columns()
     sorted_processes = snapshot%processes
     call sort_process_table(sorted_processes, PROCESS_SORT_PID)
+    call build_process_tree(sorted_processes)
     cells = process_cells(sorted_processes)
     if (size(cells, 1) <= 0) then
       call render_text(buffer, content_line_rect(content, 1), "no processes", dim_style)
@@ -127,23 +129,36 @@ contains
     do process_index = 1, size(table%items)
       if (.not. table%items(process_index)%valid) cycle
       row = row + 1
-      call fill_process_row(cells(row, :), table%items(process_index))
+      call fill_process_row(cells, row, table%items(process_index))
     end do
   end function process_cells
 
-  subroutine fill_process_row(row, process)
-    type(table_cell), intent(out) :: row(:)
+  subroutine fill_process_row(cells, row_index, process)
+    type(table_cell), intent(inout) :: cells(:, :)
+    integer, intent(in) :: row_index
     type(process_info), intent(in) :: process
 
-    if (size(row) < PROCESS_TABLE_COLUMNS) return
-    row(1) = make_table_cell(integer_text(process%pid))
-    row(2) = make_table_cell(process_user_label(process))
-    row(3) = make_table_cell(format_percent(real(clamp_percent(process%cpu_percent))))
-    row(4) = make_table_cell(format_percent(real(clamp_percent(process%mem_percent))))
-    row(5) = make_table_cell(format_bytes(max(0_int64, process%mem_rss_bytes)))
-    row(6) = make_table_cell(process_state_label(process))
-    row(7) = make_table_cell(process_display_command(process))
+    if (size(cells, 2) < PROCESS_TABLE_COLUMNS) return
+    if (row_index < 1 .or. row_index > size(cells, 1)) return
+    cells(row_index, 1) = make_table_cell(integer_text(process%pid))
+    cells(row_index, 2) = make_table_cell(process_user_label(process))
+    cells(row_index, 3) = make_table_cell(format_percent(real(clamp_percent(process%cpu_percent))))
+    cells(row_index, 4) = make_table_cell(format_percent(real(clamp_percent(process%mem_percent))))
+    cells(row_index, 5) = make_table_cell(format_bytes(max(0_int64, process%mem_rss_bytes)))
+    cells(row_index, 6) = make_table_cell(process_state_label(process))
+    cells(row_index, 7) = make_table_cell(process_tree_display_command(process))
   end subroutine fill_process_row
+
+  function process_tree_display_command(process) result(text)
+    type(process_info), intent(in) :: process
+    character(len=:), allocatable :: text
+
+    if (len_trim(process%tree_prefix) > 0) then
+      text = trim(process%tree_prefix) // " " // process_display_command(process)
+    else
+      text = process_display_command(process)
+    end if
+  end function process_tree_display_command
 
   function content_line_rect(content, line_index) result(line)
     type(widget_rect), intent(in) :: content

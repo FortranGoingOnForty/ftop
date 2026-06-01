@@ -1,7 +1,7 @@
 program test_proc_data
   use, intrinsic :: iso_fortran_env, only : int64, real64
-  use ftop_proc_data, only : assign_process_cpu_percent, process_count, process_display_command, process_info, &
-                             process_state_label, process_table, process_user_label, PROCESS_SORT_CPU, &
+  use ftop_proc_data, only : assign_process_cpu_percent, build_process_tree, process_count, process_display_command, &
+                             process_info, process_state_label, process_table, process_user_label, PROCESS_SORT_CPU, &
                              PROCESS_SORT_PID, sort_process_table
   implicit none
 
@@ -11,6 +11,7 @@ program test_proc_data
   call test_process_labels()
   call test_process_cpu_percent()
   call test_process_sorting()
+  call test_process_tree()
 
 contains
 
@@ -110,6 +111,44 @@ contains
     call sort_process_table(sorted, PROCESS_SORT_CPU, descending=.true.)
     call require(all(sorted%items%pid == [20, 30, 10]), "process sort should be stable descending")
   end subroutine test_process_sorting
+
+  subroutine test_process_tree()
+    type(process_table) :: tree
+
+    tree%valid = .true.
+    allocate(tree%items(8))
+    call set_tree_process(tree%items(1), 1, 0)
+    call set_tree_process(tree%items(2), 2, 1)
+    call set_tree_process(tree%items(3), 3, 1)
+    call set_tree_process(tree%items(4), 4, 2)
+    call set_tree_process(tree%items(5), 5, 99)
+    call set_tree_process(tree%items(6), 6, 6)
+    call set_tree_process(tree%items(7), 7, 8)
+    call set_tree_process(tree%items(8), 8, 7)
+
+    call build_process_tree(tree)
+
+    call require(all(tree%items%pid == [1, 2, 4, 3, 5, 6, 7, 8]), &
+                 "process tree should order parents before children")
+    call require(all(tree%items%tree_depth == [0, 1, 2, 1, 0, 0, 0, 1]), &
+                 "process tree should assign depths")
+    call require(trim(tree%items(1)%tree_prefix) == "", "process tree root prefix should be empty")
+    call require(trim(tree%items(2)%tree_prefix) == "├─", "process tree should mark non-last child")
+    call require(trim(tree%items(3)%tree_prefix) == "│  └─", "process tree should keep ancestor continuation")
+    call require(trim(tree%items(4)%tree_prefix) == "└─", "process tree should mark last child")
+    call require(trim(tree%items(8)%tree_prefix) == "└─", "process tree should break cycles safely")
+  end subroutine test_process_tree
+
+  subroutine set_tree_process(process, pid, ppid)
+    type(process_info), intent(out) :: process
+    integer, intent(in) :: pid
+    integer, intent(in) :: ppid
+
+    process = process_info()
+    process%valid = .true.
+    process%pid = pid
+    process%ppid = ppid
+  end subroutine set_tree_process
 
   subroutine require(condition, message)
     logical, intent(in) :: condition

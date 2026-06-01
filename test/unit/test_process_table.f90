@@ -20,10 +20,13 @@ program test_process_table
 
   call render_process_panel(buffer, widget_rect(1, 1, 80, 10), sample_snapshot(), border_style, title_style, dim_style)
   call require(index(row_text(buffer, 2), "PID") > 0, "process table should render PID header")
-  call require(index(row_text(buffer, 3), "1234") > 0, "process table should render pid")
-  call require(index(row_text(buffer, 3), "ftop --test") > 0, "process table should render command")
+  call require(index(row_text(buffer, 3), "100") > 0, "process table should render pid")
+  call require(index(row_text(buffer, 3), "parent --test") > 0, "process table should render command")
   call require(index(row_text(buffer, 3), "12.5%") > 0, "process table should render cpu percent")
   call require(index(row_text(buffer, 3), "64.0 MiB") > 0, "process table should render RSS")
+  call require(index(row_text(buffer, 4), "200") > 0, "process table should render child pid")
+  call require(index(row_text(buffer, 4), "└") > 0, "process table should render child branch")
+  call require(index(row_text(buffer, 4), "child --task") > 0, "process table should render child command")
 
 contains
 
@@ -31,18 +34,27 @@ contains
     type(collector_snapshot) :: snapshot
 
     snapshot%processes%valid = .true.
-    allocate(snapshot%processes%items(1))
+    allocate(snapshot%processes%items(2))
     snapshot%processes%items(1)%valid = .true.
-    snapshot%processes%items(1)%pid = 1234
+    snapshot%processes%items(1)%pid = 100
     snapshot%processes%items(1)%uid = 1001
     snapshot%processes%items(1)%user_valid = .true.
     snapshot%processes%items(1)%user = "tester"
-    snapshot%processes%items(1)%name = "ftop"
-    snapshot%processes%items(1)%command = "ftop --test"
+    snapshot%processes%items(1)%name = "parent"
+    snapshot%processes%items(1)%command = "parent --test"
     snapshot%processes%items(1)%state = "R"
     snapshot%processes%items(1)%cpu_percent = 12.5_real64
     snapshot%processes%items(1)%mem_percent = 1.5_real64
     snapshot%processes%items(1)%mem_rss_bytes = 64_int64 * 1024_int64 * 1024_int64
+    snapshot%processes%items(2)%valid = .true.
+    snapshot%processes%items(2)%pid = 200
+    snapshot%processes%items(2)%ppid = 100
+    snapshot%processes%items(2)%uid = 1001
+    snapshot%processes%items(2)%user_valid = .true.
+    snapshot%processes%items(2)%user = "tester"
+    snapshot%processes%items(2)%name = "child"
+    snapshot%processes%items(2)%command = "child --task"
+    snapshot%processes%items(2)%state = "S"
   end function sample_snapshot
 
   function row_text(buffer, row) result(text)
