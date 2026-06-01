@@ -8,7 +8,8 @@ program test_terminal_frame
 
   if (index(rendered, "╔") == 0) error stop "frame should render a Unicode top-left border"
   if (index(rendered, "╚") == 0) error stop "frame should render a Unicode bottom-left border"
-  if (index(rendered, "ftop terminal core") == 0) error stop "frame should render the title text"
+  if (index(rendered, "CPU") == 0) error stop "frame should render a CPU panel"
+  if (index(rendered, "Memory") == 0) error stop "frame should render a memory panel"
   if (index(rendered, "refresh 1000ms frame 7") == 0) error stop "frame should render refresh timing"
   if (index(rendered, "snapshot-ok") == 0) error stop "frame should render status text"
   if (index(rendered, achar(27) // "[38;2;126;87;255m") == 0) error stop "frame should use truecolor border"

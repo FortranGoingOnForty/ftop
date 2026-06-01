@@ -1,0 +1,133 @@
+program test_dashboard
+  use, intrinsic :: iso_fortran_env, only : int64, real64
+  use fgof_screen, only : allocate_screen
+  use fgof_screen_types, only : screen_buffer
+  use ftop_collector, only : collector_snapshot
+  use ftop_dashboard, only : dashboard_layout, default_dashboard_layout, render_dashboard
+  implicit none
+
+  integer(int64), parameter :: GIB = 1024_int64 * 1024_int64 * 1024_int64
+
+  call test_default_layout()
+  call test_dashboard_renders_metrics()
+  call test_tiny_dashboard()
+
+contains
+
+  subroutine test_default_layout()
+    type(dashboard_layout) :: layout
+
+    layout = default_dashboard_layout(80, 24)
+    call require(layout%frame%width == 80 .and. layout%frame%height == 24, &
+                 "wide layout should cover the screen")
+    call require(layout%cpu_panel%row == 3, "wide layout should place cpu panel below title")
+    call require(layout%memory_panel%row == layout%cpu_panel%row, "wide layout should use side-by-side panels")
+    call require(layout%memory_panel%col > layout%cpu_panel%col, "wide layout memory panel should be right of cpu")
+    call require(layout%footer%row == 22, "wide layout footer should stay above bottom border")
+
+    layout = default_dashboard_layout(60, 20)
+    call require(layout%cpu_panel%col == layout%memory_panel%col, "narrow layout should stack panels")
+    call require(layout%memory_panel%row > layout%cpu_panel%row, "narrow layout memory panel should follow cpu")
+    call require(layout%memory_panel%width == layout%cpu_panel%width, "narrow panels should share width")
+  end subroutine test_default_layout
+
+  subroutine test_dashboard_renders_metrics()
+    type(screen_buffer) :: buffer
+    type(collector_snapshot) :: snapshot
+    character(len=:), allocatable :: text
+
+    snapshot = sample_snapshot()
+    buffer = allocate_screen(80, 24)
+    call render_dashboard(buffer, snapshot, 1000, 7, "ready")
+    text = buffer_text(buffer)
+
+    call require(index(text, "CPU") > 0, "dashboard should render cpu panel")
+    call require(index(text, "Memory") > 0, "dashboard should render memory panel")
+    call require(index(text, "42.5%") > 0, "dashboard should render cpu usage")
+    call require(index(text, "37.5%") > 0, "dashboard should render memory usage")
+    call require(index(text, "6.0 GiB / 16.0 GiB") > 0, "dashboard should render memory bytes")
+    call require(index(text, "cores 4 threads 8") > 0, "dashboard should render cpu topology")
+    call require(index(text, "Test CPU") > 0, "dashboard should render cpu model")
+    call require(index(text, "available 8.0 GiB") > 0, "dashboard should render available memory")
+    call require(index(text, "swap 1.0 GiB / 2.0 GiB") > 0, "dashboard should render swap")
+    call require(index(text, "refresh 1000ms frame 7 samples 3") > 0, "dashboard should render footer")
+    call require(index(text, "ready") > 0, "dashboard should render status")
+  end subroutine test_dashboard_renders_metrics
+
+  subroutine test_tiny_dashboard()
+    type(screen_buffer) :: buffer
+    type(collector_snapshot) :: snapshot
+
+    buffer = allocate_screen(7, 3)
+    call render_dashboard(buffer, snapshot, 1000, 0, "")
+    call require(index(buffer_text(buffer), "ftop") > 0, "tiny dashboard should render app name")
+  end subroutine test_tiny_dashboard
+
+  function sample_snapshot() result(snapshot)
+    type(collector_snapshot) :: snapshot
+
+    snapshot%running = .true.
+    snapshot%warming_up = .false.
+    snapshot%sample_count = 3
+    snapshot%cpu_total%valid = .true.
+    snapshot%cpu_total%usage_percent = 42.5_real64
+    snapshot%cpu_total%load_valid = .true.
+    snapshot%cpu_total%load_avg = [1.25_real64, 0.75_real64, 0.50_real64]
+    snapshot%cpu_total%core_count = 4
+    snapshot%cpu_total%thread_count = 8
+    snapshot%cpu_total%model_name_valid = .true.
+    snapshot%cpu_total%model_name = "Test CPU"
+    allocate(snapshot%cpu_cores(2))
+    snapshot%cpu_cores(1)%valid = .true.
+    snapshot%cpu_cores(1)%usage_percent = 25.0_real64
+    snapshot%cpu_cores(2)%valid = .true.
+    snapshot%cpu_cores(2)%usage_percent = 75.0_real64
+    snapshot%cpu_usage_history = [10.0_real64, 20.0_real64, 30.0_real64, 42.5_real64]
+
+    snapshot%memory%valid = .true.
+    snapshot%memory%total_bytes = 16_int64 * GIB
+    snapshot%memory%used_bytes = 6_int64 * GIB
+    snapshot%memory%free_bytes = 4_int64 * GIB
+    snapshot%memory%available_bytes = 8_int64 * GIB
+    snapshot%memory%cached_bytes = 2_int64 * GIB
+    snapshot%memory%buffers_bytes = GIB / 2_int64
+    snapshot%memory%swap_total_bytes = 2_int64 * GIB
+    snapshot%memory%swap_used_bytes = GIB
+    snapshot%memory_usage_history = [20.0_real64, 30.0_real64, 37.5_real64]
+  end function sample_snapshot
+
+  function buffer_text(buffer) result(text)
+    type(screen_buffer), intent(in) :: buffer
+    character(len=:), allocatable :: text
+    integer :: row
+
+    text = ""
+    do row = 1, buffer%size%height
+      text = text // row_text(buffer, row) // new_line("a")
+    end do
+  end function buffer_text
+
+  function row_text(buffer, row) result(text)
+    type(screen_buffer), intent(in) :: buffer
+    integer, intent(in) :: row
+    character(len=:), allocatable :: text
+    integer :: col
+
+    text = ""
+    do col = 1, buffer%size%width
+      if (allocated(buffer%cells(row, col)%glyph)) then
+        text = text // buffer%cells(row, col)%glyph
+      else
+        text = text // " "
+      end if
+    end do
+  end function row_text
+
+  subroutine require(condition, message)
+    logical, intent(in) :: condition
+    character(len=*), intent(in) :: message
+
+    if (.not. condition) error stop message
+  end subroutine require
+
+end program test_dashboard

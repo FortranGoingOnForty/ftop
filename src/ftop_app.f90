@@ -17,14 +17,13 @@ module ftop_app
     key_event
   use fgof_screen, only : &
     allocate_screen, &
-    clear_screen, &
-    clear_screen_style, &
-    put_glyph, &
     render_screen_ansi, &
     render_screen_diff_ansi
-  use fgof_screen_types, only : screen_buffer, screen_style
+  use fgof_screen_types, only : screen_buffer
   use fgof_termios, only : bind_guard, enter_raw_mode, get_terminal_size, restore_guard
   use fgof_termios_types, only : FGOF_TERMIOS_ERR_NONE, terminal_size, termios_guard
+  use ftop_collector, only : collector, collector_snapshot
+  use ftop_dashboard, only : render_dashboard
   use ftop_signal, only : &
     FTOP_SIGNAL_CONT, &
     FTOP_SIGNAL_INT, &
@@ -53,6 +52,7 @@ module ftop_app
     type(termios_guard) :: guard
     type(screen_buffer) :: current
     type(screen_buffer) :: previous
+    type(collector), allocatable :: metrics
     type(key_decoder_state) :: decoder
     character(len=:), allocatable :: status_text
     integer :: refresh_ms = DEFAULT_REFRESH_MS
@@ -61,6 +61,7 @@ module ftop_app
     integer :: clock_rate = 0
     logical :: guard_bound = .false.
     logical :: terminal_started = .false.
+    logical :: collector_started = .false.
     logical :: running = .true.
     logical :: needs_full_render = .true.
     logical :: dirty = .true.
@@ -151,6 +152,13 @@ contains
       return
     end if
 
+    if (.not. allocated(session%metrics)) allocate(session%metrics)
+    if (session%metrics%start(session%refresh_ms)) then
+      session%collector_started = .true.
+    else
+      call set_status(session, "collector unavailable")
+    end if
+
     call write_terminal_output(enter_terminal_control_sequence())
     session%terminal_started = .true.
     call resize_session_to_terminal(session)
@@ -158,10 +166,17 @@ contains
 
   subroutine stop_terminal_session(session)
     type(terminal_session), intent(inout) :: session
+    logical :: ignored
 
     if (session%terminal_started) then
       call write_terminal_output(leave_terminal_control_sequence())
       session%terminal_started = .false.
+    end if
+
+    if (allocated(session%metrics)) then
+      if (session%metrics%initialized()) ignored = session%metrics%destroy()
+      deallocate(session%metrics)
+      session%collector_started = .false.
     end if
 
     if (session%guard_bound) then
@@ -189,137 +204,13 @@ contains
 
   subroutine draw_frame(session)
     type(terminal_session), intent(inout) :: session
-    type(screen_style) :: border_style
-    type(screen_style) :: title_style
-    type(screen_style) :: dim_style
-    integer :: width
-    integer :: height
-    integer :: title_col
-    integer :: body_row
-    character(len=:), allocatable :: refresh_text
+    type(collector_snapshot) :: snapshot
 
-    width = session%current%size%width
-    height = session%current%size%height
-    if (width <= 0 .or. height <= 0) return
-
-    border_style = clear_screen_style()
-    border_style%fg_truecolor = .true.
-    border_style%fg_rgb = [126, 87, 255]
-    title_style = clear_screen_style()
-    title_style%fg_truecolor = .true.
-    title_style%fg_rgb = [164, 240, 255]
-    title_style%bg_truecolor = .true.
-    title_style%bg_rgb = [32, 22, 56]
-    title_style%bold = .true.
-    dim_style = clear_screen_style()
-    dim_style%fg_truecolor = .true.
-    dim_style%fg_rgb = [150, 156, 178]
-
-    call clear_screen(session%current)
-    session%current%cursor_visible = .false.
-
-    if (width < 8 .or. height < 4) then
-      call put_text(session%current, 1, 1, "ftop", title_style)
-      return
+    if (allocated(session%metrics)) then
+      if (session%metrics%initialized()) snapshot = session%metrics%snapshot()
     end if
-
-    call draw_box(session%current, border_style, double_line=.true.)
-    title_col = centered_col(width, " ftop ")
-    call put_text(session%current, 1, title_col, " ftop ", title_style)
-
-    body_row = max(3, height / 2)
-    call put_text(session%current, body_row, centered_col(width, "ftop terminal core"), &
-                  "ftop terminal core", title_style)
-    call put_text(session%current, body_row + 1, centered_col(width, "q/Ctrl+C quit"), &
-                  "q/Ctrl+C quit", dim_style)
-    call put_text(session%current, body_row + 2, centered_col(width, "Ctrl+Z suspend"), &
-                  "Ctrl+Z suspend", dim_style)
-    refresh_text = "refresh " // integer_text(session%refresh_ms) // "ms frame " // integer_text(session%frame_count)
-    call put_text(session%current, height - 2, 3, refresh_text, dim_style)
-    call put_text(session%current, height - 1, 3, session%status_text, dim_style)
+    call render_dashboard(session%current, snapshot, session%refresh_ms, session%frame_count, session%status_text)
   end subroutine draw_frame
-
-  subroutine draw_box(buffer, style, double_line)
-    type(screen_buffer), intent(inout) :: buffer
-    type(screen_style), intent(in) :: style
-    logical, intent(in), optional :: double_line
-    character(len=4) :: top_left
-    character(len=4) :: top_right
-    character(len=4) :: bottom_left
-    character(len=4) :: bottom_right
-    character(len=4) :: horizontal
-    character(len=4) :: vertical
-    integer :: row
-    integer :: col
-    integer :: width
-    integer :: height
-
-    width = buffer%size%width
-    height = buffer%size%height
-
-    if (present(double_line)) then
-      if (double_line) then
-        top_left = "╔"
-        top_right = "╗"
-        bottom_left = "╚"
-        bottom_right = "╝"
-        horizontal = "═"
-        vertical = "║"
-      else
-        call set_single_line_box_glyphs(top_left, top_right, bottom_left, bottom_right, horizontal, vertical)
-      end if
-    else
-      call set_single_line_box_glyphs(top_left, top_right, bottom_left, bottom_right, horizontal, vertical)
-    end if
-
-    call put_glyph(buffer, 1, 1, top_left, style)
-    call put_glyph(buffer, 1, width, top_right, style)
-    call put_glyph(buffer, height, 1, bottom_left, style)
-    call put_glyph(buffer, height, width, bottom_right, style)
-
-    do col = 2, width - 1
-      call put_glyph(buffer, 1, col, horizontal, style)
-      call put_glyph(buffer, height, col, horizontal, style)
-    end do
-
-    do row = 2, height - 1
-      call put_glyph(buffer, row, 1, vertical, style)
-      call put_glyph(buffer, row, width, vertical, style)
-    end do
-  end subroutine draw_box
-
-  subroutine set_single_line_box_glyphs(top_left, top_right, bottom_left, bottom_right, horizontal, vertical)
-    character(len=*), intent(out) :: top_left
-    character(len=*), intent(out) :: top_right
-    character(len=*), intent(out) :: bottom_left
-    character(len=*), intent(out) :: bottom_right
-    character(len=*), intent(out) :: horizontal
-    character(len=*), intent(out) :: vertical
-
-    top_left = "┌"
-    top_right = "┐"
-    bottom_left = "└"
-    bottom_right = "┘"
-    horizontal = "─"
-    vertical = "│"
-  end subroutine set_single_line_box_glyphs
-
-  subroutine put_text(buffer, row, col, text, style)
-    type(screen_buffer), intent(inout) :: buffer
-    integer, intent(in) :: row
-    integer, intent(in) :: col
-    character(len=*), intent(in) :: text
-    type(screen_style), intent(in) :: style
-    integer :: i
-    integer :: target_col
-
-    if (row < 1 .or. row > buffer%size%height) return
-    do i = 1, len_trim(text)
-      target_col = col + i - 1
-      if (target_col > buffer%size%width) exit
-      if (target_col >= 1) call put_glyph(buffer, row, target_col, text(i:i), style)
-    end do
-  end subroutine put_text
 
   subroutine handle_input(session, bytes)
     type(terminal_session), intent(inout) :: session
@@ -670,13 +561,6 @@ contains
     if (iand(code, 8) /= 0) text = text // " alt"
     if (iand(code, 16) /= 0) text = text // " ctrl"
   end function mouse_modifier_text
-
-  integer function centered_col(width, text) result(col)
-    integer, intent(in) :: width
-    character(len=*), intent(in) :: text
-
-    col = max(1, ((width - len_trim(text)) / 2) + 1)
-  end function centered_col
 
   function enter_terminal_control_sequence() result(sequence)
     character(len=:), allocatable :: sequence

@@ -51,7 +51,7 @@ program test_terminal_smoke
   session = spawn_expect(trim(ftop_path), argv, options)
   if (session%error_code /= FGOF_EXPECT_OK) error stop "failed to spawn ftop"
 
-  match = wait_for_string(session, "ftop terminal core", 2500)
+  match = wait_for_string(session, "Memory", 2500)
   if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop frame did not render"
 
   resized_size%rows = 18
@@ -96,7 +96,7 @@ contains
     signal_session = spawn_expect(program_path, launch_argv, launch_options)
     if (signal_session%error_code /= FGOF_EXPECT_OK) error stop "failed to spawn ftop for signal exit"
 
-    signal_match = wait_for_string(signal_session, "ftop terminal core", 2500)
+    signal_match = wait_for_string(signal_session, "Memory", 2500)
     if (signal_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "signal-exit frame did not render"
 
     if (ftop_test_send_terminate(int(signal_session%pty%child_pid, c_int)) /= 0_c_int) error stop "failed to send SIGTERM"
