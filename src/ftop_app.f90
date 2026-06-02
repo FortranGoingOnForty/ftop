@@ -41,6 +41,15 @@ module ftop_app
     layout_focus_widget, &
     layout_grid, &
     parse_layout_file
+  use ftop_network, only : &
+    network_table_clear_state_filter, &
+    network_table_cycle_sort_key, &
+    network_table_cycle_state_filter, &
+    network_table_page_delta, &
+    network_table_select_delta, &
+    network_table_state, &
+    network_table_status, &
+    network_table_toggle_sort_direction
   use ftop_process_table, only : &
     process_table_append_filter_text, &
     process_table_append_signal_digit, &
@@ -114,6 +123,7 @@ module ftop_app
     type(collector), allocatable :: metrics
     type(layout_grid) :: layout
     type(key_decoder_state) :: decoder
+    type(network_table_state) :: network_state
     type(process_table_state) :: process_state
     character(len=:), allocatable :: config_path
     character(len=:), allocatable :: status_text
@@ -296,12 +306,14 @@ contains
     focus = focused_widget_name(session)
     if (session%layout_loaded) then
       call render_dashboard(session%current, snapshot, session%refresh_ms, session%frame_count, &
-                            session%status_text, session%layout, focus, session%zoomed, &
-                            render_fps=session%render_fps, process_state=session%process_state)
+                             session%status_text, session%layout, focus, session%zoomed, &
+                             render_fps=session%render_fps, process_state=session%process_state, &
+                             network_state=session%network_state)
     else
       call render_dashboard(session%current, snapshot, session%refresh_ms, session%frame_count, &
-                            session%status_text, focused_widget=focus, zoomed=session%zoomed, &
-                            render_fps=session%render_fps, process_state=session%process_state)
+                             session%status_text, focused_widget=focus, zoomed=session%zoomed, &
+                             render_fps=session%render_fps, process_state=session%process_state, &
+                             network_state=session%network_state)
     end if
   end subroutine draw_frame
 
@@ -667,6 +679,8 @@ contains
         if (len(text) > 0) call set_status(session, "key: " // text)
       else if (handle_process_printable_key(session, text)) then
         continue
+      else if (handle_network_printable_key(session, text)) then
+        continue
       else if (text == "z") then
         call toggle_zoom(session)
       else if (text == "q") then
@@ -680,6 +694,7 @@ contains
 
     if (.not. allocated(event%key_name)) return
     if (handle_process_named_key(session, event%key_name)) return
+    if (handle_network_named_key(session, event%key_name)) return
     select case (event%key_name)
     case (FGOF_KEY_UP, FGOF_KEY_DOWN, FGOF_KEY_LEFT, FGOF_KEY_RIGHT)
       call set_status(session, "arrow: " // event%key_name)
@@ -826,11 +841,68 @@ contains
     call set_status(session, process_table_status(session%process_state))
   end function handle_process_named_key
 
+  logical function handle_network_printable_key(session, text) result(handled)
+    type(terminal_session), intent(inout) :: session
+    character(len=*), intent(in) :: text
+
+    handled = .false.
+    if (.not. network_widget_focused(session)) return
+    select case (text)
+    case ("f")
+      call network_table_cycle_state_filter(session%network_state)
+    case ("s")
+      call network_table_toggle_sort_direction(session%network_state)
+    case default
+      return
+    end select
+    handled = .true.
+    call set_status(session, network_table_status(session%network_state))
+  end function handle_network_printable_key
+
+  logical function handle_network_named_key(session, key_name) result(handled)
+    type(terminal_session), intent(inout) :: session
+    character(len=*), intent(in) :: key_name
+
+    handled = .false.
+    if (.not. network_widget_focused(session)) return
+    select case (key_name)
+    case (FGOF_KEY_ESCAPE)
+      if (len_trim(session%network_state%state_filter) <= 0) return
+      call network_table_clear_state_filter(session%network_state)
+    case (FGOF_KEY_UP)
+      call network_table_select_delta(session%network_state, -1)
+    case (FGOF_KEY_DOWN)
+      call network_table_select_delta(session%network_state, 1)
+    case (FGOF_KEY_PAGEUP)
+      call network_table_page_delta(session%network_state, -1)
+    case (FGOF_KEY_PAGEDOWN)
+      call network_table_page_delta(session%network_state, 1)
+    case (FGOF_KEY_HOME)
+      call network_table_select_delta(session%network_state, -session%network_state%row_count)
+    case (FGOF_KEY_END)
+      call network_table_select_delta(session%network_state, session%network_state%row_count)
+    case (FGOF_KEY_LEFT)
+      call network_table_cycle_sort_key(session%network_state, -1)
+    case (FGOF_KEY_RIGHT)
+      call network_table_cycle_sort_key(session%network_state, 1)
+    case default
+      return
+    end select
+    handled = .true.
+    call set_status(session, network_table_status(session%network_state))
+  end function handle_network_named_key
+
   logical function process_widget_focused(session) result(focused)
     type(terminal_session), intent(in) :: session
 
     focused = focused_widget_name(session) == "process"
   end function process_widget_focused
+
+  logical function network_widget_focused(session) result(focused)
+    type(terminal_session), intent(in) :: session
+
+    focused = focused_widget_name(session) == "network"
+  end function network_widget_focused
 
   subroutine begin_process_signal(session)
     type(terminal_session), intent(inout) :: session

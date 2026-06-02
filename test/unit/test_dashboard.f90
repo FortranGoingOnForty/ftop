@@ -4,6 +4,7 @@ program test_dashboard
   use fgof_screen_types, only : screen_buffer
   use ftop_collector, only : collector_snapshot
   use ftop_dashboard, only : dashboard_layout, default_dashboard_layout, render_dashboard
+  use ftop_network, only : network_table_state
   implicit none
 
   integer(int64), parameter :: GIB = 1024_int64 * 1024_int64 * 1024_int64
@@ -11,6 +12,7 @@ program test_dashboard
   call test_default_layout()
   call test_dashboard_renders_metrics()
   call test_dashboard_renders_zoomed_widget()
+  call test_dashboard_renders_zoomed_network_table()
   call test_tiny_dashboard()
 
 contains
@@ -81,6 +83,34 @@ contains
     call require(index(text, "CPU 42.5%") == 0, "zoomed dashboard should hide unfocused cpu widget")
     call require(index(text, "zoom memory") > 0, "zoomed dashboard should render zoom status")
   end subroutine test_dashboard_renders_zoomed_widget
+
+  subroutine test_dashboard_renders_zoomed_network_table()
+    type(screen_buffer) :: buffer
+    type(collector_snapshot) :: snapshot
+    type(network_table_state) :: network_state
+    character(len=:), allocatable :: text
+
+    snapshot = network_table_snapshot()
+    network_state%state_filter = "ESTABLISHED"
+    buffer = allocate_screen(100, 28)
+    call render_dashboard(buffer, snapshot, 1000, 7, "network-test", focused_widget="network", zoomed=.true., &
+                          network_state=network_state)
+    text = buffer_text(buffer)
+
+    call require(index(text, "Network") > 0, "zoomed network should render network panel")
+    call require(index(text, "PROTO") > 0, "zoomed network should render protocol column")
+    call require(index(text, "LOCAL") > 0, "zoomed network should render local column")
+    call require(index(text, "REMOTE") > 0, "zoomed network should render remote column")
+    call require(index(text, "STATE") > 0, "zoomed network should render state column")
+    call require(index(text, "PROCESS") > 0, "zoomed network should render process column")
+    call require(index(text, "filter ESTABLISHED") > 0, "zoomed network should render active state filter")
+    call require(index(text, "curl") > 0, "zoomed network should render matching connection")
+    call require(index(text, "sshd") == 0, "zoomed network should hide filtered listen connection")
+    call require(index(text, "dnsmasq") == 0, "zoomed network should hide filtered udp connection")
+    call require(network_state%row_count == 1, "network table state should track filtered rows")
+    call require(network_state%total_row_count == 3, "network table state should track total rows")
+    call require(network_state%viewport_rows > 0, "network table state should track viewport rows")
+  end subroutine test_dashboard_renders_zoomed_network_table
 
   subroutine test_tiny_dashboard()
     type(screen_buffer) :: buffer
@@ -158,6 +188,43 @@ contains
     snapshot%network%connections(1)%pid = 1234
     snapshot%network%connections(1)%process_name = "curl"
   end function sample_snapshot
+
+  function network_table_snapshot() result(snapshot)
+    type(collector_snapshot) :: snapshot
+
+    snapshot = sample_snapshot()
+    if (allocated(snapshot%network%connections)) deallocate(snapshot%network%connections)
+    allocate(snapshot%network%connections(3))
+    snapshot%network%connections(1)%valid = .true.
+    snapshot%network%connections(1)%protocol = "tcp"
+    snapshot%network%connections(1)%local_addr = "0.0.0.0"
+    snapshot%network%connections(1)%local_port = 22
+    snapshot%network%connections(1)%remote_addr = "0.0.0.0"
+    snapshot%network%connections(1)%remote_port = 0
+    snapshot%network%connections(1)%state = "LISTEN"
+    snapshot%network%connections(1)%pid = 100
+    snapshot%network%connections(1)%process_name = "sshd"
+
+    snapshot%network%connections(2)%valid = .true.
+    snapshot%network%connections(2)%protocol = "tcp"
+    snapshot%network%connections(2)%local_addr = "127.0.0.1"
+    snapshot%network%connections(2)%local_port = 8080
+    snapshot%network%connections(2)%remote_addr = "10.0.0.2"
+    snapshot%network%connections(2)%remote_port = 443
+    snapshot%network%connections(2)%state = "ESTABLISHED"
+    snapshot%network%connections(2)%pid = 1234
+    snapshot%network%connections(2)%process_name = "curl"
+
+    snapshot%network%connections(3)%valid = .true.
+    snapshot%network%connections(3)%protocol = "udp"
+    snapshot%network%connections(3)%local_addr = "192.0.2.10"
+    snapshot%network%connections(3)%local_port = 53
+    snapshot%network%connections(3)%remote_addr = "0.0.0.0"
+    snapshot%network%connections(3)%remote_port = 0
+    snapshot%network%connections(3)%state = "OPEN"
+    snapshot%network%connections(3)%pid = 5353
+    snapshot%network%connections(3)%process_name = "dnsmasq"
+  end function network_table_snapshot
 
   function buffer_text(buffer) result(text)
     type(screen_buffer), intent(in) :: buffer
