@@ -8,7 +8,12 @@ enum {
   FTOP_SIGNAL_INT = 2,
   FTOP_SIGNAL_TERM = 3,
   FTOP_SIGNAL_TSTP = 4,
-  FTOP_SIGNAL_CONT = 5
+  FTOP_SIGNAL_CONT = 5,
+  FTOP_SIGNAL_HUP = 6,
+  FTOP_SIGNAL_KILL = 7,
+  FTOP_SIGNAL_STOP = 8,
+  FTOP_SIGNAL_USR1 = 9,
+  FTOP_SIGNAL_USR2 = 10
 };
 
 static volatile sig_atomic_t ftop_winch_pending = 0;
@@ -33,6 +38,16 @@ static int ftop_signal_number_impl(int signal_id) {
     return SIGTSTP;
   case FTOP_SIGNAL_CONT:
     return SIGCONT;
+  case FTOP_SIGNAL_HUP:
+    return SIGHUP;
+  case FTOP_SIGNAL_KILL:
+    return SIGKILL;
+  case FTOP_SIGNAL_STOP:
+    return SIGSTOP;
+  case FTOP_SIGNAL_USR1:
+    return SIGUSR1;
+  case FTOP_SIGNAL_USR2:
+    return SIGUSR2;
   default:
     return 0;
   }

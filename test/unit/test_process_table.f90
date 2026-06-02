@@ -9,7 +9,9 @@ program test_process_table
                                  process_table_begin_signal, process_table_cancel_signal, process_table_clear_filter, &
                                  process_table_cycle_sort_key, &
                                  process_table_delete_filter_char, process_table_page_delta, &
-                                 process_table_select_delta, process_table_signal_status, process_table_state, &
+                                 process_table_append_signal_digit, process_table_confirm_signal, &
+                                 process_table_select_delta, process_table_set_signal, process_table_signal_status, &
+                                 process_table_state, &
                                  process_table_status, &
                                  process_table_toggle_selected_node, process_table_toggle_sort_direction, render_process_panel
   use ftop_table, only : TABLE_SORT_DESCENDING
@@ -93,6 +95,8 @@ contains
 
   subroutine test_process_state_updates()
     type(process_table_state) :: local_state
+    integer :: signal_number
+    logical :: changed
 
     local_state%row_count = 5
     local_state%viewport_rows = 2
@@ -123,11 +127,25 @@ contains
     call require(local_state%filter_length == 0, "process table filter clear should remove text")
 
     local_state%selected_pid = 4242
-    call require(process_table_begin_signal(local_state, 15, "SIGTERM"), &
+    call require(process_table_begin_signal(local_state, 15, "SIGTERM", .false.), &
                  "process table should arm selected process signal")
     call require(local_state%signal_pending, "process table signal should be pending")
     call require(index(process_table_signal_status(local_state), "SIGTERM pid 4242") > 0, &
                  "process table signal status should include signal and pid")
+    call require(process_table_set_signal(local_state, 9, "SIGKILL", .true.), &
+                 "process table should update pending signal")
+    call require(.not. local_state%signal_confirmed, "process table dangerous signal should require confirmation")
+    call require(index(process_table_signal_status(local_state), "enter to confirm") > 0, &
+                 "process table signal status should request confirmation")
+    call process_table_confirm_signal(local_state)
+    call require(local_state%signal_confirmed, "process table signal confirmation should be recorded")
+    call require(index(process_table_signal_status(local_state), "confirmed enter to send") > 0, &
+                 "process table signal status should show confirmed send state")
+    call process_table_append_signal_digit(local_state, "0", signal_number, changed)
+    call require(.not. changed .and. signal_number == 9, "process table should ignore leading zero signal input")
+    call process_table_append_signal_digit(local_state, "1", signal_number, changed)
+    call process_table_append_signal_digit(local_state, "2", signal_number, changed)
+    call require(changed .and. signal_number == 12, "process table should parse typed signal number")
     call process_table_cancel_signal(local_state)
     call require(.not. local_state%signal_pending, "process table signal cancel should clear pending signal")
   end subroutine test_process_state_updates

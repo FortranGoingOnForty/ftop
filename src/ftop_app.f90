@@ -40,15 +40,20 @@ module ftop_app
     parse_layout_file
   use ftop_process_table, only : &
     process_table_append_filter_text, &
+    process_table_append_signal_digit, &
     process_table_begin_filter, &
     process_table_begin_signal, &
     process_table_cancel_signal, &
     process_table_clear_filter, &
+    process_table_clear_signal_input, &
+    process_table_confirm_signal, &
     process_table_cycle_sort_key, &
     process_table_delete_filter_char, &
+    process_table_delete_signal_digit, &
     process_table_finish_filter, &
     process_table_page_delta, &
     process_table_select_delta, &
+    process_table_set_signal, &
     process_table_signal_status, &
     process_table_state, &
     process_table_status, &
@@ -57,9 +62,14 @@ module ftop_app
     process_table_toggle_tree
   use ftop_signal, only : &
     FTOP_SIGNAL_CONT, &
+    FTOP_SIGNAL_HUP, &
     FTOP_SIGNAL_INT, &
+    FTOP_SIGNAL_KILL, &
+    FTOP_SIGNAL_STOP, &
     FTOP_SIGNAL_TERM, &
     FTOP_SIGNAL_TSTP, &
+    FTOP_SIGNAL_USR1, &
+    FTOP_SIGNAL_USR2, &
     FTOP_SIGNAL_WINCH, &
     terminal_signal_clear => ftop_signal_clear, &
     terminal_kill => ftop_kill, &
@@ -79,6 +89,7 @@ module ftop_app
   integer, parameter :: DEFAULT_REFRESH_MS = 1000
   integer, parameter :: MIN_REFRESH_MS = 100
   integer, parameter :: MAX_REFRESH_MS = 60000
+  integer, parameter :: PROCESS_SIGNAL_CHOICE_COUNT = 7
   character(len=*), parameter :: DEBUG_LOG_PATH = "ftop-debug.log"
 
   type :: terminal_session
@@ -507,7 +518,7 @@ contains
     if (.not. process_widget_focused(session)) return
     if (session%process_state%signal_pending) then
       handled = .true.
-      call set_status(session, process_table_signal_status(session%process_state))
+      call handle_process_signal_text(session, text)
       return
     end if
     if (session%process_state%filter_active) then
@@ -541,11 +552,17 @@ contains
     if (.not. process_widget_focused(session)) return
     if (session%process_state%signal_pending) then
       select case (key_name)
+      case (FGOF_KEY_BACKSPACE, FGOF_KEY_DELETE)
+        call delete_process_signal_digit(session)
       case (FGOF_KEY_ENTER)
         call send_pending_process_signal(session)
       case (FGOF_KEY_ESCAPE)
         call process_table_cancel_signal(session%process_state)
         call set_status(session, "signal cancelled")
+      case (FGOF_KEY_LEFT)
+        call cycle_process_signal(session, -1)
+      case (FGOF_KEY_RIGHT)
+        call cycle_process_signal(session, 1)
       case default
         call set_status(session, process_table_signal_status(session%process_state))
       end select
@@ -601,13 +618,77 @@ contains
     logical :: started
 
     signal_number = terminal_signal_number(FTOP_SIGNAL_TERM)
-    started = process_table_begin_signal(session%process_state, signal_number, "SIGTERM")
+    started = process_table_begin_signal(session%process_state, signal_number, "SIGTERM", &
+                                         process_signal_requires_confirmation(signal_number))
     if (started) then
       call set_status(session, process_table_signal_status(session%process_state))
     else
       call set_status(session, "no process selected")
     end if
   end subroutine begin_process_signal
+
+  subroutine handle_process_signal_text(session, text)
+    type(terminal_session), intent(inout) :: session
+    character(len=*), intent(in) :: text
+    integer :: signal_number
+    logical :: changed
+
+    call process_table_append_signal_digit(session%process_state, text, signal_number, changed)
+    if (changed .and. signal_number > 0) then
+      if (.not. process_table_set_signal(session%process_state, signal_number, "", &
+                                         process_signal_requires_confirmation(signal_number))) then
+        call set_status(session, "invalid signal " // integer_text(max(0, signal_number)))
+        return
+      end if
+    end if
+    call set_status(session, process_table_signal_status(session%process_state))
+  end subroutine handle_process_signal_text
+
+  subroutine delete_process_signal_digit(session)
+    type(terminal_session), intent(inout) :: session
+    integer :: signal_number
+    logical :: changed
+
+    call process_table_delete_signal_digit(session%process_state, signal_number, changed)
+    if (changed) then
+      if (signal_number > 0) then
+        call set_process_signal_number(session, signal_number, "")
+      else
+        call process_table_clear_signal_input(session%process_state)
+        call set_process_signal_choice(session, 1)
+      end if
+    end if
+    call set_status(session, process_table_signal_status(session%process_state))
+  end subroutine delete_process_signal_digit
+
+  subroutine cycle_process_signal(session, direction)
+    type(terminal_session), intent(inout) :: session
+    integer, intent(in) :: direction
+    integer :: choice_index
+
+    call process_table_clear_signal_input(session%process_state)
+    choice_index = process_signal_choice_index(session%process_state%signal_number)
+    choice_index = modulo(choice_index - 1 + direction, PROCESS_SIGNAL_CHOICE_COUNT) + 1
+    call set_process_signal_choice(session, choice_index)
+    call set_status(session, process_table_signal_status(session%process_state))
+  end subroutine cycle_process_signal
+
+  subroutine set_process_signal_choice(session, choice_index)
+    type(terminal_session), intent(inout) :: session
+    integer, intent(in) :: choice_index
+
+    call set_process_signal_number(session, process_signal_number_at(choice_index), process_signal_name_at(choice_index))
+  end subroutine set_process_signal_choice
+
+  subroutine set_process_signal_number(session, signal_number, signal_name)
+    type(terminal_session), intent(inout) :: session
+    integer, intent(in) :: signal_number
+    character(len=*), intent(in) :: signal_name
+    logical :: ignored
+
+    ignored = process_table_set_signal(session%process_state, signal_number, signal_name, &
+                                       process_signal_requires_confirmation(signal_number))
+  end subroutine set_process_signal_number
 
   subroutine send_pending_process_signal(session)
     type(terminal_session), intent(inout) :: session
@@ -617,6 +698,12 @@ contains
     integer :: signal_number
 
     if (.not. session%process_state%signal_pending) return
+    if (session%process_state%signal_confirm_required .and. .not. session%process_state%signal_confirmed) then
+      call process_table_confirm_signal(session%process_state)
+      call set_status(session, process_table_signal_status(session%process_state))
+      return
+    end if
+
     pid = session%process_state%signal_pid
     signal_number = session%process_state%signal_number
     signal_name = trim(session%process_state%signal_name)
@@ -647,6 +734,74 @@ contains
                 " errno=" // integer_text(error_code)
     end select
   end function process_signal_error_status
+
+  logical function process_signal_requires_confirmation(signal_number) result(required)
+    integer, intent(in) :: signal_number
+
+    required = signal_number /= terminal_signal_number(FTOP_SIGNAL_TERM)
+  end function process_signal_requires_confirmation
+
+  integer function process_signal_choice_index(signal_number) result(choice_index)
+    integer, intent(in) :: signal_number
+    integer :: candidate_index
+
+    choice_index = 1
+    do candidate_index = 1, PROCESS_SIGNAL_CHOICE_COUNT
+      if (process_signal_number_at(candidate_index) == signal_number) then
+        choice_index = candidate_index
+        return
+      end if
+    end do
+  end function process_signal_choice_index
+
+  integer function process_signal_number_at(choice_index) result(signal_number)
+    integer, intent(in) :: choice_index
+
+    signal_number = terminal_signal_number(process_signal_id_at(choice_index))
+  end function process_signal_number_at
+
+  integer function process_signal_id_at(choice_index) result(signal_id)
+    integer, intent(in) :: choice_index
+
+    select case (choice_index)
+    case (2)
+      signal_id = FTOP_SIGNAL_KILL
+    case (3)
+      signal_id = FTOP_SIGNAL_STOP
+    case (4)
+      signal_id = FTOP_SIGNAL_CONT
+    case (5)
+      signal_id = FTOP_SIGNAL_HUP
+    case (6)
+      signal_id = FTOP_SIGNAL_USR1
+    case (7)
+      signal_id = FTOP_SIGNAL_USR2
+    case default
+      signal_id = FTOP_SIGNAL_TERM
+    end select
+  end function process_signal_id_at
+
+  function process_signal_name_at(choice_index) result(signal_name)
+    integer, intent(in) :: choice_index
+    character(len=:), allocatable :: signal_name
+
+    select case (choice_index)
+    case (2)
+      signal_name = "SIGKILL"
+    case (3)
+      signal_name = "SIGSTOP"
+    case (4)
+      signal_name = "SIGCONT"
+    case (5)
+      signal_name = "SIGHUP"
+    case (6)
+      signal_name = "SIGUSR1"
+    case (7)
+      signal_name = "SIGUSR2"
+    case default
+      signal_name = "SIGTERM"
+    end select
+  end function process_signal_name_at
 
   subroutine handle_pending_signals(session)
     type(terminal_session), intent(inout) :: session

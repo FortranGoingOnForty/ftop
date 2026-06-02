@@ -137,8 +137,16 @@ contains
     filter_match = wait_for_string(filter_session, "signal SIGTERM pid", 2500)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not open process signal prompt"
 
+    if (.not. send_text(filter_session, achar(27) // "[C")) error stop "failed to cycle process signal prompt"
+    filter_match = wait_for_string(filter_session, "signal SIGKILL pid", 2500)
+    if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not cycle process signal prompt"
+
+    if (.not. send_text(filter_session, achar(13))) error stop "failed to confirm process signal prompt"
+    filter_match = wait_for_string(filter_session, "confirmed enter to send", 2500)
+    if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not confirm process signal prompt"
+
     if (.not. send_text(filter_session, achar(27) // achar(27))) error stop "failed to cancel process signal prompt"
-    filter_match = wait_for_string(filter_session, "signal cancelled", 2500)
+    filter_match = wait_for_string(filter_session, "cancelled", 2500)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not cancel process signal prompt"
 
     if (.not. send_text(filter_session, "/ftop")) error stop "failed to send process filter"

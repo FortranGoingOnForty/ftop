@@ -1,6 +1,12 @@
 program test_signal
   use ftop_signal, only : &
+    FTOP_SIGNAL_CONT, &
+    FTOP_SIGNAL_HUP, &
+    FTOP_SIGNAL_KILL, &
+    FTOP_SIGNAL_STOP, &
     FTOP_SIGNAL_TERM, &
+    FTOP_SIGNAL_USR1, &
+    FTOP_SIGNAL_USR2, &
     ftop_current_pid, &
     ftop_kill, &
     ftop_signal_check, &
@@ -20,6 +26,12 @@ program test_signal
 
   signal_number = ftop_signal_number(FTOP_SIGNAL_TERM)
   call require(signal_number > 0, "SIGTERM number must be positive")
+  call require(ftop_signal_number(FTOP_SIGNAL_KILL) > 0, "SIGKILL number must be positive")
+  call require(ftop_signal_number(FTOP_SIGNAL_STOP) > 0, "SIGSTOP number must be positive")
+  call require(ftop_signal_number(FTOP_SIGNAL_CONT) > 0, "SIGCONT number must be positive")
+  call require(ftop_signal_number(FTOP_SIGNAL_HUP) > 0, "SIGHUP number must be positive")
+  call require(ftop_signal_number(FTOP_SIGNAL_USR1) > 0, "SIGUSR1 number must be positive")
+  call require(ftop_signal_number(FTOP_SIGNAL_USR2) > 0, "SIGUSR2 number must be positive")
 
   call ftop_signal_clear(FTOP_SIGNAL_TERM)
   call require(.not. ftop_signal_check(FTOP_SIGNAL_TERM), "SIGTERM should start clear")

@@ -39,6 +39,7 @@ module ftop_process_table
   integer, parameter :: PROCESS_COLLAPSED_CAPACITY = 256
   integer, parameter, public :: PROCESS_FILTER_LEN = 96
   integer, parameter :: PROCESS_SIGNAL_NAME_LEN = 16
+  integer, parameter :: PROCESS_SIGNAL_INPUT_LEN = 4
 
   type, public :: process_table_state
     integer :: selected_row = 1
@@ -59,6 +60,10 @@ module ftop_process_table
     integer(int64) :: signal_start_time = 0_int64
     integer :: signal_number = 0
     character(len=PROCESS_SIGNAL_NAME_LEN) :: signal_name = ""
+    logical :: signal_confirm_required = .false.
+    logical :: signal_confirmed = .false.
+    integer :: signal_input_length = 0
+    character(len=PROCESS_SIGNAL_INPUT_LEN) :: signal_input_text = ""
     integer :: filter_length = 0
     character(len=PROCESS_FILTER_LEN) :: filter_text = ""
     logical :: filter_active = .false.
@@ -71,11 +76,16 @@ module ftop_process_table
   public :: process_table_begin_filter
   public :: process_table_cancel_signal
   public :: process_table_clear_filter
+  public :: process_table_clear_signal_input
+  public :: process_table_confirm_signal
   public :: process_table_cycle_sort_key
   public :: process_table_delete_filter_char
+  public :: process_table_delete_signal_digit
   public :: process_table_page_delta
   public :: process_table_select_delta
+  public :: process_table_set_signal
   public :: process_table_signal_status
+  public :: process_table_append_signal_digit
   public :: process_table_sort_direction_label
   public :: process_table_sort_key_label
   public :: process_table_status
@@ -578,10 +588,11 @@ contains
     state%scroll_row = 1
   end subroutine process_table_delete_filter_char
 
-  logical function process_table_begin_signal(state, signal_number, signal_name) result(started)
+  logical function process_table_begin_signal(state, signal_number, signal_name, confirm_required) result(started)
     type(process_table_state), intent(inout) :: state
     integer, intent(in) :: signal_number
     character(len=*), intent(in) :: signal_name
+    logical, intent(in), optional :: confirm_required
 
     started = .false.
     if (state%selected_pid <= 0) return
@@ -590,10 +601,78 @@ contains
     state%signal_pending = .true.
     state%signal_pid = state%selected_pid
     state%signal_start_time = state%selected_start_time
+    call process_table_clear_signal_input(state)
+    started = process_table_set_signal(state, signal_number, signal_name, confirm_required)
+  end function process_table_begin_signal
+
+  logical function process_table_set_signal(state, signal_number, signal_name, confirm_required) result(started)
+    type(process_table_state), intent(inout) :: state
+    integer, intent(in) :: signal_number
+    character(len=*), intent(in) :: signal_name
+    logical, intent(in), optional :: confirm_required
+
+    started = .false.
+    if (.not. state%signal_pending) return
+    if (signal_number <= 0) return
     state%signal_number = signal_number
     state%signal_name = signal_name
+    state%signal_confirm_required = .false.
+    if (present(confirm_required)) state%signal_confirm_required = confirm_required
+    state%signal_confirmed = .not. state%signal_confirm_required
     started = .true.
-  end function process_table_begin_signal
+  end function process_table_set_signal
+
+  subroutine process_table_confirm_signal(state)
+    type(process_table_state), intent(inout) :: state
+
+    if (.not. state%signal_pending) return
+    if (.not. state%signal_confirm_required) return
+    state%signal_confirmed = .true.
+  end subroutine process_table_confirm_signal
+
+  subroutine process_table_append_signal_digit(state, text, signal_number, changed)
+    type(process_table_state), intent(inout) :: state
+    character(len=*), intent(in) :: text
+    integer, intent(out) :: signal_number
+    logical, intent(out) :: changed
+    integer :: char_index
+
+    signal_number = state%signal_number
+    changed = .false.
+    if (.not. state%signal_pending) return
+    do char_index = 1, len(text)
+      if (.not. ascii_digit(text(char_index:char_index))) cycle
+      if (state%signal_input_length == 0 .and. text(char_index:char_index) == "0") cycle
+      if (state%signal_input_length >= PROCESS_SIGNAL_INPUT_LEN) exit
+      state%signal_input_length = state%signal_input_length + 1
+      state%signal_input_text(state%signal_input_length:state%signal_input_length) = text(char_index:char_index)
+      changed = .true.
+    end do
+    if (.not. changed) return
+    signal_number = signal_input_number(state)
+  end subroutine process_table_append_signal_digit
+
+  subroutine process_table_delete_signal_digit(state, signal_number, changed)
+    type(process_table_state), intent(inout) :: state
+    integer, intent(out) :: signal_number
+    logical, intent(out) :: changed
+
+    signal_number = state%signal_number
+    changed = .false.
+    if (.not. state%signal_pending) return
+    if (state%signal_input_length <= 0) return
+    state%signal_input_text(state%signal_input_length:state%signal_input_length) = " "
+    state%signal_input_length = state%signal_input_length - 1
+    changed = .true.
+    signal_number = signal_input_number(state)
+  end subroutine process_table_delete_signal_digit
+
+  subroutine process_table_clear_signal_input(state)
+    type(process_table_state), intent(inout) :: state
+
+    state%signal_input_length = 0
+    state%signal_input_text = ""
+  end subroutine process_table_clear_signal_input
 
   subroutine process_table_cancel_signal(state)
     type(process_table_state), intent(inout) :: state
@@ -603,6 +682,9 @@ contains
     state%signal_start_time = 0_int64
     state%signal_number = 0
     state%signal_name = ""
+    state%signal_confirm_required = .false.
+    state%signal_confirmed = .false.
+    call process_table_clear_signal_input(state)
   end subroutine process_table_cancel_signal
 
   subroutine process_table_select_delta(state, delta)
@@ -699,8 +781,16 @@ contains
     character(len=:), allocatable :: text
 
     if (state%signal_pending) then
-      text = "signal " // process_signal_name_text(state) // " pid " // integer_text(max(0, state%signal_pid)) // &
-             " enter to send escape to cancel"
+      if (state%signal_confirm_required .and. .not. state%signal_confirmed) then
+        text = "signal " // process_signal_name_text(state) // " pid " // integer_text(max(0, state%signal_pid)) // &
+               " enter to confirm escape to cancel"
+      else if (state%signal_confirm_required) then
+        text = "signal " // process_signal_name_text(state) // " pid " // integer_text(max(0, state%signal_pid)) // &
+               " confirmed enter to send escape to cancel"
+      else
+        text = "signal " // process_signal_name_text(state) // " pid " // integer_text(max(0, state%signal_pid)) // &
+               " enter to send arrows cycle number to set escape to cancel"
+      end if
     else
       text = "signal inactive"
     end if
@@ -741,12 +831,49 @@ contains
     type(process_table_state), intent(in) :: state
     character(len=:), allocatable :: text
 
-    if (len_trim(state%signal_name) > 0) then
+    if (state%signal_input_length > 0) then
+      text = signal_input_text(state)
+    else if (len_trim(state%signal_name) > 0) then
       text = trim(state%signal_name)
     else
-      text = "signal " // integer_text(max(0, state%signal_number))
+      text = integer_text(max(0, state%signal_number))
     end if
   end function process_signal_name_text
+
+  function signal_input_text(state) result(text)
+    type(process_table_state), intent(in) :: state
+    character(len=:), allocatable :: text
+    integer :: length
+
+    length = max(0, min(PROCESS_SIGNAL_INPUT_LEN, state%signal_input_length))
+    if (length <= 0) then
+      text = ""
+    else
+      text = state%signal_input_text(:length)
+    end if
+  end function signal_input_text
+
+  integer function signal_input_number(state) result(signal_number)
+    type(process_table_state), intent(in) :: state
+    character(len=:), allocatable :: scratch
+    integer :: status
+
+    signal_number = 0
+    if (state%signal_input_length <= 0) return
+    scratch = signal_input_text(state)
+    read(scratch, *, iostat=status) signal_number
+    if (status /= 0) signal_number = 0
+  end function signal_input_number
+
+  logical function ascii_digit(text) result(is_digit)
+    character(len=*), intent(in) :: text
+    integer :: code
+
+    is_digit = .false.
+    if (len(text) <= 0) return
+    code = iachar(text(1:1))
+    is_digit = code >= iachar("0") .and. code <= iachar("9")
+  end function ascii_digit
 
   subroutine normalize_process_table_state(state, row_count, viewport_rows)
     type(process_table_state), intent(inout) :: state

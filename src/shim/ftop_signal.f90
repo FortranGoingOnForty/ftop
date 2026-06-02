@@ -8,6 +8,11 @@ module ftop_signal
   integer, parameter, public :: FTOP_SIGNAL_TERM = 3
   integer, parameter, public :: FTOP_SIGNAL_TSTP = 4
   integer, parameter, public :: FTOP_SIGNAL_CONT = 5
+  integer, parameter, public :: FTOP_SIGNAL_HUP = 6
+  integer, parameter, public :: FTOP_SIGNAL_KILL = 7
+  integer, parameter, public :: FTOP_SIGNAL_STOP = 8
+  integer, parameter, public :: FTOP_SIGNAL_USR1 = 9
+  integer, parameter, public :: FTOP_SIGNAL_USR2 = 10
 
   public :: ftop_current_pid
   public :: ftop_kill
