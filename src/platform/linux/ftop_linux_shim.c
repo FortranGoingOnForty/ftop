@@ -3,12 +3,20 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <netinet/in.h>
 #include <pwd.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
+#include <sys/socket.h>
 #include <unistd.h>
+
+#include <linux/inet_diag.h>
+#include <linux/netlink.h>
+#include <linux/rtnetlink.h>
+#include <linux/sock_diag.h>
 
 #define FTOP_LINUX_CPUINFO_BUFFER_LEN 1048576U
 #define FTOP_LINUX_HWMON_NAME_LEN 128
@@ -20,6 +28,14 @@
 #define FTOP_LINUX_PROCESS_CGROUP_LEN 1024
 #define FTOP_LINUX_SOCKET_OWNER_PROCESS_NAME_LEN 64
 #define FTOP_USER_LOOKUP_BUFFER_LEN 16384
+
+#ifndef SOCK_CLOEXEC
+#define SOCK_CLOEXEC 0
+#endif
+
+#ifndef TCPF_ALL
+#define TCPF_ALL 0xFFFU
+#endif
 
 #ifndef PATH_MAX
 #define PATH_MAX 4096
@@ -46,8 +62,47 @@ struct ftop_linux_process_raw {
 
 struct ftop_linux_socket_owner {
   long long inode;
+  long long start_time;
   int pid;
   char process_name[FTOP_LINUX_SOCKET_OWNER_PROCESS_NAME_LEN];
+};
+
+struct ftop_linux_socket_traffic {
+  long long inode;
+  long long rx_bytes;
+  long long tx_bytes;
+};
+
+struct ftop_linux_tcp_info_bytes {
+  uint8_t byte_fields[8];
+  uint32_t rto;
+  uint32_t ato;
+  uint32_t snd_mss;
+  uint32_t rcv_mss;
+  uint32_t unacked;
+  uint32_t sacked;
+  uint32_t lost;
+  uint32_t retrans;
+  uint32_t fackets;
+  uint32_t last_data_sent;
+  uint32_t last_ack_sent;
+  uint32_t last_data_recv;
+  uint32_t last_ack_recv;
+  uint32_t pmtu;
+  uint32_t rcv_ssthresh;
+  uint32_t rtt;
+  uint32_t rttvar;
+  uint32_t snd_ssthresh;
+  uint32_t snd_cwnd;
+  uint32_t advmss;
+  uint32_t reordering;
+  uint32_t rcv_rtt;
+  uint32_t rcv_space;
+  uint32_t total_retrans;
+  uint64_t pacing_rate;
+  uint64_t max_pacing_rate;
+  uint64_t bytes_acked;
+  uint64_t bytes_received;
 };
 
 static int ftop_read_file_into_buffer(const char *path, char *buffer, size_t buffer_len, size_t *value_len, int *sys_errno) {
@@ -260,13 +315,46 @@ static int ftop_socket_owner_exists(
 }
 
 static void ftop_store_socket_owner(
-    struct ftop_linux_socket_owner *owner, int pid, long long inode, const char *process_name) {
+    struct ftop_linux_socket_owner *owner, int pid, long long start_time, long long inode, const char *process_name) {
   memset(owner, 0, sizeof(*owner));
   owner->inode = inode;
+  owner->start_time = start_time;
   owner->pid = pid;
   if (process_name != NULL) {
     ftop_copy_owner_process_name(owner->process_name, process_name, strlen(process_name));
   }
+}
+
+static int ftop_linux_read_process_start_time(int pid, long long *start_time) {
+  char stat[FTOP_LINUX_PROCESS_STAT_LEN];
+  char *end;
+  const char *cursor;
+  long long value;
+  size_t value_len;
+  int field;
+
+  if (start_time == NULL) return -1;
+  *start_time = 0LL;
+  value_len = 0U;
+  if (ftop_linux_read_process_file(pid, "stat", stat, sizeof(stat), &value_len) != 0) return -1;
+  cursor = strrchr(stat, ')');
+  if (cursor == NULL) return -1;
+  ++cursor;
+
+  for (field = 3; field <= 22; ++field) {
+    while (*cursor == ' ' || *cursor == '\t') ++cursor;
+    if (*cursor == '\0' || *cursor == '\n') return -1;
+    if (field == 22) {
+      errno = 0;
+      value = strtoll(cursor, &end, 10);
+      if (end == cursor || errno != 0 || value <= 0LL) return -1;
+      *start_time = value;
+      return 0;
+    }
+    while (*cursor != '\0' && *cursor != '\n' && *cursor != ' ' && *cursor != '\t') ++cursor;
+  }
+
+  return -1;
 }
 
 static void ftop_scan_process_socket_owners(
@@ -278,6 +366,7 @@ static void ftop_scan_process_socket_owners(
   DIR *fd_directory;
   struct dirent *entry;
   long long inode;
+  long long start_time;
   ssize_t target_len;
   int written;
 
@@ -288,7 +377,9 @@ static void ftop_scan_process_socket_owners(
   if (fd_directory == NULL) return;
 
   process_name[0] = '\0';
+  start_time = 0LL;
   (void)ftop_linux_read_process_comm(pid, process_name, sizeof(process_name));
+  (void)ftop_linux_read_process_start_time(pid, &start_time);
   while ((entry = readdir(fd_directory)) != NULL && *count < capacity) {
     if (entry->d_name[0] == '.') continue;
     written = snprintf(link_path, sizeof(link_path), "%s/%s", fd_directory_path, entry->d_name);
@@ -298,7 +389,7 @@ static void ftop_scan_process_socket_owners(
     target[target_len] = '\0';
     if (!ftop_socket_inode_from_link(target, &inode)) continue;
     if (ftop_socket_owner_exists(owners, *count, inode, pid)) continue;
-    ftop_store_socket_owner(&owners[*count], pid, inode, process_name);
+    ftop_store_socket_owner(&owners[*count], pid, start_time, inode, process_name);
     ++(*count);
   }
 
@@ -330,6 +421,186 @@ int ftop_linux_socket_owners(
 
   closedir(directory);
   *owner_count = count;
+  return 0;
+}
+
+static long long ftop_linux_u64_to_long_long(uint64_t value) {
+  if (value > (uint64_t)LLONG_MAX) return LLONG_MAX;
+  return (long long)value;
+}
+
+static long long ftop_linux_saturating_add_long_long(long long left, long long right) {
+  if (left < 0LL) left = 0LL;
+  if (right < 0LL) right = 0LL;
+  if (right > LLONG_MAX - left) return LLONG_MAX;
+  return left + right;
+}
+
+static void ftop_linux_store_socket_traffic(
+    struct ftop_linux_socket_traffic *traffic, size_t capacity, size_t *count,
+    long long inode, long long rx_bytes, long long tx_bytes) {
+  size_t index;
+
+  if (traffic == NULL || count == NULL || inode <= 0LL) return;
+  for (index = 0U; index < *count; ++index) {
+    if (traffic[index].inode != inode) continue;
+    traffic[index].rx_bytes = ftop_linux_saturating_add_long_long(traffic[index].rx_bytes, rx_bytes);
+    traffic[index].tx_bytes = ftop_linux_saturating_add_long_long(traffic[index].tx_bytes, tx_bytes);
+    return;
+  }
+
+  if (*count >= capacity) return;
+  memset(&traffic[*count], 0, sizeof(traffic[*count]));
+  traffic[*count].inode = inode;
+  traffic[*count].rx_bytes = rx_bytes;
+  traffic[*count].tx_bytes = tx_bytes;
+  ++(*count);
+}
+
+static int ftop_linux_tcp_info_bytes(const struct rtattr *attribute, long long *rx_bytes, long long *tx_bytes) {
+  struct ftop_linux_tcp_info_bytes info;
+
+  if (attribute == NULL || rx_bytes == NULL || tx_bytes == NULL) return 0;
+  *rx_bytes = 0LL;
+  *tx_bytes = 0LL;
+  if ((size_t)RTA_PAYLOAD(attribute) < sizeof(info)) return 0;
+
+  memset(&info, 0, sizeof(info));
+  memcpy(&info, RTA_DATA(attribute), sizeof(info));
+  *rx_bytes = ftop_linux_u64_to_long_long(info.bytes_received);
+  *tx_bytes = ftop_linux_u64_to_long_long(info.bytes_acked);
+  return *rx_bytes > 0LL || *tx_bytes > 0LL;
+}
+
+static void ftop_linux_parse_inet_diag_message(
+    const struct nlmsghdr *header, struct ftop_linux_socket_traffic *traffic, size_t capacity, size_t *count) {
+  const struct inet_diag_msg *message;
+  struct rtattr *attribute;
+  long long rx_bytes;
+  long long tx_bytes;
+  int attribute_len;
+
+  if (header == NULL || traffic == NULL || count == NULL) return;
+  if (header->nlmsg_len < NLMSG_LENGTH(sizeof(*message))) return;
+  message = (const struct inet_diag_msg *)NLMSG_DATA(header);
+  if (message->idiag_inode == 0U) return;
+
+  rx_bytes = 0LL;
+  tx_bytes = 0LL;
+  attribute_len = (int)(header->nlmsg_len - NLMSG_LENGTH(sizeof(*message)));
+  attribute = (struct rtattr *)((char *)message + NLMSG_ALIGN(sizeof(*message)));
+  while (RTA_OK(attribute, attribute_len)) {
+    if (attribute->rta_type == INET_DIAG_INFO) {
+      if (ftop_linux_tcp_info_bytes(attribute, &rx_bytes, &tx_bytes)) break;
+    }
+    attribute = RTA_NEXT(attribute, attribute_len);
+  }
+
+  if (rx_bytes <= 0LL && tx_bytes <= 0LL) return;
+  ftop_linux_store_socket_traffic(traffic, capacity, count, (long long)message->idiag_inode, rx_bytes, tx_bytes);
+}
+
+static int ftop_linux_dump_tcp_socket_traffic(
+    int family, struct ftop_linux_socket_traffic *traffic, size_t capacity, size_t *count, int *sys_errno) {
+  struct {
+    struct nlmsghdr header;
+    struct inet_diag_req_v2 request;
+  } request;
+  char buffer[65536];
+  struct nlmsghdr *header;
+  struct nlmsgerr *error;
+  ssize_t bytes_received;
+  ssize_t bytes_sent;
+  int done;
+  int fd;
+  int remaining;
+
+  fd = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_INET_DIAG);
+  if (fd < 0) {
+    *sys_errno = errno;
+    return -1;
+  }
+
+  memset(&request, 0, sizeof(request));
+  request.header.nlmsg_len = sizeof(request);
+  request.header.nlmsg_type = SOCK_DIAG_BY_FAMILY;
+  request.header.nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
+  request.request.sdiag_family = (uint8_t)family;
+  request.request.sdiag_protocol = IPPROTO_TCP;
+  request.request.idiag_ext = 1U << (INET_DIAG_INFO - 1U);
+  request.request.idiag_states = TCPF_ALL;
+
+  bytes_sent = send(fd, &request, sizeof(request), 0);
+  if (bytes_sent != (ssize_t)sizeof(request)) {
+    *sys_errno = errno != 0 ? errno : EIO;
+    close(fd);
+    return -1;
+  }
+
+  done = 0;
+  while (!done) {
+    bytes_received = recv(fd, buffer, sizeof(buffer), 0);
+    if (bytes_received < 0) {
+      if (errno == EINTR) continue;
+      *sys_errno = errno;
+      close(fd);
+      return -1;
+    }
+    if (bytes_received == 0) break;
+
+    remaining = (int)bytes_received;
+    header = (struct nlmsghdr *)buffer;
+    while (NLMSG_OK(header, remaining)) {
+      if (header->nlmsg_type == NLMSG_DONE) {
+        done = 1;
+        break;
+      }
+      if (header->nlmsg_type == NLMSG_ERROR) {
+        if (header->nlmsg_len >= NLMSG_LENGTH(sizeof(*error))) {
+          error = (struct nlmsgerr *)NLMSG_DATA(header);
+          if (error->error != 0) {
+            *sys_errno = -error->error;
+            close(fd);
+            return -1;
+          }
+        }
+        done = 1;
+        break;
+      }
+      ftop_linux_parse_inet_diag_message(header, traffic, capacity, count);
+      header = NLMSG_NEXT(header, remaining);
+    }
+  }
+
+  close(fd);
+  return 0;
+}
+
+int ftop_linux_socket_traffic(
+    struct ftop_linux_socket_traffic *traffic, size_t capacity, size_t *traffic_count, int *sys_errno) {
+  int ipv4_errno;
+  int ipv4_rc;
+  int ipv6_errno;
+  int ipv6_rc;
+  size_t count;
+
+  if (traffic == NULL || traffic_count == NULL || sys_errno == NULL || capacity == 0U) return -1;
+
+  memset(traffic, 0, sizeof(traffic[0]) * capacity);
+  *traffic_count = 0U;
+  *sys_errno = 0;
+  count = 0U;
+
+  ipv4_errno = 0;
+  ipv6_errno = 0;
+  ipv4_rc = ftop_linux_dump_tcp_socket_traffic(AF_INET, traffic, capacity, &count, &ipv4_errno);
+  ipv6_rc = ftop_linux_dump_tcp_socket_traffic(AF_INET6, traffic, capacity, &count, &ipv6_errno);
+  if (ipv4_rc != 0 && ipv6_rc != 0) {
+    *sys_errno = ipv4_errno != 0 ? ipv4_errno : ipv6_errno;
+    return -1;
+  }
+
+  *traffic_count = count;
   return 0;
 }
 

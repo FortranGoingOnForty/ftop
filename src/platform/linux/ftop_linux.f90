@@ -12,7 +12,8 @@ module ftop_platform
     net_connection, &
     network_table, &
     parse_linux_proc_net_connections, &
-    parse_linux_proc_net_dev
+    parse_linux_proc_net_dev, &
+    process_bandwidth
   use ftop_platform_types, only : &
     cpu_tick_sample, &
     cpu_topology_info, &
@@ -39,6 +40,7 @@ module ftop_platform
   integer, parameter :: LINUX_PROC_NET_CONNECTION_BUFFER_LEN = 1048576
   integer, parameter :: LINUX_NET_IFACE_FIELD_BUFFER_LEN = 128
   integer, parameter :: LINUX_SOCKET_OWNER_CAPACITY = 16384
+  integer, parameter :: LINUX_SOCKET_TRAFFIC_CAPACITY = 16384
   integer, parameter :: LINUX_PROCESS_CAPACITY = 4096
   integer, parameter :: LINUX_PROCESS_STAT_LEN = 512
   integer, parameter :: LINUX_PROCESS_STATUS_LEN = 2048
@@ -72,9 +74,16 @@ module ftop_platform
 
   type, bind(C), public :: linux_socket_owner
     integer(c_long_long) :: inode
+    integer(c_long_long) :: start_time
     integer(c_int) :: pid
     character(kind=c_char) :: process_name(NET_PROCESS_NAME_LEN)
   end type linux_socket_owner
+
+  type, bind(C), public :: linux_socket_traffic
+    integer(c_long_long) :: inode
+    integer(c_long_long) :: rx_bytes
+    integer(c_long_long) :: tx_bytes
+  end type linux_socket_traffic
 
   type, extends(platform_backend) :: linux_backend
   contains
@@ -101,6 +110,7 @@ module ftop_platform
   public :: linux_load_average_snapshot
   public :: linux_memory_snapshot
   public :: linux_network_snapshot
+  public :: linux_process_bandwidth_snapshot
   public :: linux_process_snapshot
   public :: load_average_info
   public :: memory_info
@@ -205,6 +215,15 @@ module ftop_platform
       integer(c_size_t), intent(out) :: owner_count
       integer(c_int), intent(out) :: sys_errno
     end function c_ftop_linux_socket_owners
+
+    integer(c_int) function c_ftop_linux_socket_traffic(traffic, capacity, traffic_count, sys_errno) &
+        bind(C, name="ftop_linux_socket_traffic")
+      import :: c_int, c_size_t, linux_socket_traffic
+      type(linux_socket_traffic), intent(out) :: traffic(*)
+      integer(c_size_t), value :: capacity
+      integer(c_size_t), intent(out) :: traffic_count
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_linux_socket_traffic
 
     integer(c_int) function c_ftop_linux_read_net_interface_file(interface_name, field_name, buffer, &
         buffer_capacity, value_len, sys_errno) bind(C, name="ftop_linux_read_net_interface_file")
@@ -491,6 +510,7 @@ contains
     integer, intent(out), optional :: error_code
     character(kind=c_char), allocatable :: c_buffer(:)
     character(len=:), allocatable :: buffer
+    type(process_bandwidth), allocatable :: bandwidth(:)
     type(net_connection), allocatable :: connections(:)
     integer(c_size_t) :: value_len
     integer(c_int) :: sys_errno
@@ -508,10 +528,46 @@ contains
         if (allocated(table%connections)) deallocate(table%connections)
         call move_alloc(connections, table%connections)
       end if
+      if (linux_process_bandwidth_snapshot(bandwidth)) then
+        if (allocated(table%processes)) deallocate(table%processes)
+        call move_alloc(bandwidth, table%processes)
+      end if
       success = table%valid
     end if
     call assign_error(error_code, sys_errno)
   end function linux_network_snapshot
+
+  logical function linux_process_bandwidth_snapshot(processes, error_code) result(success)
+    type(process_bandwidth), allocatable, intent(out) :: processes(:)
+    integer, intent(out), optional :: error_code
+    type(linux_socket_owner), allocatable :: owners(:)
+    type(linux_socket_traffic), allocatable :: traffic(:)
+    integer(c_size_t) :: owner_count
+    integer(c_size_t) :: traffic_count
+    integer(c_int) :: sys_errno
+    integer(c_int) :: rc
+
+    allocate(processes(0))
+    allocate(owners(LINUX_SOCKET_OWNER_CAPACITY))
+    rc = c_ftop_linux_socket_owners(owners, int(size(owners), c_size_t), owner_count, sys_errno)
+    if (rc /= 0_c_int) then
+      call assign_error(error_code, sys_errno)
+      success = .false.
+      return
+    end if
+
+    allocate(traffic(LINUX_SOCKET_TRAFFIC_CAPACITY))
+    rc = c_ftop_linux_socket_traffic(traffic, int(size(traffic), c_size_t), traffic_count, sys_errno)
+    if (rc /= 0_c_int) then
+      call assign_error(error_code, sys_errno)
+      success = .false.
+      return
+    end if
+
+    processes = aggregate_linux_process_bandwidth(owners, int(owner_count), traffic, int(traffic_count))
+    call assign_error(error_code, 0_c_int)
+    success = .true.
+  end function linux_process_bandwidth_snapshot
 
   logical function linux_connection_snapshot(connections, error_code) result(success)
     type(net_connection), allocatable, intent(out) :: connections(:)
@@ -594,6 +650,86 @@ contains
       call copy_socket_owner_name(owners(owner_index), connections(connection_index)%process_name)
     end do
   end subroutine assign_linux_connection_owners
+
+  function aggregate_linux_process_bandwidth(owners, owner_count, traffic, traffic_count) result(processes)
+    type(linux_socket_owner), intent(in) :: owners(:)
+    integer, intent(in) :: owner_count
+    type(linux_socket_traffic), intent(in) :: traffic(:)
+    integer, intent(in) :: traffic_count
+    type(process_bandwidth), allocatable :: processes(:)
+    integer :: owner_index
+    integer :: process_index
+    integer :: row_count
+    integer :: traffic_index
+
+    allocate(processes(max(0, min(traffic_count, size(traffic)))))
+    row_count = 0
+    do traffic_index = 1, max(0, min(traffic_count, size(traffic)))
+      if (traffic(traffic_index)%inode <= 0_c_long_long) cycle
+      if (traffic(traffic_index)%rx_bytes <= 0_c_long_long .and. traffic(traffic_index)%tx_bytes <= 0_c_long_long) cycle
+      owner_index = matching_socket_owner(owners, owner_count, int(traffic(traffic_index)%inode, int64))
+      if (owner_index <= 0) cycle
+      if (owners(owner_index)%pid <= 0_c_int .or. owners(owner_index)%start_time <= 0_c_long_long) cycle
+
+      process_index = matching_linux_process_bandwidth(processes, row_count, int(owners(owner_index)%pid), &
+                                                       int(owners(owner_index)%start_time, int64))
+      if (process_index <= 0) then
+        if (row_count >= size(processes)) cycle
+        row_count = row_count + 1
+        process_index = row_count
+        processes(process_index)%valid = .true.
+        processes(process_index)%pid = int(owners(owner_index)%pid)
+        processes(process_index)%start_time = int(owners(owner_index)%start_time, int64)
+        call copy_socket_owner_name(owners(owner_index), processes(process_index)%process_name)
+      end if
+      processes(process_index)%rx_bytes = saturating_int64_add(processes(process_index)%rx_bytes, &
+                                                              int(max(0_c_long_long, traffic(traffic_index)%rx_bytes), int64))
+      processes(process_index)%tx_bytes = saturating_int64_add(processes(process_index)%tx_bytes, &
+                                                              int(max(0_c_long_long, traffic(traffic_index)%tx_bytes), int64))
+    end do
+    call trim_process_bandwidth_rows(processes, row_count)
+  end function aggregate_linux_process_bandwidth
+
+  integer function matching_linux_process_bandwidth(processes, process_count, pid, start_time) result(process_index)
+    type(process_bandwidth), intent(in) :: processes(:)
+    integer, intent(in) :: process_count
+    integer, intent(in) :: pid
+    integer(int64), intent(in) :: start_time
+    integer :: candidate
+
+    process_index = 0
+    if (pid <= 0 .or. start_time <= 0_int64) return
+    do candidate = 1, max(0, min(process_count, size(processes)))
+      if (.not. processes(candidate)%valid) cycle
+      if (processes(candidate)%pid == pid .and. processes(candidate)%start_time == start_time) then
+        process_index = candidate
+        return
+      end if
+    end do
+  end function matching_linux_process_bandwidth
+
+  subroutine trim_process_bandwidth_rows(processes, row_count)
+    type(process_bandwidth), allocatable, intent(inout) :: processes(:)
+    integer, intent(in) :: row_count
+    type(process_bandwidth), allocatable :: trimmed(:)
+    integer :: kept_count
+
+    kept_count = max(0, min(row_count, size(processes)))
+    allocate(trimmed(kept_count))
+    if (kept_count > 0) trimmed = processes(:kept_count)
+    call move_alloc(trimmed, processes)
+  end subroutine trim_process_bandwidth_rows
+
+  integer(int64) function saturating_int64_add(left, right) result(value)
+    integer(int64), intent(in) :: left
+    integer(int64), intent(in) :: right
+
+    if (right > huge(value) - max(0_int64, left)) then
+      value = huge(value)
+    else
+      value = max(0_int64, left) + max(0_int64, right)
+    end if
+  end function saturating_int64_add
 
   integer function matching_socket_owner(owners, owner_count, inode) result(owner_index)
     type(linux_socket_owner), intent(in) :: owners(:)

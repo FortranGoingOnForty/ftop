@@ -76,6 +76,16 @@ program test_linux_platform
   if (.not. network%valid) error stop "Linux network snapshot must be valid"
   if (.not. allocated(network%interfaces)) error stop "Linux network interfaces must be allocated"
   if (.not. allocated(network%connections)) error stop "Linux network connections must be allocated"
+  if (.not. allocated(network%processes)) error stop "Linux network processes must be allocated"
+  do i = 1, size(network%processes)
+    if (.not. network%processes(i)%valid) cycle
+    if (network%processes(i)%pid <= 0) error stop "Linux network process pid must be positive"
+    if (network%processes(i)%start_time <= 0_int64) error stop "Linux network process start time must be positive"
+    if (network%processes(i)%rx_bytes < 0_int64) error stop "Linux network process rx bytes must not be negative"
+    if (network%processes(i)%tx_bytes < 0_int64) error stop "Linux network process tx bytes must not be negative"
+    if (network%processes(i)%rx_bytes_per_sec < 0.0_real64) error stop "Linux network process rx rate must not be negative"
+    if (network%processes(i)%tx_bytes_per_sec < 0.0_real64) error stop "Linux network process tx rate must not be negative"
+  end do
 
   if (.not. linux_process_snapshot(processes, memory%total_bytes)) error stop "Linux process snapshot failed"
   if (.not. processes%valid) error stop "Linux process snapshot must be valid"
