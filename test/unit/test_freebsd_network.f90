@@ -3,11 +3,14 @@ program test_freebsd_network
     freebsd_net_connection_info, &
     freebsd_net_interface_info, &
     freebsd_network_connections, &
-    freebsd_network_interfaces
+    freebsd_network_interfaces, &
+    freebsd_network_snapshot, &
+    network_table
   implicit none
 
   type(freebsd_net_connection_info), allocatable :: connections(:)
   type(freebsd_net_interface_info), allocatable :: interfaces(:)
+  type(network_table) :: network
   integer :: connection_count
   integer :: connection_index
   integer :: interface_count
@@ -50,6 +53,12 @@ program test_freebsd_network
       error stop "FreeBSD network process name must not be empty"
     end if
   end do
+
+  if (.not. freebsd_network_snapshot(network)) error stop "FreeBSD network snapshot failed"
+  if (.not. allocated(network%processes)) error stop "FreeBSD network processes must be allocated"
+  if (size(network%processes) /= 0) then
+    error stop "FreeBSD network process bandwidth must degrade to empty rows"
+  end if
 
 contains
 

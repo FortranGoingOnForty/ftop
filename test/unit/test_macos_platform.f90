@@ -78,6 +78,8 @@ program test_macos_platform
   if (.not. macos_network_snapshot(network)) error stop "macOS network snapshot failed"
   if (.not. allocated(network%interfaces)) error stop "macOS network interfaces must be allocated"
   if (.not. allocated(network%connections)) error stop "macOS network connections must be allocated"
+  if (.not. allocated(network%processes)) error stop "macOS network processes must be allocated"
+  if (size(network%processes) /= 0) error stop "macOS network process bandwidth must degrade to empty rows"
 
   backend = create_platform()
   if (.not. allocated(backend)) error stop "macOS platform backend allocation failed"

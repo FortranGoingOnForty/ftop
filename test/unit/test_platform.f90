@@ -1,5 +1,5 @@
 program test_platform
-  use, intrinsic :: iso_fortran_env, only : real64
+  use, intrinsic :: iso_fortran_env, only : int64, real64
   use ftop_cpu_data, only : cpu_core_info, cpu_state_ticks, cpu_state_total_ticks
   use ftop_platform, only : &
     cpu_tick_sample, &
@@ -118,6 +118,7 @@ program test_platform
   if (size(network%interfaces) <= 0) error stop "network table must include interfaces"
   call validate_network_interfaces(network)
   call validate_network_connections(network)
+  call validate_network_processes(network)
 
 contains
 
@@ -171,6 +172,26 @@ contains
       end if
     end do
   end subroutine validate_network_connections
+
+  subroutine validate_network_processes(network)
+    type(network_table), intent(in) :: network
+    integer :: process_index
+
+    if (.not. allocated(network%processes)) error stop "network processes must be allocated"
+    do process_index = 1, size(network%processes)
+      if (.not. network%processes(process_index)%valid) cycle
+      if (network%processes(process_index)%pid <= 0) error stop "network process pid must be positive"
+      if (network%processes(process_index)%start_time <= 0_int64) error stop "network process start time must be positive"
+      if (network%processes(process_index)%rx_bytes < 0_int64) error stop "network process rx bytes must not be negative"
+      if (network%processes(process_index)%tx_bytes < 0_int64) error stop "network process tx bytes must not be negative"
+      if (network%processes(process_index)%rx_bytes_per_sec < 0.0_real64) then
+        error stop "network process rx rate must not be negative"
+      end if
+      if (network%processes(process_index)%tx_bytes_per_sec < 0.0_real64) then
+        error stop "network process tx rate must not be negative"
+      end if
+    end do
+  end subroutine validate_network_processes
 
   logical function starts_with(text, prefix) result(matches)
     character(len=*), intent(in) :: text

@@ -484,6 +484,7 @@ contains
 
     interface_count = max(0, min(interface_count, size(raw_interfaces)))
     allocate(table%interfaces(interface_count))
+    ! Public macOS APIs used here expose socket ownership, not reliable byte counters.
     allocate(table%processes(0))
     table%valid = .true.
     do interface_index = 1, interface_count
