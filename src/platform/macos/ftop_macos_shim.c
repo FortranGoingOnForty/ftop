@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <arpa/inet.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/IOKitLib.h>
 #include <mach/host_info.h>
@@ -10,11 +11,13 @@
 #include <libproc.h>
 #include <limits.h>
 #include <net/if.h>
+#include <netinet/in.h>
 #include <pwd.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/proc_info.h>
 #include <sys/sysctl.h>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -31,7 +34,10 @@ struct ftop_macos_processor_ticks {
 
 #define FTOP_MACOS_PROCESS_COMMAND_LEN 256
 #define FTOP_NET_INTERFACE_NAME_LEN 32
+#define FTOP_NET_PROTOCOL_LEN 8
+#define FTOP_NET_ADDRESS_LEN 64
 #define FTOP_NET_STATE_LEN 16
+#define FTOP_NET_PROCESS_NAME_LEN 64
 #define FTOP_USER_LOOKUP_BUFFER_LEN 16384
 
 struct ftop_macos_process_info {
@@ -58,6 +64,19 @@ struct ftop_macos_net_interface_info {
   char state[FTOP_NET_STATE_LEN];
   int speed_mbps;
   int mtu;
+};
+
+struct ftop_macos_net_connection_info {
+  int valid;
+  char protocol[FTOP_NET_PROTOCOL_LEN];
+  char local_addr[FTOP_NET_ADDRESS_LEN];
+  int local_port;
+  char remote_addr[FTOP_NET_ADDRESS_LEN];
+  int remote_port;
+  char state[FTOP_NET_STATE_LEN];
+  long long socket_id;
+  int pid;
+  char process_name[FTOP_NET_PROCESS_NAME_LEN];
 };
 
 typedef struct __IOHIDEvent *IOHIDEventRef;
@@ -820,6 +839,218 @@ static int ftop_baud_to_mbps(unsigned long long baudrate) {
   return (int)mbps;
 }
 
+static const char *ftop_macos_tcp_state_label(int state) {
+  switch (state) {
+  case TSI_S_CLOSED:
+    return "CLOSE";
+  case TSI_S_LISTEN:
+    return "LISTEN";
+  case TSI_S_SYN_SENT:
+    return "SYN_SENT";
+  case TSI_S_SYN_RECEIVED:
+    return "SYN_RECV";
+  case TSI_S_ESTABLISHED:
+    return "ESTABLISHED";
+  case TSI_S__CLOSE_WAIT:
+    return "CLOSE_WAIT";
+  case TSI_S_FIN_WAIT_1:
+    return "FIN_WAIT1";
+  case TSI_S_CLOSING:
+    return "CLOSING";
+  case TSI_S_LAST_ACK:
+    return "LAST_ACK";
+  case TSI_S_FIN_WAIT_2:
+    return "FIN_WAIT2";
+  case TSI_S_TIME_WAIT:
+    return "TIME_WAIT";
+  case TSI_S_RESERVED:
+    return "RESERVED";
+  default:
+    return "UNKNOWN";
+  }
+}
+
+static int ftop_macos_socket_protocol(const struct socket_info *socket_info, const char **protocol) {
+  if (socket_info == NULL || protocol == NULL) return 0;
+  if (socket_info->soi_family != AF_INET && socket_info->soi_family != AF_INET6) return 0;
+  if (socket_info->soi_protocol == IPPROTO_TCP) {
+    *protocol = "tcp";
+    return 1;
+  }
+  if (socket_info->soi_protocol == IPPROTO_UDP) {
+    *protocol = "udp";
+    return 1;
+  }
+  return 0;
+}
+
+static const struct in_sockinfo *ftop_macos_socket_in_info(const struct socket_info *socket_info) {
+  if (socket_info == NULL) return NULL;
+  if (socket_info->soi_protocol == IPPROTO_TCP || socket_info->soi_kind == SOCKINFO_TCP) {
+    return &socket_info->soi_proto.pri_tcp.tcpsi_ini;
+  }
+  if (socket_info->soi_protocol == IPPROTO_UDP || socket_info->soi_kind == SOCKINFO_IN) {
+    return &socket_info->soi_proto.pri_in;
+  }
+  return NULL;
+}
+
+static int ftop_macos_in_sockinfo_family(const struct in_sockinfo *socket_info, int socket_family) {
+  if (socket_info == NULL) return AF_UNSPEC;
+  if ((socket_info->insi_vflag & INI_IPV4) != 0U || socket_family == AF_INET) return AF_INET;
+  if ((socket_info->insi_vflag & INI_IPV6) != 0U || socket_family == AF_INET6) return AF_INET6;
+  return AF_UNSPEC;
+}
+
+static int ftop_macos_endpoint_from_in_sockinfo(
+    const struct in_sockinfo *socket_info, int socket_family, int local, char *address, size_t address_capacity, int *port) {
+  const void *source;
+  int family;
+  int raw_port;
+
+  if (socket_info == NULL || address == NULL || port == NULL || address_capacity == 0U) return 0;
+  address[0] = '\0';
+  *port = 0;
+  family = ftop_macos_in_sockinfo_family(socket_info, socket_family);
+  if (family == AF_INET) {
+    source = local != 0 ? (const void *)&socket_info->insi_laddr.ina_46.i46a_addr4
+                        : (const void *)&socket_info->insi_faddr.ina_46.i46a_addr4;
+  } else if (family == AF_INET6) {
+    source = local != 0 ? (const void *)&socket_info->insi_laddr.ina_6
+                        : (const void *)&socket_info->insi_faddr.ina_6;
+  } else {
+    return 0;
+  }
+
+  raw_port = local != 0 ? socket_info->insi_lport : socket_info->insi_fport;
+  *port = (int)ntohs((uint16_t)raw_port);
+  return inet_ntop(family, source, address, (socklen_t)address_capacity) != NULL;
+}
+
+static void ftop_macos_unspecified_address(int family, char *address, size_t address_capacity, int *port) {
+  if (address == NULL || port == NULL || address_capacity == 0U) return;
+  *port = 0;
+  ftop_copy_bounded_string(address, address_capacity, family == AF_INET6 ? "::" : "0.0.0.0");
+}
+
+static long long ftop_macos_socket_id(const struct socket_info *socket_info) {
+  uint64_t value;
+
+  if (socket_info == NULL) return 0;
+  value = socket_info->soi_so != 0ULL ? socket_info->soi_so : socket_info->soi_pcb;
+  return ftop_nonnegative_unsigned_long_long((unsigned long long)value);
+}
+
+static int ftop_macos_connection_exists(
+    const struct ftop_macos_net_connection_info *buffer, size_t count, long long socket_id, int pid) {
+  size_t i;
+
+  for (i = 0U; i < count; ++i) {
+    if (buffer[i].socket_id == socket_id && buffer[i].pid == pid) return 1;
+  }
+  return 0;
+}
+
+static void ftop_macos_process_name(pid_t pid, char *buffer, size_t buffer_len) {
+  struct proc_bsdinfo bsd;
+  int rc;
+
+  if (buffer == NULL || buffer_len == 0U) return;
+  ftop_copy_bounded_string(buffer, buffer_len, "unknown");
+  if (pid <= 0) return;
+
+  rc = proc_name(pid, buffer, (uint32_t)buffer_len);
+  buffer[buffer_len - 1U] = '\0';
+  if (rc > 0 && buffer[0] != '\0') return;
+
+  memset(&bsd, 0, sizeof(bsd));
+  rc = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bsd, sizeof(bsd));
+  if (rc == (int)sizeof(bsd) && bsd.pbi_comm[0] != '\0') {
+    ftop_copy_bounded_string(buffer, buffer_len, bsd.pbi_comm);
+  }
+}
+
+static int ftop_macos_store_connection(struct ftop_macos_net_connection_info *destination, pid_t pid,
+    const char *process_name, const struct socket_fdinfo *fdinfo) {
+  const struct in_sockinfo *in_info;
+  const struct socket_info *socket_info;
+  const char *protocol;
+  char local_address[FTOP_NET_ADDRESS_LEN];
+  char remote_address[FTOP_NET_ADDRESS_LEN];
+  int family;
+  int local_port;
+  int remote_port;
+
+  if (destination == NULL || fdinfo == NULL) return 0;
+  memset(destination, 0, sizeof(*destination));
+  socket_info = &fdinfo->psi;
+  if (!ftop_macos_socket_protocol(socket_info, &protocol)) return 0;
+  in_info = ftop_macos_socket_in_info(socket_info);
+  if (in_info == NULL) return 0;
+  family = ftop_macos_in_sockinfo_family(in_info, socket_info->soi_family);
+  if (!ftop_macos_endpoint_from_in_sockinfo(in_info, socket_info->soi_family, 1, local_address, sizeof(local_address),
+          &local_port)) {
+    return 0;
+  }
+  if (!ftop_macos_endpoint_from_in_sockinfo(in_info, socket_info->soi_family, 0, remote_address, sizeof(remote_address),
+          &remote_port)) {
+    ftop_macos_unspecified_address(family, remote_address, sizeof(remote_address), &remote_port);
+  }
+
+  destination->socket_id = ftop_macos_socket_id(socket_info);
+  if (destination->socket_id <= 0) return 0;
+  destination->valid = 1;
+  ftop_copy_bounded_string(destination->protocol, sizeof(destination->protocol), protocol);
+  ftop_copy_bounded_string(destination->local_addr, sizeof(destination->local_addr), local_address);
+  destination->local_port = local_port;
+  ftop_copy_bounded_string(destination->remote_addr, sizeof(destination->remote_addr), remote_address);
+  destination->remote_port = remote_port;
+  ftop_copy_bounded_string(destination->state, sizeof(destination->state),
+      socket_info->soi_protocol == IPPROTO_UDP ? "OPEN" : ftop_macos_tcp_state_label(socket_info->soi_proto.pri_tcp.tcpsi_state));
+  destination->pid = pid > 0 ? (int)pid : 0;
+  ftop_copy_bounded_string(destination->process_name, sizeof(destination->process_name), process_name);
+  return 1;
+}
+
+static void ftop_macos_append_process_connections(pid_t pid, const char *process_name,
+    struct ftop_macos_net_connection_info *buffer, size_t capacity, size_t *count) {
+  struct proc_fdinfo *fd_infos;
+  struct socket_fdinfo socket_fd_info;
+  int byte_count;
+  int rc;
+  long long socket_id;
+  size_t fd_count;
+  size_t fd_index;
+
+  if (pid <= 0 || process_name == NULL || buffer == NULL || count == NULL || *count >= capacity) return;
+
+  byte_count = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, NULL, 0);
+  if (byte_count <= 0) return;
+  fd_infos = (struct proc_fdinfo *)malloc((size_t)byte_count);
+  if (fd_infos == NULL) return;
+
+  byte_count = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, fd_infos, byte_count);
+  if (byte_count <= 0) {
+    free(fd_infos);
+    return;
+  }
+
+  fd_count = (size_t)byte_count / sizeof(*fd_infos);
+  for (fd_index = 0U; fd_index < fd_count && *count < capacity; ++fd_index) {
+    if (fd_infos[fd_index].proc_fd < 0) continue;
+    if (fd_infos[fd_index].proc_fdtype != PROX_FDTYPE_SOCKET) continue;
+    memset(&socket_fd_info, 0, sizeof(socket_fd_info));
+    rc = proc_pidfdinfo(pid, fd_infos[fd_index].proc_fd, PROC_PIDFDSOCKETINFO, &socket_fd_info, sizeof(socket_fd_info));
+    if (rc != (int)sizeof(socket_fd_info)) continue;
+    if (!ftop_macos_store_connection(&buffer[*count], pid, process_name, &socket_fd_info)) continue;
+    socket_id = buffer[*count].socket_id;
+    if (ftop_macos_connection_exists(buffer, *count, socket_id, (int)pid)) continue;
+    ++(*count);
+  }
+
+  free(fd_infos);
+}
+
 static int ftop_network_interface_exists(
     const struct ftop_macos_net_interface_info *buffer, size_t count, const char *name) {
   size_t i;
@@ -878,6 +1109,51 @@ int ftop_macos_network_interfaces(
 
   freeifaddrs(interfaces);
   *interface_count = count;
+  return 0;
+}
+
+int ftop_macos_network_connections(
+    struct ftop_macos_net_connection_info *buffer, size_t capacity, size_t *connection_count, int *sys_errno) {
+  char process_name[FTOP_NET_PROCESS_NAME_LEN];
+  pid_t *pids;
+  int byte_count;
+  int pid_count;
+  int i;
+  size_t count;
+
+  if (buffer == NULL || connection_count == NULL || sys_errno == NULL || capacity == 0U) return -1;
+
+  *connection_count = 0U;
+  *sys_errno = 0;
+  byte_count = proc_listpids(PROC_ALL_PIDS, 0, NULL, 0);
+  if (byte_count <= 0) {
+    *sys_errno = errno != 0 ? errno : EINVAL;
+    return -1;
+  }
+
+  pids = (pid_t *)malloc((size_t)byte_count);
+  if (pids == NULL) {
+    *sys_errno = errno != 0 ? errno : ENOMEM;
+    return -1;
+  }
+
+  byte_count = proc_listpids(PROC_ALL_PIDS, 0, pids, byte_count);
+  if (byte_count <= 0) {
+    *sys_errno = errno != 0 ? errno : EINVAL;
+    free(pids);
+    return -1;
+  }
+
+  pid_count = byte_count / (int)sizeof(pid_t);
+  count = 0U;
+  for (i = 0; i < pid_count && count < capacity; ++i) {
+    if (pids[i] <= 0) continue;
+    ftop_macos_process_name(pids[i], process_name, sizeof(process_name));
+    ftop_macos_append_process_connections(pids[i], process_name, buffer, capacity, &count);
+  }
+
+  free(pids);
+  *connection_count = count;
   return 0;
 }
 

@@ -5,17 +5,24 @@ program test_macos_platform
     create_platform, &
     macos_iokit_disk_count, &
     macos_iokit_gpu_count, &
+    macos_net_connection_info, &
+    macos_network_connections, &
+    macos_network_snapshot, &
     macos_processor_tick_samples, &
     macos_processor_ticks, &
     macos_sysctl_int, &
     macos_sysctl_int64, &
     macos_sysctl_string, &
+    network_table, &
     platform_backend
   implicit none
 
   class(platform_backend), allocatable :: backend
+  type(macos_net_connection_info), allocatable :: connections(:)
+  type(network_table) :: network
   type(macos_processor_ticks), allocatable :: ticks(:)
   type(cpu_core_info), allocatable :: cpu_metadata(:)
+  integer :: connection_count
   character(len=64) :: os_type
   integer :: disk_count
   integer :: gpu_count
@@ -44,6 +51,16 @@ program test_macos_platform
   if (.not. macos_iokit_gpu_count(gpu_count)) error stop "IOKit GPU stub failed"
   if (.not. macos_iokit_disk_count(disk_count)) error stop "IOKit disk stub failed"
   if (gpu_count < 0 .or. disk_count < 0) error stop "IOKit stub counts must not be negative"
+
+  allocate(connections(256))
+  if (.not. macos_network_connections(connections, connection_count)) error stop "macOS connection snapshot failed"
+  if (connection_count < 0 .or. connection_count > size(connections)) error stop "macOS connection count out of range"
+  if (connection_count > 0 .and. all(connections(1:connection_count)%valid == 0)) then
+    error stop "macOS connection snapshot must mark returned rows valid"
+  end if
+
+  if (.not. macos_network_snapshot(network)) error stop "macOS network snapshot failed"
+  if (.not. allocated(network%connections)) error stop "macOS network connections must be allocated"
 
   backend = create_platform()
   if (.not. allocated(backend)) error stop "macOS platform backend allocation failed"

@@ -3,9 +3,13 @@ module ftop_platform
   use, intrinsic :: iso_fortran_env, only : int64, real64
   use ftop_cpu_data, only : cpu_core_info, cpu_state_ticks, cpu_state_total_ticks
   use ftop_net_data, only : &
+    NET_ADDRESS_LEN, &
     NET_INTERFACE_NAME_LEN, &
+    NET_PROCESS_NAME_LEN, &
+    NET_PROTOCOL_LEN, &
     NET_STATE_LEN, &
     interface_info, &
+    net_connection, &
     network_table
   use ftop_platform_types, only : &
     cpu_tick_sample, &
@@ -25,6 +29,7 @@ module ftop_platform
 
   integer, parameter :: MACOS_PROCESS_CAPACITY = 4096
   integer, parameter :: MACOS_NETWORK_INTERFACE_CAPACITY = 128
+  integer, parameter :: MACOS_NETWORK_CONNECTION_CAPACITY = 2048
 
   integer, allocatable, save :: user_cache_uids(:)
   character(len=PROCESS_USER_LEN), allocatable, save :: user_cache_names(:)
@@ -62,6 +67,19 @@ module ftop_platform
     integer(c_int) :: mtu
   end type macos_net_interface_info
 
+  type, bind(C), public :: macos_net_connection_info
+    integer(c_int) :: valid
+    character(kind=c_char) :: protocol(NET_PROTOCOL_LEN)
+    character(kind=c_char) :: local_addr(NET_ADDRESS_LEN)
+    integer(c_int) :: local_port
+    character(kind=c_char) :: remote_addr(NET_ADDRESS_LEN)
+    integer(c_int) :: remote_port
+    character(kind=c_char) :: state(NET_STATE_LEN)
+    integer(c_long_long) :: socket_id
+    integer(c_int) :: pid
+    character(kind=c_char) :: process_name(NET_PROCESS_NAME_LEN)
+  end type macos_net_connection_info
+
   type, extends(platform_backend) :: macos_backend
   contains
     procedure :: get_cpu_count => macos_get_cpu_count
@@ -83,6 +101,7 @@ module ftop_platform
   public :: load_average_info
   public :: macos_iokit_disk_count
   public :: macos_iokit_gpu_count
+  public :: macos_network_connections
   public :: macos_network_interfaces
   public :: macos_network_snapshot
   public :: macos_process_snapshot
@@ -219,6 +238,15 @@ module ftop_platform
       integer(c_size_t), intent(out) :: interface_count
       integer(c_int), intent(out) :: sys_errno
     end function c_ftop_macos_network_interfaces
+
+    integer(c_int) function c_ftop_macos_network_connections(connections, capacity, connection_count, sys_errno) &
+        bind(C, name="ftop_macos_network_connections")
+      import :: c_int, c_size_t, macos_net_connection_info
+      type(macos_net_connection_info), intent(out) :: connections(*)
+      integer(c_size_t), value :: capacity
+      integer(c_size_t), intent(out) :: connection_count
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_macos_network_connections
 
     integer(c_int) function c_ftop_macos_user_name(uid, value, value_capacity, value_len, sys_errno) &
         bind(C, name="ftop_macos_user_name")
@@ -441,23 +469,36 @@ contains
   logical function macos_network_snapshot(table, error_code) result(success)
     type(network_table), intent(out) :: table
     integer, intent(out), optional :: error_code
+    type(macos_net_connection_info), allocatable :: raw_connections(:)
     type(macos_net_interface_info), allocatable :: raw_interfaces(:)
+    integer :: connection_count
+    integer :: connection_index
     integer :: interface_count
     integer :: interface_index
 
     table = network_table()
     allocate(raw_interfaces(MACOS_NETWORK_INTERFACE_CAPACITY))
+    allocate(raw_connections(MACOS_NETWORK_CONNECTION_CAPACITY))
     success = macos_network_interfaces(raw_interfaces, interface_count, error_code)
     if (.not. success) return
 
     interface_count = max(0, min(interface_count, size(raw_interfaces)))
     allocate(table%interfaces(interface_count))
-    allocate(table%connections(0))
     allocate(table%processes(0))
     table%valid = .true.
     do interface_index = 1, interface_count
       table%interfaces(interface_index) = macos_interface_from_c(raw_interfaces(interface_index))
     end do
+
+    if (macos_network_connections(raw_connections, connection_count)) then
+      connection_count = max(0, min(connection_count, size(raw_connections)))
+      allocate(table%connections(connection_count))
+      do connection_index = 1, connection_count
+        table%connections(connection_index) = macos_connection_from_c(raw_connections(connection_index))
+      end do
+    else
+      allocate(table%connections(0))
+    end if
   end function macos_network_snapshot
 
   function macos_interface_from_c(raw) result(interface)
@@ -478,6 +519,32 @@ contains
     interface%speed_mbps = int(max(0_c_int, raw%speed_mbps))
     interface%mtu = int(max(0_c_int, raw%mtu))
   end function macos_interface_from_c
+
+  function macos_connection_from_c(raw) result(connection)
+    type(macos_net_connection_info), intent(in) :: raw
+    type(net_connection) :: connection
+    character(len=:), allocatable :: local_addr
+    character(len=:), allocatable :: process_name
+    character(len=:), allocatable :: protocol
+    character(len=:), allocatable :: remote_addr
+    character(len=:), allocatable :: state
+
+    connection%valid = raw%valid /= 0_c_int
+    call c_chars_to_string(raw%protocol, protocol)
+    call c_chars_to_string(raw%local_addr, local_addr)
+    call c_chars_to_string(raw%remote_addr, remote_addr)
+    call c_chars_to_string(raw%state, state)
+    call c_chars_to_string(raw%process_name, process_name)
+    connection%protocol = bounded_text(protocol, len(connection%protocol))
+    connection%local_addr = bounded_text(local_addr, len(connection%local_addr))
+    connection%local_port = int(max(0_c_int, raw%local_port))
+    connection%remote_addr = bounded_text(remote_addr, len(connection%remote_addr))
+    connection%remote_port = int(max(0_c_int, raw%remote_port))
+    connection%state = bounded_text(state, len(connection%state))
+    connection%inode = int(max(0_c_long_long, raw%socket_id), int64)
+    connection%pid = int(max(0_c_int, raw%pid))
+    connection%process_name = bounded_text(process_name, len(connection%process_name))
+  end function macos_connection_from_c
 
   logical function macos_process_snapshot(table, memory_total_bytes, error_code) result(success)
     type(process_table), intent(out) :: table
@@ -829,6 +896,28 @@ contains
     if (success) interface_count = int(c_interface_count)
     call assign_error(error_code, sys_errno)
   end function macos_network_interfaces
+
+  logical function macos_network_connections(connections, connection_count, error_code) result(success)
+    type(macos_net_connection_info), intent(out) :: connections(:)
+    integer, intent(out) :: connection_count
+    integer, intent(out), optional :: error_code
+    integer(c_size_t) :: c_connection_count
+    integer(c_int) :: sys_errno
+    integer(c_int) :: rc
+
+    connection_count = 0
+    if (size(connections) <= 0) then
+      call assign_error(error_code, 0_c_int)
+      success = .false.
+      return
+    end if
+
+    rc = c_ftop_macos_network_connections(connections, int(size(connections), c_size_t), &
+                                          c_connection_count, sys_errno)
+    success = rc == 0_c_int
+    if (success) connection_count = int(c_connection_count)
+    call assign_error(error_code, sys_errno)
+  end function macos_network_connections
 
   subroutine c_chars_to_string(c_buffer, text)
     character(kind=c_char), intent(in) :: c_buffer(:)
