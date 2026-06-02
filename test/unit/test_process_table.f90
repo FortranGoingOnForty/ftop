@@ -8,7 +8,8 @@ program test_process_table
   use ftop_process_table, only : process_table_append_filter_text, process_table_begin_filter, &
                                  process_table_begin_signal, process_table_cancel_signal, process_table_clear_filter, &
                                  process_table_cycle_sort_key, &
-                                 process_table_delete_filter_char, process_table_page_delta, &
+                                 process_table_delete_filter_char, process_table_delete_filter_right, &
+                                 process_table_move_filter_cursor, process_table_page_delta, &
                                  process_table_append_signal_digit, process_table_confirm_signal, &
                                   process_table_mark_signal_feedback, process_table_scroll_delta, &
                                   process_table_select_at, process_table_select_delta, &
@@ -206,6 +207,13 @@ contains
     call require(local_state%filter_length == 6, "process table filter should append text")
     call require(index(process_table_status(local_state), "filter daemon") > 0, &
                  "process table status should describe filter state")
+    call process_table_move_filter_cursor(local_state, -1)
+    call process_table_append_filter_text(local_state, "x")
+    call require(index(process_table_status(local_state), "filter daemoxn") > 0, &
+                 "process table filter should insert text at lineedit cursor")
+    call process_table_delete_filter_right(local_state)
+    call require(index(process_table_status(local_state), "filter daemox") > 0, &
+                 "process table filter should delete text right of lineedit cursor")
     call process_table_delete_filter_char(local_state)
     call require(local_state%filter_length == 5, "process table filter should delete text")
     call process_table_clear_filter(local_state)

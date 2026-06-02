@@ -52,9 +52,13 @@ module ftop_app
     process_table_confirm_signal, &
     process_table_cycle_sort_key, &
     process_table_delete_filter_char, &
+    process_table_delete_filter_right, &
     process_table_delete_signal_digit, &
     process_table_finish_filter, &
     process_table_mark_signal_feedback, &
+    process_table_move_filter_cursor, &
+    process_table_move_filter_end, &
+    process_table_move_filter_home, &
     process_table_page_delta, &
     process_table_scroll_delta, &
     process_table_select_at, &
@@ -754,6 +758,36 @@ contains
       end select
       handled = .true.
       return
+    end if
+    if (session%process_state%filter_active) then
+      select case (key_name)
+      case (FGOF_KEY_BACKSPACE)
+        call process_table_delete_filter_char(session%process_state)
+      case (FGOF_KEY_DELETE)
+        call process_table_delete_filter_right(session%process_state)
+      case (FGOF_KEY_ENTER)
+        call process_table_finish_filter(session%process_state)
+      case (FGOF_KEY_ESCAPE)
+        call process_table_clear_filter(session%process_state)
+      case (FGOF_KEY_LEFT)
+        call process_table_move_filter_cursor(session%process_state, -1)
+      case (FGOF_KEY_RIGHT)
+        call process_table_move_filter_cursor(session%process_state, 1)
+      case (FGOF_KEY_HOME)
+        call process_table_move_filter_home(session%process_state)
+      case (FGOF_KEY_END)
+        call process_table_move_filter_end(session%process_state)
+      case default
+        ! Keep process table navigation available while a filter is active.
+      end select
+      handled = key_name == FGOF_KEY_BACKSPACE .or. key_name == FGOF_KEY_DELETE .or. &
+                key_name == FGOF_KEY_ENTER .or. key_name == FGOF_KEY_ESCAPE .or. &
+                key_name == FGOF_KEY_LEFT .or. key_name == FGOF_KEY_RIGHT .or. &
+                key_name == FGOF_KEY_HOME .or. key_name == FGOF_KEY_END
+      if (handled) then
+        call set_status(session, process_table_status(session%process_state))
+        return
+      end if
     end if
     select case (key_name)
     case (FGOF_KEY_BACKSPACE, FGOF_KEY_DELETE)

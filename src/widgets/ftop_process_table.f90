@@ -1,5 +1,22 @@
 module ftop_process_table
   use, intrinsic :: iso_fortran_env, only : int64, real64
+  use fgof_lineedit, only : &
+    FGOF_LINEEDIT_ACT_DELETE_RIGHT, &
+    FGOF_LINEEDIT_ACT_MOVE_END, &
+    FGOF_LINEEDIT_ACT_MOVE_HOME, &
+    FGOF_LINEEDIT_ACT_MOVE_LEFT, &
+    FGOF_LINEEDIT_ACT_MOVE_RIGHT, &
+    apply_action, &
+    default_prompt, &
+    delete_left, &
+    init_lineedit, &
+    insert_text, &
+    lineedit_render_state, &
+    lineedit_state, &
+    render_lineedit, &
+    reset_lineedit, &
+    set_buffer, &
+    simple_action
   use fgof_screen_types, only : screen_buffer, screen_style
   use ftop_box, only : BOX_STYLE_ROUNDED, box_content_rect, draw_box
   use ftop_collector, only : collector_snapshot
@@ -104,6 +121,7 @@ module ftop_process_table
     integer :: signal_feedback_pid = 0
     integer(int64) :: signal_feedback_start_time = 0_int64
     integer :: signal_feedback_frames = 0
+    type(lineedit_state), allocatable :: filter_editor
     integer :: filter_length = 0
     character(len=PROCESS_FILTER_LEN) :: filter_text = ""
     logical :: filter_active = .false.
@@ -123,7 +141,11 @@ module ftop_process_table
   public :: process_table_confirm_signal
   public :: process_table_cycle_sort_key
   public :: process_table_delete_filter_char
+  public :: process_table_delete_filter_right
   public :: process_table_delete_signal_digit
+  public :: process_table_move_filter_cursor
+  public :: process_table_move_filter_end
+  public :: process_table_move_filter_home
   public :: process_table_page_delta
   public :: process_table_mark_signal_feedback
   public :: process_table_scroll_delta
@@ -889,21 +911,31 @@ contains
 
     call normalize_filter_state(state)
     state%filter_active = .true.
+    state%filter_editor%active = .true.
+    call sync_filter_fields_from_editor(state)
   end subroutine process_table_begin_filter
 
   subroutine process_table_finish_filter(state)
     type(process_table_state), intent(inout) :: state
 
-    state%filter_active = .false.
     call normalize_filter_state(state)
+    state%filter_active = .false.
+    state%filter_editor%active = .false.
+    call sync_filter_fields_from_editor(state)
   end subroutine process_table_finish_filter
 
   subroutine process_table_clear_filter(state)
     type(process_table_state), intent(inout) :: state
 
     state%filter_active = .false.
-    state%filter_length = 0
-    state%filter_text = ""
+    if (allocated(state%filter_editor)) then
+      call reset_lineedit(state%filter_editor)
+    else
+      allocate(state%filter_editor)
+      call init_lineedit(state%filter_editor, default_prompt(""))
+      state%filter_editor%active = .false.
+    end if
+    call sync_filter_fields_from_editor(state)
     state%selected_row = 1
     state%scroll_row = 1
     call normalize_process_table_state(state, state%row_count, state%viewport_rows)
@@ -912,15 +944,16 @@ contains
   subroutine process_table_append_filter_text(state, text)
     type(process_table_state), intent(inout) :: state
     character(len=*), intent(in) :: text
-    integer :: char_index
+    integer :: insert_length
+    integer :: remaining
 
     call normalize_filter_state(state)
     state%filter_active = .true.
-    do char_index = 1, len(text)
-      if (state%filter_length >= PROCESS_FILTER_LEN) exit
-      state%filter_length = state%filter_length + 1
-      state%filter_text(state%filter_length:state%filter_length) = text(char_index:char_index)
-    end do
+    state%filter_editor%active = .true.
+    remaining = PROCESS_FILTER_LEN - state%filter_length
+    insert_length = max(0, min(remaining, len(text)))
+    if (insert_length > 0) call insert_text(state%filter_editor, text(:insert_length))
+    call sync_filter_fields_from_editor(state)
     state%selected_row = 1
     state%scroll_row = 1
   end subroutine process_table_append_filter_text
@@ -930,12 +963,67 @@ contains
 
     call normalize_filter_state(state)
     state%filter_active = .true.
-    if (state%filter_length <= 0) return
-    state%filter_text(state%filter_length:state%filter_length) = " "
-    state%filter_length = state%filter_length - 1
+    state%filter_editor%active = .true.
+    if (.not. delete_left(state%filter_editor)) return
+    call sync_filter_fields_from_editor(state)
     state%selected_row = 1
     state%scroll_row = 1
   end subroutine process_table_delete_filter_char
+
+  subroutine process_table_delete_filter_right(state)
+    type(process_table_state), intent(inout) :: state
+    logical :: changed
+
+    call normalize_filter_state(state)
+    state%filter_active = .true.
+    state%filter_editor%active = .true.
+    changed = apply_action(state%filter_editor, simple_action(FGOF_LINEEDIT_ACT_DELETE_RIGHT))
+    if (.not. changed) return
+    call sync_filter_fields_from_editor(state)
+    state%selected_row = 1
+    state%scroll_row = 1
+  end subroutine process_table_delete_filter_right
+
+  subroutine process_table_move_filter_cursor(state, direction)
+    type(process_table_state), intent(inout) :: state
+    integer, intent(in) :: direction
+    integer :: action
+    logical :: changed
+
+    if (direction == 0) return
+    call normalize_filter_state(state)
+    state%filter_active = .true.
+    state%filter_editor%active = .true.
+    if (direction < 0) then
+      action = FGOF_LINEEDIT_ACT_MOVE_LEFT
+    else
+      action = FGOF_LINEEDIT_ACT_MOVE_RIGHT
+    end if
+    changed = apply_action(state%filter_editor, simple_action(action))
+    if (changed) call sync_filter_fields_from_editor(state)
+  end subroutine process_table_move_filter_cursor
+
+  subroutine process_table_move_filter_home(state)
+    type(process_table_state), intent(inout) :: state
+    logical :: changed
+
+    call normalize_filter_state(state)
+    state%filter_active = .true.
+    state%filter_editor%active = .true.
+    changed = apply_action(state%filter_editor, simple_action(FGOF_LINEEDIT_ACT_MOVE_HOME))
+    if (changed) call sync_filter_fields_from_editor(state)
+  end subroutine process_table_move_filter_home
+
+  subroutine process_table_move_filter_end(state)
+    type(process_table_state), intent(inout) :: state
+    logical :: changed
+
+    call normalize_filter_state(state)
+    state%filter_active = .true.
+    state%filter_editor%active = .true.
+    changed = apply_action(state%filter_editor, simple_action(FGOF_LINEEDIT_ACT_MOVE_END))
+    if (changed) call sync_filter_fields_from_editor(state)
+  end subroutine process_table_move_filter_end
 
   logical function process_table_begin_signal(state, signal_number, signal_name, confirm_required) result(started)
     type(process_table_state), intent(inout) :: state
@@ -1528,14 +1616,44 @@ contains
 
   subroutine normalize_filter_state(state)
     type(process_table_state), intent(inout) :: state
+    character(len=:), allocatable :: initial_text
+    type(lineedit_render_state) :: view
 
     state%filter_length = max(0, min(PROCESS_FILTER_LEN, state%filter_length))
-    if (state%filter_length <= 0) then
-      state%filter_text = ""
-    else if (state%filter_length < PROCESS_FILTER_LEN) then
-      state%filter_text(state%filter_length + 1:) = ""
+    if (.not. allocated(state%filter_editor)) then
+      if (state%filter_length > 0) then
+        initial_text = state%filter_text(:state%filter_length)
+      else
+        initial_text = ""
+      end if
+      allocate(state%filter_editor)
+      call init_lineedit(state%filter_editor, default_prompt(""))
+      call set_buffer(state%filter_editor, initial_text, state%filter_length + 1)
     end if
+    view = render_lineedit(state%filter_editor)
+    if (len(view%buffer) > PROCESS_FILTER_LEN) then
+      call set_buffer(state%filter_editor, view%buffer(:PROCESS_FILTER_LEN), &
+                      min(PROCESS_FILTER_LEN + 1, state%filter_editor%cursor))
+    end if
+    state%filter_editor%active = state%filter_active
+    call sync_filter_fields_from_editor(state)
   end subroutine normalize_filter_state
+
+  subroutine sync_filter_fields_from_editor(state)
+    type(process_table_state), intent(inout) :: state
+    type(lineedit_render_state) :: view
+
+    if (.not. allocated(state%filter_editor)) then
+      allocate(state%filter_editor)
+      call init_lineedit(state%filter_editor, default_prompt(""))
+      state%filter_editor%active = state%filter_active
+    end if
+    view = render_lineedit(state%filter_editor)
+    state%filter_length = max(0, min(PROCESS_FILTER_LEN, len(view%buffer)))
+    state%filter_text = ""
+    if (state%filter_length > 0) state%filter_text(:state%filter_length) = view%buffer(:state%filter_length)
+    state%filter_active = state%filter_editor%active
+  end subroutine sync_filter_fields_from_editor
 
   subroutine normalize_collapsed_state(state)
     type(process_table_state), intent(inout) :: state
@@ -1607,14 +1725,28 @@ contains
   function process_filter_bar_text(state) result(text)
     type(process_table_state), intent(in) :: state
     character(len=:), allocatable :: text
-    character(len=:), allocatable :: cursor
+    character(len=:), allocatable :: filter_text
+    character(len=:), allocatable :: filter_text_with_cursor
+    integer :: cursor_column
+    type(lineedit_render_state) :: view
 
-    if (state%filter_active) then
-      cursor = "_"
+    if (state%filter_active .and. allocated(state%filter_editor)) then
+      view = render_lineedit(state%filter_editor)
+      filter_text = view%buffer
+      cursor_column = max(1, min(len(filter_text) + 1, view%cursor_column))
+      if (cursor_column <= 1) then
+        filter_text_with_cursor = "_" // filter_text
+      else if (cursor_column <= len(filter_text)) then
+        filter_text_with_cursor = filter_text(:cursor_column - 1) // "_" // filter_text(cursor_column:)
+      else
+        filter_text_with_cursor = filter_text // "_"
+      end if
+    else if (state%filter_active) then
+      filter_text_with_cursor = process_table_filter_text(state) // "_"
     else
-      cursor = ""
+      filter_text_with_cursor = process_table_filter_text(state)
     end if
-    text = "filter: " // process_table_filter_text(state) // cursor // " (showing " // &
+    text = "filter: " // filter_text_with_cursor // " (showing " // &
            integer_text(max(0, state%row_count)) // " of " // &
            integer_text(max(0, state%total_row_count)) // " processes)"
   end function process_filter_bar_text
