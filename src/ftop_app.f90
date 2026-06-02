@@ -14,6 +14,9 @@ module ftop_app
     FGOF_KEY_ESCAPE, &
     FGOF_KEY_END, &
     FGOF_KEY_F1, &
+    FGOF_KEY_F2, &
+    FGOF_KEY_F3, &
+    FGOF_KEY_F4, &
     FGOF_KEY_HOME, &
     FGOF_KEY_LEFT, &
     FGOF_KEY_PAGEDOWN, &
@@ -55,16 +58,19 @@ module ftop_app
     network_table_toggle_sort_direction
   use ftop_process_table, only : &
     process_table_append_filter_text, &
+    process_table_append_fuzzy_text, &
     process_table_append_signal_digit, &
     process_table_begin_filter, &
     process_table_begin_signal, &
     process_table_cancel_signal, &
     process_table_clear_filter, &
+    process_table_clear_fuzzy, &
     process_table_clear_signal_input, &
     process_table_confirm_signal, &
     process_table_cycle_sort_key, &
     process_table_delete_filter_char, &
     process_table_delete_filter_right, &
+    process_table_delete_fuzzy_char, &
     process_table_delete_signal_digit, &
     process_table_finish_filter, &
     process_table_mark_signal_feedback, &
@@ -77,6 +83,7 @@ module ftop_app
     process_table_select_delta, &
     process_table_set_columns, &
     process_table_set_signal, &
+    process_table_step_fuzzy_match, &
     process_table_signal_status, &
     process_table_sort_at, &
     process_table_state, &
@@ -121,6 +128,8 @@ module ftop_app
   integer, parameter :: LAYOUT_PRESET_NAME_LEN = 16
   integer, parameter :: LAYOUT_PRESET_FILE_LEN = 40
   character(len=*), parameter :: DEBUG_LOG_PATH = "ftop-debug.log"
+  character(len=*), parameter :: FTOP_KEY_F5 = "f5"
+  character(len=*), parameter :: FTOP_KEY_F6 = "f6"
   character(len=LAYOUT_PRESET_NAME_LEN), parameter :: LAYOUT_PRESET_NAMES(LAYOUT_PRESET_COUNT) = [ &
     character(len=LAYOUT_PRESET_NAME_LEN) :: &
     "full", &
@@ -791,6 +800,13 @@ contains
       return
     end if
 
+    if (input_bytes == achar(27) // "[15~") then
+      if (handle_process_function_key(session, FTOP_KEY_F5)) return
+    end if
+    if (input_bytes == achar(27) // "[17~") then
+      if (handle_process_function_key(session, FTOP_KEY_F6)) return
+    end if
+
     call buffer_input(session%decoder, input_bytes)
     do while (has_pending_input(session%decoder))
       event = decode_next_event(session%decoder)
@@ -1090,20 +1106,8 @@ contains
       call set_status(session, process_table_status(session%process_state))
       return
     end if
-    select case (text)
-    case ("/")
-      call process_table_begin_filter(session%process_state)
-    case ("k")
-      call begin_process_signal(session)
-    case ("s")
-      call process_table_toggle_sort_direction(session%process_state)
-    case ("h")
-      call process_table_toggle_metric_sparklines(session%process_state)
-    case ("t")
-      call process_table_toggle_tree(session%process_state)
-    case default
-      return
-    end select
+    if (.not. ascii_alnum_text(text)) return
+    call process_table_append_fuzzy_text(session%process_state, text)
     handled = .true.
     call set_status(session, process_table_status(session%process_state))
   end function handle_process_printable_key
@@ -1164,24 +1168,40 @@ contains
         return
       end if
     end if
+    if (handle_process_function_key(session, key_name)) then
+      handled = .true.
+      return
+    end if
     select case (key_name)
     case (FGOF_KEY_BACKSPACE, FGOF_KEY_DELETE)
-      if (.not. session%process_state%filter_active) return
-      call process_table_delete_filter_char(session%process_state)
+      if (session%process_state%fuzzy_query_length <= 0) return
+      call process_table_delete_fuzzy_char(session%process_state)
     case (FGOF_KEY_ENTER)
-      if (session%process_state%filter_active) then
-        call process_table_finish_filter(session%process_state)
+      if (session%process_state%fuzzy_query_length > 0) then
+        call process_table_clear_fuzzy(session%process_state)
       else
         node_toggled = process_table_toggle_selected_node(session%process_state)
         if (.not. node_toggled) return
       end if
     case (FGOF_KEY_ESCAPE)
-      if (.not. session%process_state%filter_active .and. session%process_state%filter_length <= 0) return
-      call process_table_clear_filter(session%process_state)
+      if (session%process_state%fuzzy_query_length > 0) then
+        call process_table_clear_fuzzy(session%process_state)
+      else
+        if (.not. session%process_state%filter_active .and. session%process_state%filter_length <= 0) return
+        call process_table_clear_filter(session%process_state)
+      end if
     case (FGOF_KEY_UP)
-      call process_table_select_delta(session%process_state, -1)
+      if (session%process_state%fuzzy_query_length > 0) then
+        call process_table_step_fuzzy_match(session%process_state, -1)
+      else
+        call process_table_select_delta(session%process_state, -1)
+      end if
     case (FGOF_KEY_DOWN)
-      call process_table_select_delta(session%process_state, 1)
+      if (session%process_state%fuzzy_query_length > 0) then
+        call process_table_step_fuzzy_match(session%process_state, 1)
+      else
+        call process_table_select_delta(session%process_state, 1)
+      end if
     case (FGOF_KEY_PAGEUP)
       call process_table_page_delta(session%process_state, -1)
     case (FGOF_KEY_PAGEDOWN)
@@ -1200,6 +1220,43 @@ contains
     handled = .true.
     call set_status(session, process_table_status(session%process_state))
   end function handle_process_named_key
+
+  logical function handle_process_function_key(session, key_name) result(handled)
+    type(terminal_session), intent(inout) :: session
+    character(len=*), intent(in) :: key_name
+
+    handled = .false.
+    if (.not. process_widget_focused(session)) return
+    if (session%process_state%signal_pending .or. session%process_state%filter_active) return
+    select case (key_name)
+    case (FGOF_KEY_F2)
+      call begin_process_signal(session)
+    case (FGOF_KEY_F3)
+      call process_table_toggle_tree(session%process_state)
+    case (FGOF_KEY_F4)
+      call process_table_begin_filter(session%process_state)
+    case (FTOP_KEY_F5)
+      call process_table_toggle_sort_direction(session%process_state)
+    case (FTOP_KEY_F6)
+      call process_table_toggle_metric_sparklines(session%process_state)
+    case default
+      return
+    end select
+    handled = .true.
+    call set_status(session, process_table_status(session%process_state))
+  end function handle_process_function_key
+
+  logical function ascii_alnum_text(text) result(alnum)
+    character(len=*), intent(in) :: text
+    integer :: code
+
+    alnum = .false.
+    if (len(text) /= 1) return
+    code = iachar(text(1:1))
+    alnum = (code >= iachar("0") .and. code <= iachar("9")) .or. &
+            (code >= iachar("A") .and. code <= iachar("Z")) .or. &
+            (code >= iachar("a") .and. code <= iachar("z"))
+  end function ascii_alnum_text
 
   logical function handle_network_printable_key(session, text) result(handled)
     type(terminal_session), intent(inout) :: session

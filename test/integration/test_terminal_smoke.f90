@@ -170,7 +170,7 @@ contains
     filter_match = wait_for_string(filter_session, "sort cpu asc", 2500)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not sort process table from mouse header"
 
-    if (.not. send_text(filter_session, "k")) error stop "failed to open process signal prompt"
+    if (.not. send_text(filter_session, achar(27) // "OQ")) error stop "failed to open process signal prompt"
     filter_match = wait_for_string(filter_session, "signal SIGTERM pid", 2500)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not open process signal prompt"
 
@@ -186,7 +186,7 @@ contains
     filter_match = wait_for_string(filter_session, "cancelled", 2500)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not cancel process signal prompt"
 
-    if (.not. send_text(filter_session, "/ftop")) error stop "failed to send process filter"
+    if (.not. send_text(filter_session, achar(27) // "OS" // "ftop")) error stop "failed to send process filter"
     filter_match = wait_for_string(filter_session, "filter ftop", 2500)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not enter process filter"
 
@@ -198,6 +198,7 @@ contains
     filter_match = wait_for_string(filter_session, "sort cpu asc", 2500)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not clear process filter"
 
+    if (.not. send_text(filter_session, achar(9))) error stop "failed to leave process focus before quit"
     if (.not. send_text(filter_session, "q")) error stop "failed to quit process filter ftop"
     filter_match = wait_for_string(filter_session, achar(27) // "[?1049l", 2500)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "process filter ftop did not exit"

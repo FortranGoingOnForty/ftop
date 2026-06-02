@@ -4,21 +4,24 @@ program test_process_table
   use fgof_screen_types, only : screen_buffer, screen_style
   use ftop_collector, only : collector_snapshot
   use ftop_color, only : COLOR_UI_ACCENT, COLOR_UI_BORDER, COLOR_UI_DIM, COLOR_UI_PANEL, style_from_rgb
-  use ftop_proc_data, only : PROCESS_SORT_COMMAND, PROCESS_SORT_CPU, PROCESS_SORT_USER
+  use ftop_proc_data, only : PROCESS_SORT_COMMAND, PROCESS_SORT_CPU, PROCESS_SORT_USER, process_table
   use ftop_process_table, only : process_table_append_filter_text, process_table_begin_filter, &
-                                 process_table_begin_signal, process_table_cancel_signal, process_table_clear_filter, &
-                                 process_table_cycle_sort_key, &
-                                 process_table_delete_filter_char, process_table_delete_filter_right, &
-                                 process_table_move_filter_cursor, process_table_page_delta, &
-                                 process_table_append_signal_digit, process_table_confirm_signal, &
-                                  process_table_mark_signal_feedback, process_table_scroll_delta, &
+                                  process_table_begin_signal, process_table_cancel_signal, process_table_clear_filter, &
+                                  process_table_append_fuzzy_text, process_table_clear_fuzzy, &
+                                  process_table_cycle_sort_key, &
+                                  process_table_delete_filter_char, process_table_delete_filter_right, &
+                                  process_table_delete_fuzzy_char, &
+                                  process_table_move_filter_cursor, process_table_page_delta, &
+                                  process_table_append_signal_digit, process_table_confirm_signal, &
+                                   process_table_mark_signal_feedback, process_table_scroll_delta, &
                                   process_table_select_at, process_table_select_delta, &
                                   process_table_set_columns, &
                                   process_table_set_signal, process_table_signal_status, &
-                                 process_table_sort_at, &
-                                 process_table_state, &
-                                 process_table_status, &
-                                 process_table_toggle_metric_sparklines, &
+                                  process_table_sort_at, process_table_step_fuzzy_match, &
+                                  process_table_state, &
+                                  process_table_status, &
+                                  process_fuzzy_best_match, process_fuzzy_next_match, &
+                                  process_table_toggle_metric_sparklines, &
                                  process_table_toggle_selected_node, process_table_toggle_sort_direction, render_process_panel
   use ftop_table, only : TABLE_SORT_ASCENDING, TABLE_SORT_DESCENDING
   use ftop_widgets, only : widget_rect
@@ -35,6 +38,7 @@ program test_process_table
   logical :: toggled
 
   call test_process_state_updates()
+  call test_process_fuzzy_matching()
 
   buffer = allocate_screen(80, 10)
   border_style = style_from_rgb(fg=COLOR_UI_BORDER)
@@ -171,6 +175,22 @@ program test_process_table
   call require(index(row_text(buffer, 3), "parent --test") == 0, "process table filter should omit nonmatches")
   call require(index(row_text(buffer, 9), "showing 1 of 2") > 0, "process table should render filtered count")
 
+  buffer = allocate_screen(80, 10)
+  state = process_table_state(tree_view=.false.)
+  call process_table_append_fuzzy_text(state, "chi")
+  call render_process_panel(buffer, widget_rect(1, 1, 80, 10), sample_snapshot(), border_style, title_style, dim_style, state)
+  call require(state%selected_pid == 200, "fuzzy query should select matching process command")
+  call require(state%fuzzy_match_count == 1, "fuzzy query should track match count")
+  call require(index(row_text(buffer, 9), "Find: chi_") > 0, "process table should render fuzzy find bar")
+
+  buffer = allocate_screen(80, 10)
+  state = process_table_state(tree_view=.false.)
+  call process_table_append_fuzzy_text(state, "200")
+  call render_process_panel(buffer, widget_rect(1, 1, 80, 10), sample_snapshot(), border_style, title_style, dim_style, state)
+  call require(state%selected_pid == 200, "PID fuzzy query should select exact PID")
+  call require(state%fuzzy_is_pid_mode, "numeric fuzzy query should use PID mode")
+  call require(index(row_text(buffer, 9), "PID: 200_") > 0, "process table should render PID fuzzy bar")
+
 contains
 
   subroutine test_process_state_updates()
@@ -243,6 +263,34 @@ contains
     call process_table_cancel_signal(local_state)
     call require(.not. local_state%signal_pending, "process table signal cancel should clear pending signal")
   end subroutine test_process_state_updates
+
+  subroutine test_process_fuzzy_matching()
+    type(collector_snapshot) :: snapshot
+    type(process_table) :: table
+    type(process_table_state) :: local_state
+    integer :: match_count
+
+    snapshot = sample_snapshot()
+    table = snapshot%processes
+    call require(process_fuzzy_best_match(table, "par", .false., match_count) == 1, &
+                 "fuzzy name prefix should match parent")
+    call require(match_count == 1, "fuzzy name prefix should count matches")
+    call require(process_fuzzy_best_match(table, "200", .true., match_count) == 2, &
+                 "fuzzy PID exact should match child")
+    call require(process_fuzzy_next_match(table, "t", .false., 1, 1, match_count) == 2, &
+                 "fuzzy next should wrap through matches")
+
+    call process_table_append_fuzzy_text(local_state, "k")
+    call require(local_state%fuzzy_query_length == 1, "old signal key should be usable as fuzzy query text")
+    call process_table_append_fuzzy_text(local_state, "1")
+    call require(.not. local_state%fuzzy_is_pid_mode, "mixed fuzzy query should stay in name mode")
+    call process_table_delete_fuzzy_char(local_state)
+    call require(local_state%fuzzy_query_length == 1, "fuzzy backspace should remove one character")
+    call process_table_clear_fuzzy(local_state)
+    call require(local_state%fuzzy_query_length == 0, "fuzzy clear should reset query")
+    call process_table_step_fuzzy_match(local_state, 1)
+    call require(local_state%fuzzy_step_direction == 0, "empty fuzzy query should not set next direction")
+  end subroutine test_process_fuzzy_matching
 
   function sample_snapshot() result(snapshot)
     type(collector_snapshot) :: snapshot

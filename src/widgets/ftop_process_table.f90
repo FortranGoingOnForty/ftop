@@ -94,6 +94,7 @@ module ftop_process_table
   integer, parameter, public :: PROCESS_FILTER_LEN = 96
   integer, parameter :: PROCESS_SIGNAL_NAME_LEN = 16
   integer, parameter :: PROCESS_SIGNAL_INPUT_LEN = 4
+  integer, parameter, public :: PROCESS_FUZZY_QUERY_LEN = 64
 
   type, public :: process_table_state
     integer :: selected_row = 1
@@ -125,6 +126,11 @@ module ftop_process_table
     integer :: filter_length = 0
     character(len=PROCESS_FILTER_LEN) :: filter_text = ""
     logical :: filter_active = .false.
+    integer :: fuzzy_query_length = 0
+    character(len=PROCESS_FUZZY_QUERY_LEN) :: fuzzy_query = ""
+    logical :: fuzzy_is_pid_mode = .false.
+    integer :: fuzzy_match_count = 0
+    integer :: fuzzy_step_direction = 0
     logical :: metric_sparklines = .true.
     logical :: tree_view = .true.
     integer :: column_count = PROCESS_TABLE_COLUMNS
@@ -137,22 +143,26 @@ module ftop_process_table
   public :: process_table_begin_filter
   public :: process_table_cancel_signal
   public :: process_table_clear_filter
+  public :: process_table_clear_fuzzy
   public :: process_table_clear_signal_input
   public :: process_table_confirm_signal
   public :: process_table_cycle_sort_key
   public :: process_table_delete_filter_char
   public :: process_table_delete_filter_right
+  public :: process_table_delete_fuzzy_char
   public :: process_table_delete_signal_digit
   public :: process_table_move_filter_cursor
   public :: process_table_move_filter_end
   public :: process_table_move_filter_home
   public :: process_table_page_delta
+  public :: process_table_append_fuzzy_text
   public :: process_table_mark_signal_feedback
   public :: process_table_scroll_delta
   public :: process_table_select_at
   public :: process_table_select_delta
   public :: process_table_set_signal
   public :: process_table_set_columns
+  public :: process_table_step_fuzzy_match
   public :: process_table_signal_status
   public :: process_table_sort_at
   public :: process_table_append_signal_digit
@@ -164,6 +174,8 @@ module ftop_process_table
   public :: process_table_toggle_selected_node
   public :: process_table_toggle_sort_direction
   public :: process_table_toggle_tree
+  public :: process_fuzzy_best_match
+  public :: process_fuzzy_next_match
   public :: render_process_panel
 
 contains
@@ -199,7 +211,7 @@ contains
     call draw_box(buffer, panel, BOX_STYLE_ROUNDED, border_style, "Processes", title_style)
     content = box_content_rect(panel)
     if (content%height <= 0 .or. content%width <= 0) return
-    show_filter_bar = process_table_filter_visible(active_state)
+    show_filter_bar = process_table_input_bar_visible(active_state)
     table_content = process_table_content_rect(content, show_filter_bar)
 
     if (.not. snapshot%processes%valid) then
@@ -210,7 +222,7 @@ contains
         call normalize_process_table_state(active_state, 0, 0)
         state = active_state
       end if
-      if (show_filter_bar) call render_process_filter_bar(buffer, content, active_state, title_style, dim_style)
+      if (show_filter_bar) call render_process_input_bar(buffer, content, active_state, title_style, dim_style)
       return
     end if
     if (.not. allocated(snapshot%processes%items) .or. size(snapshot%processes%items) <= 0) then
@@ -221,7 +233,7 @@ contains
         call normalize_process_table_state(active_state, 0, 0)
         state = active_state
       end if
-      if (show_filter_bar) call render_process_filter_bar(buffer, content, active_state, title_style, dim_style)
+      if (show_filter_bar) call render_process_input_bar(buffer, content, active_state, title_style, dim_style)
       return
     end if
 
@@ -240,6 +252,7 @@ contains
     else
       tree_processes = sorted_processes
     end if
+    call apply_fuzzy_selection(sorted_processes, active_state)
     cells = process_cells(sorted_processes, active_state, signal_feedback_style(title_style))
     if (size(cells, 1) <= 0) then
       if (active_state%filter_length > 0) then
@@ -252,7 +265,7 @@ contains
         call advance_signal_feedback_state(active_state)
         state = active_state
       end if
-      if (show_filter_bar) call render_process_filter_bar(buffer, content, active_state, title_style, dim_style)
+      if (show_filter_bar) call render_process_input_bar(buffer, content, active_state, title_style, dim_style)
       return
     end if
 
@@ -264,9 +277,27 @@ contains
                       header_style=title_style, selected_style=title_style, separator_style=dim_style, &
                       scroll_row=active_state%scroll_row, selected_row=active_state%selected_row)
     call advance_signal_feedback_state(active_state)
-    if (show_filter_bar) call render_process_filter_bar(buffer, content, active_state, title_style, dim_style)
+    if (show_filter_bar) call render_process_input_bar(buffer, content, active_state, title_style, dim_style)
     if (present(state)) state = active_state
   end subroutine render_process_panel
+
+  subroutine apply_fuzzy_selection(table, state)
+    type(process_table), intent(in) :: table
+    type(process_table_state), intent(inout) :: state
+    integer :: match_index
+
+    call normalize_fuzzy_state(state)
+    if (state%fuzzy_query_length <= 0) return
+    if (state%fuzzy_step_direction == 0) then
+      match_index = process_fuzzy_best_match(table, process_table_fuzzy_text(state), state%fuzzy_is_pid_mode, &
+                                             state%fuzzy_match_count)
+    else
+      match_index = process_fuzzy_next_match(table, process_table_fuzzy_text(state), state%fuzzy_is_pid_mode, &
+                                             state%selected_row, state%fuzzy_step_direction, state%fuzzy_match_count)
+    end if
+    state%fuzzy_step_direction = 0
+    if (match_index > 0) state%selected_row = match_index
+  end subroutine apply_fuzzy_selection
 
   function process_columns(state) result(columns)
     type(process_table_state), intent(in) :: state
@@ -910,6 +941,7 @@ contains
     type(process_table_state), intent(inout) :: state
 
     call normalize_filter_state(state)
+    call process_table_clear_fuzzy(state)
     state%filter_active = .true.
     state%filter_editor%active = .true.
     call sync_filter_fields_from_editor(state)
@@ -1159,6 +1191,7 @@ contains
     integer, intent(in) :: delta
 
     state%selected_row = state%selected_row + delta
+    call process_table_clear_fuzzy(state)
     call normalize_process_table_state(state, state%row_count, state%viewport_rows)
   end subroutine process_table_select_delta
 
@@ -1189,13 +1222,14 @@ contains
 
     selected = .false.
     content = box_content_rect(panel)
-    table_content = process_table_content_rect(content, process_table_filter_visible(state))
+    table_content = process_table_content_rect(content, process_table_input_bar_visible(state))
     if (.not. point_in_rect(table_content, row, col)) return
     if (row <= table_content%row) return
 
     data_row = state%scroll_row + row - table_content%row - 1
     if (data_row < 1 .or. data_row > state%row_count) return
     state%selected_row = data_row
+    call process_table_clear_fuzzy(state)
     call normalize_process_table_state(state, state%row_count, state%viewport_rows)
     selected = .true.
   end function process_table_select_at
@@ -1213,7 +1247,7 @@ contains
     sorted = .false.
     call normalize_process_columns(state)
     content = box_content_rect(panel)
-    table_content = process_table_content_rect(content, process_table_filter_visible(state))
+    table_content = process_table_content_rect(content, process_table_input_bar_visible(state))
     if (.not. point_in_rect(table_content, row, col)) return
     if (row /= table_content%row) return
 
@@ -1229,6 +1263,60 @@ contains
     end if
     sorted = .true.
   end function process_table_sort_at
+
+  subroutine process_table_append_fuzzy_text(state, text)
+    type(process_table_state), intent(inout) :: state
+    character(len=*), intent(in) :: text
+    integer :: available
+    integer :: copy_length
+    logical :: was_empty
+
+    if (len(text) <= 0) return
+    call normalize_fuzzy_state(state)
+    available = PROCESS_FUZZY_QUERY_LEN - state%fuzzy_query_length
+    if (available <= 0) return
+    copy_length = min(available, len(text))
+    was_empty = state%fuzzy_query_length <= 0
+    state%fuzzy_query(state%fuzzy_query_length + 1:state%fuzzy_query_length + copy_length) = text(:copy_length)
+    state%fuzzy_query_length = state%fuzzy_query_length + copy_length
+    if (was_empty) then
+      state%fuzzy_is_pid_mode = ascii_digits(text(:copy_length))
+    else if (state%fuzzy_is_pid_mode .and. .not. ascii_digits(text(:copy_length))) then
+      state%fuzzy_is_pid_mode = .false.
+    end if
+  end subroutine process_table_append_fuzzy_text
+
+  subroutine process_table_delete_fuzzy_char(state)
+    type(process_table_state), intent(inout) :: state
+
+    call normalize_fuzzy_state(state)
+    if (state%fuzzy_query_length <= 0) return
+    state%fuzzy_query(state%fuzzy_query_length:state%fuzzy_query_length) = " "
+    state%fuzzy_query_length = state%fuzzy_query_length - 1
+    if (state%fuzzy_query_length <= 0) call process_table_clear_fuzzy(state)
+  end subroutine process_table_delete_fuzzy_char
+
+  subroutine process_table_clear_fuzzy(state)
+    type(process_table_state), intent(inout) :: state
+
+    state%fuzzy_query_length = 0
+    state%fuzzy_query = ""
+    state%fuzzy_is_pid_mode = .false.
+    state%fuzzy_match_count = 0
+    state%fuzzy_step_direction = 0
+  end subroutine process_table_clear_fuzzy
+
+  subroutine process_table_step_fuzzy_match(state, direction)
+    type(process_table_state), intent(inout) :: state
+    integer, intent(in) :: direction
+
+    if (state%fuzzy_query_length <= 0) return
+    if (direction < 0) then
+      state%fuzzy_step_direction = -1
+    else
+      state%fuzzy_step_direction = 1
+    end if
+  end subroutine process_table_step_fuzzy_match
 
   subroutine process_table_cycle_sort_key(state, direction)
     type(process_table_state), intent(inout) :: state
@@ -1313,7 +1401,90 @@ contains
       text = text // " filter " // process_table_filter_text(state) // " showing " // &
              integer_text(max(0, state%row_count)) // "/" // integer_text(max(0, state%total_row_count))
     end if
+    if (state%fuzzy_query_length > 0) then
+      text = text // " " // process_fuzzy_bar_text(state)
+    end if
   end function process_table_status
+
+  integer function process_fuzzy_best_match(table, query, pid_mode, match_count) result(best_index)
+    type(process_table), intent(in) :: table
+    character(len=*), intent(in) :: query
+    logical, intent(in) :: pid_mode
+    integer, intent(out), optional :: match_count
+    integer :: best_score
+    integer :: process_index
+    integer :: row
+    integer :: score
+
+    best_index = 0
+    best_score = -1
+    if (present(match_count)) match_count = 0
+    if (len_trim(query) <= 0) return
+    if (.not. allocated(table%items)) return
+
+    row = 0
+    do process_index = 1, size(table%items)
+      if (.not. table%items(process_index)%valid) cycle
+      row = row + 1
+      score = process_fuzzy_score(table%items(process_index), query, pid_mode)
+      if (score <= 0) cycle
+      if (present(match_count)) match_count = match_count + 1
+      if (score > best_score) then
+        best_score = score
+        best_index = row
+      end if
+    end do
+  end function process_fuzzy_best_match
+
+  integer function process_fuzzy_next_match(table, query, pid_mode, current_index, direction, match_count) result(match_index)
+    type(process_table), intent(in) :: table
+    character(len=*), intent(in) :: query
+    logical, intent(in) :: pid_mode
+    integer, intent(in) :: current_index
+    integer, intent(in) :: direction
+    integer, intent(out), optional :: match_count
+    integer :: candidate
+    integer :: row_count
+    integer :: step
+    integer :: trial
+
+    match_index = 0
+    if (present(match_count)) then
+      match_index = process_fuzzy_best_match(table, query, pid_mode, match_count)
+      if (match_count <= 0) return
+    end if
+    row_count = count_valid_processes(table)
+    if (row_count <= 0 .or. len_trim(query) <= 0) return
+    step = merge(-1, 1, direction < 0)
+    candidate = max(1, min(row_count, current_index))
+    do trial = 1, row_count
+      candidate = modulo(candidate - 1 + step, row_count) + 1
+      if (process_row_fuzzy_matches(table, candidate, query, pid_mode)) then
+        match_index = candidate
+        return
+      end if
+    end do
+  end function process_fuzzy_next_match
+
+  logical function process_row_fuzzy_matches(table, row, query, pid_mode) result(matches)
+    type(process_table), intent(in) :: table
+    integer, intent(in) :: row
+    character(len=*), intent(in) :: query
+    logical, intent(in) :: pid_mode
+    integer :: process_index
+    integer :: visible_row
+
+    matches = .false.
+    if (.not. allocated(table%items)) return
+    visible_row = 0
+    do process_index = 1, size(table%items)
+      if (.not. table%items(process_index)%valid) cycle
+      visible_row = visible_row + 1
+      if (visible_row /= row) cycle
+      matches = process_fuzzy_score(table%items(process_index), query, pid_mode) > 0
+      return
+    end do
+  end function process_row_fuzzy_matches
 
   function process_table_signal_status(state) result(text)
     type(process_table_state), intent(in) :: state
@@ -1426,6 +1597,19 @@ contains
     is_digit = code >= iachar("0") .and. code <= iachar("9")
   end function ascii_digit
 
+  logical function ascii_digits(text) result(all_digits)
+    character(len=*), intent(in) :: text
+    integer :: index
+
+    all_digits = len(text) > 0
+    do index = 1, len(text)
+      if (.not. ascii_digit(text(index:index))) then
+        all_digits = .false.
+        return
+      end if
+    end do
+  end function ascii_digits
+
   integer function process_table_column_count(state) result(count)
     type(process_table_state), intent(in) :: state
 
@@ -1527,6 +1711,7 @@ contains
     state%viewport_rows = max(0, viewport_rows)
     call normalize_process_columns(state)
     call normalize_filter_state(state)
+    call normalize_fuzzy_state(state)
     call normalize_collapsed_state(state)
     if (state%sort_direction /= TABLE_SORT_DESCENDING) state%sort_direction = TABLE_SORT_ASCENDING
     if (state%row_count <= 0) then
@@ -1549,6 +1734,18 @@ contains
     end if
     state%scroll_row = max(1, min(max_scroll_row, state%scroll_row))
   end subroutine normalize_process_table_state
+
+  subroutine normalize_fuzzy_state(state)
+    type(process_table_state), intent(inout) :: state
+
+    state%fuzzy_query_length = max(0, min(PROCESS_FUZZY_QUERY_LEN, state%fuzzy_query_length))
+    if (state%fuzzy_query_length == 0) then
+      state%fuzzy_query = ""
+      state%fuzzy_is_pid_mode = .false.
+      state%fuzzy_match_count = 0
+      state%fuzzy_step_direction = 0
+    end if
+  end subroutine normalize_fuzzy_state
 
   integer function process_sort_key_for_column(state, column) result(sort_key)
     type(process_table_state), intent(in) :: state
@@ -1687,6 +1884,18 @@ contains
     visible = state%filter_active .or. state%filter_length > 0
   end function process_table_filter_visible
 
+  logical function process_table_fuzzy_visible(state) result(visible)
+    type(process_table_state), intent(in) :: state
+
+    visible = state%fuzzy_query_length > 0
+  end function process_table_fuzzy_visible
+
+  logical function process_table_input_bar_visible(state) result(visible)
+    type(process_table_state), intent(in) :: state
+
+    visible = process_table_filter_visible(state) .or. process_table_fuzzy_visible(state)
+  end function process_table_input_bar_visible
+
   function process_table_filter_text(state) result(text)
     type(process_table_state), intent(in) :: state
     character(len=:), allocatable :: text
@@ -1700,6 +1909,19 @@ contains
     end if
   end function process_table_filter_text
 
+  function process_table_fuzzy_text(state) result(text)
+    type(process_table_state), intent(in) :: state
+    character(len=:), allocatable :: text
+    integer :: length
+
+    length = max(0, min(PROCESS_FUZZY_QUERY_LEN, state%fuzzy_query_length))
+    if (length <= 0) then
+      text = ""
+    else
+      text = state%fuzzy_query(:length)
+    end if
+  end function process_table_fuzzy_text
+
   function process_table_content_rect(content, show_filter_bar) result(table_content)
     type(widget_rect), intent(in) :: content
     logical, intent(in) :: show_filter_bar
@@ -1709,18 +1931,22 @@ contains
     if (show_filter_bar .and. table_content%height > 0) table_content%height = table_content%height - 1
   end function process_table_content_rect
 
-  subroutine render_process_filter_bar(buffer, content, state, active_style, dim_style)
+  subroutine render_process_input_bar(buffer, content, state, active_style, dim_style)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: content
     type(process_table_state), intent(in) :: state
     type(screen_style), intent(in) :: active_style
     type(screen_style), intent(in) :: dim_style
-    type(screen_style) :: filter_style
+    type(screen_style) :: input_style
 
-    filter_style = dim_style
-    if (state%filter_active) filter_style = active_style
-    call render_text(buffer, content_line_rect(content, content%height), process_filter_bar_text(state), filter_style)
-  end subroutine render_process_filter_bar
+    input_style = dim_style
+    if (state%filter_active .or. state%fuzzy_query_length > 0) input_style = active_style
+    if (process_table_filter_visible(state)) then
+      call render_text(buffer, content_line_rect(content, content%height), process_filter_bar_text(state), input_style)
+    else if (process_table_fuzzy_visible(state)) then
+      call render_text(buffer, content_line_rect(content, content%height), process_fuzzy_bar_text(state), input_style)
+    end if
+  end subroutine render_process_input_bar
 
   function process_filter_bar_text(state) result(text)
     type(process_table_state), intent(in) :: state
@@ -1750,6 +1976,59 @@ contains
            integer_text(max(0, state%row_count)) // " of " // &
            integer_text(max(0, state%total_row_count)) // " processes)"
   end function process_filter_bar_text
+
+  function process_fuzzy_bar_text(state) result(text)
+    type(process_table_state), intent(in) :: state
+    character(len=:), allocatable :: text
+    character(len=:), allocatable :: label
+    character(len=:), allocatable :: query
+
+    query = process_table_fuzzy_text(state)
+    if (state%fuzzy_is_pid_mode) then
+      label = "PID: "
+    else
+      label = "Find: "
+    end if
+    text = label // query // "_ (" // integer_text(max(0, state%fuzzy_match_count)) // " matches)"
+  end function process_fuzzy_bar_text
+
+  integer function process_fuzzy_score(process, query, pid_mode) result(score)
+    type(process_info), intent(in) :: process
+    character(len=*), intent(in) :: query
+    logical, intent(in) :: pid_mode
+    character(len=:), allocatable :: haystack
+    character(len=:), allocatable :: needle
+    character(len=32) :: pid_text
+    integer :: position
+
+    score = 0
+    if (.not. process%valid .or. len_trim(query) <= 0) return
+    needle = ascii_lower(trim(query))
+    if (pid_mode) then
+      write(pid_text, '(i0)') max(0, process%pid)
+      if (trim(pid_text) == needle) then
+        score = 10000
+      else if (index(trim(pid_text), needle) == 1) then
+        score = 8000 - min(999, len_trim(pid_text))
+      end if
+      return
+    end if
+
+    haystack = ascii_lower(trim(process%name))
+    position = index(haystack, needle)
+    if (position == 1) score = max(score, 9000 - min(999, len_trim(process%name)))
+    if (position > 1) score = max(score, 7000 - min(999, position))
+
+    haystack = ascii_lower(process_display_command(process))
+    position = index(haystack, needle)
+    if (position == 1) score = max(score, 8500 - min(999, len_trim(haystack)))
+    if (position > 1) score = max(score, 6000 - min(999, position))
+
+    haystack = ascii_lower(process_user_label(process))
+    position = index(haystack, needle)
+    if (position == 1) score = max(score, 8000 - min(999, len_trim(haystack)))
+    if (position > 1) score = max(score, 5000 - min(999, position))
+  end function process_fuzzy_score
 
   function ascii_lower(text) result(lower)
     character(len=*), intent(in) :: text

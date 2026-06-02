@@ -19,6 +19,7 @@ contains
     call require(index(text, "ftop help") > 0, "help overlay should render title")
     call require(index(text, "Global") > 0, "help overlay should render global section")
     call require(index(text, "[ Process ]") > 0, "help overlay should highlight process section")
+    call require(index(text, "F2: signal") > 0, "help overlay should render migrated process bindings")
     call require(index(text, "Network") > 0, "help overlay should render network section")
     call require(index(text, "Press ? or Escape to close") > 0, "help overlay should render close hint")
   end subroutine test_help_overlay_renders

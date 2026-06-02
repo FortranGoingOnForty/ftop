@@ -43,9 +43,11 @@ contains
     call render_line(buffer, row, content_col, overlay%width - 4, "z/Enter: zoom   Ctrl+L: redraw   Ctrl+R: refresh", dim_style)
 
     call render_section(buffer, row, content_col, overlay%width - 4, "Process", focused_widget == "process", focus_style, dim_style)
-    call render_line(buffer, row, content_col, overlay%width - 4, "/: filter   k: signal   s: sort direction", dim_style)
+    call render_line(buffer, row, content_col, overlay%width - 4, "F2: signal   F3: tree   F4: filter", dim_style)
     call render_line(buffer, row, content_col, overlay%width - 4, &
-                     "h: sparklines   t: tree   arrows/Page/Home/End: navigate", dim_style)
+                     "F5: sort direction   F6: sparklines", dim_style)
+    call render_line(buffer, row, content_col, overlay%width - 4, &
+                     "type: fuzzy find   arrows/Page/Home/End: navigate", dim_style)
 
     call render_section(buffer, row, content_col, overlay%width - 4, "Network", focused_widget == "network", focus_style, dim_style)
     call render_line(buffer, row, content_col, overlay%width - 4, "f: state filter   s: sort direction", dim_style)
