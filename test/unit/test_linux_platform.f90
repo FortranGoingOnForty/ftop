@@ -1,5 +1,5 @@
 program test_linux_platform
-  use, intrinsic :: iso_c_binding, only : c_int, c_null_char
+  use, intrinsic :: iso_c_binding, only : c_char, c_int, c_long_long, c_null_char
   use, intrinsic :: iso_fortran_env, only : int64, real64
   use ftop_cpu_data, only : cpu_state_ticks, cpu_state_total_ticks
   use ftop_mem_data, only : metric_memory_info => memory_info, memory_usage_percent
@@ -38,7 +38,18 @@ program test_linux_platform
       import :: c_int
       integer(c_int), intent(out) :: sys_errno
     end function ftop_test_linux_network_open_traffic
+
+    integer(c_int) function ftop_test_linux_ip_link_counters(interface_name, rx_bytes, tx_bytes, sys_errno) &
+        bind(C, name="ftop_test_linux_ip_link_counters")
+      import :: c_char, c_int, c_long_long
+      character(kind=c_char), intent(in) :: interface_name(*)
+      integer(c_long_long), intent(out) :: rx_bytes
+      integer(c_long_long), intent(out) :: tx_bytes
+      integer(c_int), intent(out) :: sys_errno
+    end function ftop_test_linux_ip_link_counters
   end interface
+
+  integer(int64), parameter :: INTERFACE_COUNTER_ABSOLUTE_TOLERANCE = 1024_int64 * 1024_int64
 
   type(linux_hwmon_sensor), allocatable :: sensors(:)
   type(cpu_state_ticks) :: total_cpu
@@ -98,6 +109,7 @@ program test_linux_platform
   if (.not. allocated(network%interfaces)) error stop "Linux network interfaces must be allocated"
   if (.not. allocated(network%connections)) error stop "Linux network connections must be allocated"
   if (.not. allocated(network%processes)) error stop "Linux network processes must be allocated"
+  call test_interface_counter_accuracy(network)
   do i = 1, size(network%processes)
     if (.not. network%processes(i)%valid) cycle
     if (network%processes(i)%pid <= 0) error stop "Linux network process pid must be positive"
@@ -185,6 +197,55 @@ contains
     end do
     error stop "Linux process bandwidth must include current process traffic"
   end subroutine require_process_bandwidth
+
+  subroutine test_interface_counter_accuracy(network)
+    type(network_table), intent(in) :: network
+    character(kind=c_char) :: interface_name(64)
+    integer(c_long_long) :: reference_rx_bytes
+    integer(c_long_long) :: reference_tx_bytes
+    integer(c_int) :: sys_errno
+    integer :: interface_index
+
+    if (.not. allocated(network%interfaces)) return
+    do interface_index = 1, size(network%interfaces)
+      if (.not. network%interfaces(interface_index)%valid) cycle
+      call copy_c_string(trim(network%interfaces(interface_index)%name), interface_name)
+      if (ftop_test_linux_ip_link_counters(interface_name, reference_rx_bytes, reference_tx_bytes, sys_errno) /= 0_c_int) then
+        cycle
+      end if
+      call require_counter_close(network%interfaces(interface_index)%rx_bytes, int(reference_rx_bytes, int64), &
+                                 "Linux interface rx byte counter exceeded tolerance")
+      call require_counter_close(network%interfaces(interface_index)%tx_bytes, int(reference_tx_bytes, int64), &
+                                 "Linux interface tx byte counter exceeded tolerance")
+      return
+    end do
+  end subroutine test_interface_counter_accuracy
+
+  subroutine require_counter_close(ftop_value, reference_value, message)
+    integer(int64), intent(in) :: ftop_value
+    integer(int64), intent(in) :: reference_value
+    character(len=*), intent(in) :: message
+    integer(int64) :: difference
+    integer(int64) :: tolerance
+
+    if (ftop_value < 0_int64 .or. reference_value < 0_int64) error stop "Linux interface counter must be non-negative"
+    difference = abs(reference_value - ftop_value)
+    tolerance = max(INTERFACE_COUNTER_ABSOLUTE_TOLERANCE, int(0.05_real64 * real(max(reference_value, 1_int64), real64), int64))
+    if (difference > tolerance) error stop message
+  end subroutine require_counter_close
+
+  subroutine copy_c_string(value, buffer)
+    character(len=*), intent(in) :: value
+    character(kind=c_char), intent(out) :: buffer(:)
+    integer :: character_index
+    integer :: copy_len
+
+    buffer = c_null_char
+    copy_len = min(len_trim(value), size(buffer) - 1)
+    do character_index = 1, max(0, copy_len)
+      buffer(character_index) = value(character_index:character_index)
+    end do
+  end subroutine copy_c_string
 
   subroutine require_owned_connection(network, protocol, local_port, pid, state, message)
     type(network_table), intent(in) :: network

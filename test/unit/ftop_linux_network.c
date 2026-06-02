@@ -1,6 +1,9 @@
 #include <errno.h>
+#include <ctype.h>
 #include <netinet/in.h>
 #include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -184,6 +187,94 @@ int ftop_test_linux_network_open_traffic(int *sys_errno) {
       send_all(traffic_server_fd, FTOP_TEST_SERVER_BYTES, sys_errno) != 0 ||
       recv_all(traffic_client_fd, FTOP_TEST_SERVER_BYTES, sys_errno) != 0) {
     ftop_test_linux_network_close();
+    return -1;
+  }
+  return 0;
+}
+
+static int safe_interface_name(const char *name) {
+  size_t index;
+
+  if (name == NULL || name[0] == '\0') return 0;
+  for (index = 0U; name[index] != '\0'; ++index) {
+    unsigned char ch = (unsigned char)name[index];
+    if (isalnum(ch) || ch == '_' || ch == '-' || ch == '.' || ch == ':' || ch == '@') continue;
+    return 0;
+  }
+  return 1;
+}
+
+static int read_command_output(const char *command, char *buffer, size_t capacity) {
+  FILE *pipe;
+  size_t bytes_read;
+  size_t used;
+
+  if (command == NULL || buffer == NULL || capacity < 2U) return -1;
+  buffer[0] = '\0';
+  pipe = popen(command, "r");
+  if (pipe == NULL) return -1;
+
+  used = 0U;
+  while (used + 1U < capacity) {
+    bytes_read = fread(buffer + used, 1U, capacity - used - 1U, pipe);
+    used += bytes_read;
+    if (bytes_read == 0U) break;
+  }
+  buffer[used] = '\0';
+  return pclose(pipe) == 0 && used > 0U ? 0 : -1;
+}
+
+static const char *line_after_label(const char *text, const char *label) {
+  const char *cursor;
+
+  if (text == NULL || label == NULL) return NULL;
+  cursor = strstr(text, label);
+  if (cursor == NULL) return NULL;
+  cursor = strchr(cursor, '\n');
+  if (cursor == NULL || cursor[1] == '\0') return NULL;
+  return cursor + 1;
+}
+
+static int parse_counter_after_label(const char *text, const char *label, long long *value) {
+  char *end;
+  const char *line;
+  long long parsed;
+
+  if (value == NULL) return -1;
+  *value = 0LL;
+  line = line_after_label(text, label);
+  if (line == NULL) return -1;
+  errno = 0;
+  parsed = strtoll(line, &end, 10);
+  if (end == line || errno != 0 || parsed < 0LL) return -1;
+  *value = parsed;
+  return 0;
+}
+
+int ftop_test_linux_ip_link_counters(
+    const char *interface_name, long long *rx_bytes, long long *tx_bytes, int *sys_errno) {
+  char command[160];
+  char output[4096];
+  int written;
+
+  if (rx_bytes == NULL || tx_bytes == NULL || sys_errno == NULL) return -1;
+  *rx_bytes = 0LL;
+  *tx_bytes = 0LL;
+  *sys_errno = 0;
+  if (!safe_interface_name(interface_name)) {
+    *sys_errno = EINVAL;
+    return -1;
+  }
+
+  written = snprintf(command, sizeof(command), "ip -s link show dev %s 2>/dev/null", interface_name);
+  if (written <= 0 || (size_t)written >= sizeof(command)) {
+    *sys_errno = EOVERFLOW;
+    return -1;
+  }
+  if (read_command_output(command, output, sizeof(output)) != 0 ||
+      parse_counter_after_label(output, "RX:", rx_bytes) != 0 ||
+      parse_counter_after_label(output, "TX:", tx_bytes) != 0) {
+    *sys_errno = errno != 0 ? errno : EINVAL;
     return -1;
   }
   return 0;
