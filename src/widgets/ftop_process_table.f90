@@ -7,8 +7,14 @@ module ftop_process_table
     PROCESS_SORT_COMMAND, &
     PROCESS_SORT_CPU, &
     PROCESS_SORT_MEMORY, &
+    PROCESS_SORT_NICE, &
     PROCESS_SORT_PID, &
+    PROCESS_SORT_PRIORITY, &
     PROCESS_SORT_RSS, &
+    PROCESS_SORT_SHARED, &
+    PROCESS_SORT_STATE, &
+    PROCESS_SORT_TIME, &
+    PROCESS_SORT_VIRT, &
     PROCESS_SORT_USER, &
     build_process_tree, &
     process_display_command, &
@@ -30,13 +36,13 @@ module ftop_process_table
     table_cell, &
     table_column, &
     table_viewport_row_count
-  use ftop_text, only : TEXT_ALIGN_RIGHT, format_bytes, format_percent, render_text
+  use ftop_text, only : TEXT_ALIGN_RIGHT, format_percent, render_text
   use ftop_widgets, only : widget_rect, widget_size
   implicit none
   private
 
-  integer, parameter :: PROCESS_TABLE_COLUMNS = 7
-  integer, parameter :: PROCESS_SORT_KEY_COUNT = 6
+  integer, parameter :: PROCESS_TABLE_COLUMNS = 12
+  integer, parameter :: PROCESS_SORT_KEY_COUNT = 12
   integer, parameter :: PROCESS_COLLAPSED_CAPACITY = 256
   integer, parameter :: PROCESS_SIGNAL_FEEDBACK_FRAMES = 6
   integer, parameter :: PROCESS_METRIC_SPARKLINE_WIDTH = 6
@@ -112,7 +118,7 @@ contains
   function process_panel_min_size() result(size_value)
     type(widget_size) :: size_value
 
-    size_value%width = 44
+    size_value%width = 76
     size_value%height = 8
   end function process_panel_min_size
 
@@ -215,29 +221,49 @@ contains
     allocate(columns(PROCESS_TABLE_COLUMNS))
     columns(1)%name = "PID"
     columns(1)%width_mode = TABLE_WIDTH_FIXED
-    columns(1)%width = 6
+    columns(1)%width = 5
     columns(1)%alignment = TEXT_ALIGN_RIGHT
     columns(2)%name = "USER"
     columns(2)%width_mode = TABLE_WIDTH_FIXED
-    columns(2)%width = 8
-    columns(3)%name = "CPU%"
+    columns(2)%width = 6
+    columns(3)%name = "PRI"
     columns(3)%width_mode = TABLE_WIDTH_FIXED
-    columns(3)%width = 6
+    columns(3)%width = 3
     columns(3)%alignment = TEXT_ALIGN_RIGHT
-    columns(4)%name = "MEM%"
+    columns(4)%name = "NI"
     columns(4)%width_mode = TABLE_WIDTH_FIXED
-    columns(4)%width = 6
+    columns(4)%width = 3
     columns(4)%alignment = TEXT_ALIGN_RIGHT
-    columns(5)%name = "RSS"
+    columns(5)%name = "VIRT"
     columns(5)%width_mode = TABLE_WIDTH_FIXED
-    columns(5)%width = 8
+    columns(5)%width = 5
     columns(5)%alignment = TEXT_ALIGN_RIGHT
-    columns(6)%name = "S"
+    columns(6)%name = "RES"
     columns(6)%width_mode = TABLE_WIDTH_FIXED
-    columns(6)%width = 2
-    columns(7)%name = "COMMAND"
-    columns(7)%width_mode = TABLE_WIDTH_WEIGHT
-    columns(7)%weight = 1
+    columns(6)%width = 5
+    columns(6)%alignment = TEXT_ALIGN_RIGHT
+    columns(7)%name = "SHR"
+    columns(7)%width_mode = TABLE_WIDTH_FIXED
+    columns(7)%width = 5
+    columns(7)%alignment = TEXT_ALIGN_RIGHT
+    columns(8)%name = "S"
+    columns(8)%width_mode = TABLE_WIDTH_FIXED
+    columns(8)%width = 1
+    columns(9)%name = "CPU%"
+    columns(9)%width_mode = TABLE_WIDTH_FIXED
+    columns(9)%width = 6
+    columns(9)%alignment = TEXT_ALIGN_RIGHT
+    columns(10)%name = "MEM%"
+    columns(10)%width_mode = TABLE_WIDTH_FIXED
+    columns(10)%width = 6
+    columns(10)%alignment = TEXT_ALIGN_RIGHT
+    columns(11)%name = "TIME+"
+    columns(11)%width_mode = TABLE_WIDTH_FIXED
+    columns(11)%width = 7
+    columns(11)%alignment = TEXT_ALIGN_RIGHT
+    columns(12)%name = "COMMAND"
+    columns(12)%width_mode = TABLE_WIDTH_WEIGHT
+    columns(12)%weight = 1
     call mark_sort_column(columns, state)
   end function process_columns
 
@@ -257,14 +283,26 @@ contains
     select case (sort_key)
     case (PROCESS_SORT_USER)
       column = 2
-    case (PROCESS_SORT_CPU)
+    case (PROCESS_SORT_PRIORITY)
       column = 3
-    case (PROCESS_SORT_MEMORY)
+    case (PROCESS_SORT_NICE)
       column = 4
-    case (PROCESS_SORT_RSS)
+    case (PROCESS_SORT_VIRT)
       column = 5
-    case (PROCESS_SORT_COMMAND)
+    case (PROCESS_SORT_RSS)
+      column = 6
+    case (PROCESS_SORT_SHARED)
       column = 7
+    case (PROCESS_SORT_STATE)
+      column = 8
+    case (PROCESS_SORT_CPU)
+      column = 9
+    case (PROCESS_SORT_MEMORY)
+      column = 10
+    case (PROCESS_SORT_TIME)
+      column = 11
+    case (PROCESS_SORT_COMMAND)
+      column = 12
     case default
       column = 1
     end select
@@ -576,13 +614,18 @@ contains
     if (row_index < 1 .or. row_index > size(cells, 1)) return
     cells(row_index, 1) = process_cell(integer_text(process%pid), row_style)
     cells(row_index, 2) = process_cell(process_user_label(process), row_style)
-    cells(row_index, 3) = process_cell(process_metric_text(process%cpu_percent, process%cpu_history, &
+    cells(row_index, 3) = process_cell(integer_text(process%priority), row_style)
+    cells(row_index, 4) = process_cell(integer_text(process%nice), row_style)
+    cells(row_index, 5) = process_cell(process_size_text(process%mem_virt_bytes), row_style)
+    cells(row_index, 6) = process_cell(process_size_text(process%mem_rss_bytes), row_style)
+    cells(row_index, 7) = process_cell(process_size_text(process%mem_shared_bytes), row_style)
+    cells(row_index, 8) = process_cell(process_state_label(process), row_style)
+    cells(row_index, 9) = process_cell(process_metric_text(process%cpu_percent, process%cpu_history, &
                                                           process%history_count, show_sparklines), row_style)
-    cells(row_index, 4) = process_cell(process_metric_text(process%mem_percent, process%mem_history, &
+    cells(row_index, 10) = process_cell(process_metric_text(process%mem_percent, process%mem_history, &
                                                           process%history_count, show_sparklines), row_style)
-    cells(row_index, 5) = process_cell(format_bytes(max(0_int64, process%mem_rss_bytes)), row_style)
-    cells(row_index, 6) = process_cell(process_state_label(process), row_style)
-    cells(row_index, 7) = process_cell(process_tree_display_command(process), row_style)
+    cells(row_index, 11) = process_cell(process_time_text(process%cpu_time), row_style)
+    cells(row_index, 12) = process_cell(process_tree_display_command(process), row_style)
   end subroutine fill_process_row
 
   function process_cell(text, row_style) result(cell)
@@ -610,6 +653,51 @@ contains
       text = format_percent(real(clamp_percent(value)))
     end if
   end function process_metric_text
+
+  function process_size_text(bytes) result(text)
+    integer(int64), intent(in) :: bytes
+    character(len=:), allocatable :: text
+    character(len=32) :: scratch
+    real :: value
+
+    if (bytes < 1024_int64) then
+      write(scratch, '(i0,a)') max(0_int64, bytes), "B"
+    else if (bytes < 1024_int64 ** 2) then
+      value = real(max(0_int64, bytes)) / 1024.0
+      write(scratch, '(f5.1,a)') value, "K"
+    else if (bytes < 1024_int64 ** 3) then
+      value = real(max(0_int64, bytes)) / real(1024_int64 ** 2)
+      write(scratch, '(f5.1,a)') value, "M"
+    else
+      value = real(max(0_int64, bytes)) / real(1024_int64 ** 3)
+      write(scratch, '(f5.1,a)') value, "G"
+    end if
+    text = trim(adjustl(scratch))
+  end function process_size_text
+
+  function process_time_text(cpu_time_ms) result(text)
+    integer(int64), intent(in) :: cpu_time_ms
+    character(len=:), allocatable :: text
+    character(len=32) :: scratch
+    integer(int64) :: centiseconds
+    integer(int64) :: hours
+    integer(int64) :: minutes
+    integer(int64) :: seconds
+    integer(int64) :: total_ms
+
+    total_ms = max(0_int64, cpu_time_ms)
+    hours = total_ms / 3600000_int64
+    minutes = mod(total_ms / 60000_int64, 60_int64)
+    seconds = mod(total_ms / 1000_int64, 60_int64)
+    centiseconds = mod(total_ms / 10_int64, 100_int64)
+
+    if (hours > 0_int64) then
+      write(scratch, '(i0,":",i2.2,":",i2.2)') hours, minutes, seconds
+    else
+      write(scratch, '(i0,":",i2.2,".",i2.2)') minutes, seconds, centiseconds
+    end if
+    text = trim(scratch)
+  end function process_time_text
 
   function process_sparkline_text(history, history_count) result(text)
     real(real64), intent(in) :: history(:)
@@ -1010,12 +1098,24 @@ contains
     select case (state%sort_key)
     case (PROCESS_SORT_USER)
       label = "user"
+    case (PROCESS_SORT_PRIORITY)
+      label = "priority"
+    case (PROCESS_SORT_NICE)
+      label = "nice"
+    case (PROCESS_SORT_VIRT)
+      label = "virt"
+    case (PROCESS_SORT_RSS)
+      label = "rss"
+    case (PROCESS_SORT_SHARED)
+      label = "shared"
+    case (PROCESS_SORT_STATE)
+      label = "state"
     case (PROCESS_SORT_CPU)
       label = "cpu"
     case (PROCESS_SORT_MEMORY)
       label = "mem"
-    case (PROCESS_SORT_RSS)
-      label = "rss"
+    case (PROCESS_SORT_TIME)
+      label = "time"
     case (PROCESS_SORT_COMMAND)
       label = "command"
     case default
@@ -1135,12 +1235,24 @@ contains
     case (2)
       sort_key = PROCESS_SORT_USER
     case (3)
-      sort_key = PROCESS_SORT_CPU
+      sort_key = PROCESS_SORT_PRIORITY
     case (4)
-      sort_key = PROCESS_SORT_MEMORY
+      sort_key = PROCESS_SORT_NICE
     case (5)
-      sort_key = PROCESS_SORT_RSS
+      sort_key = PROCESS_SORT_VIRT
     case (6)
+      sort_key = PROCESS_SORT_RSS
+    case (7)
+      sort_key = PROCESS_SORT_SHARED
+    case (8)
+      sort_key = PROCESS_SORT_STATE
+    case (9)
+      sort_key = PROCESS_SORT_CPU
+    case (10)
+      sort_key = PROCESS_SORT_MEMORY
+    case (11)
+      sort_key = PROCESS_SORT_TIME
+    case (12)
       sort_key = PROCESS_SORT_COMMAND
     case default
       sort_key = PROCESS_SORT_PID
@@ -1156,12 +1268,24 @@ contains
     case (2)
       sort_key = PROCESS_SORT_USER
     case (3)
-      sort_key = PROCESS_SORT_CPU
+      sort_key = PROCESS_SORT_PRIORITY
     case (4)
-      sort_key = PROCESS_SORT_MEMORY
+      sort_key = PROCESS_SORT_NICE
     case (5)
+      sort_key = PROCESS_SORT_VIRT
+    case (6)
       sort_key = PROCESS_SORT_RSS
     case (7)
+      sort_key = PROCESS_SORT_SHARED
+    case (8)
+      sort_key = PROCESS_SORT_STATE
+    case (9)
+      sort_key = PROCESS_SORT_CPU
+    case (10)
+      sort_key = PROCESS_SORT_MEMORY
+    case (11)
+      sort_key = PROCESS_SORT_TIME
+    case (12)
       sort_key = PROCESS_SORT_COMMAND
     case default
       sort_key = 0
@@ -1206,9 +1330,9 @@ contains
 
     separator_cells = max(0, PROCESS_TABLE_COLUMNS - 1)
     content_width = max(0, available_width - separator_cells)
-    widths(1:6) = [6, 8, 6, 6, 8, 2]
+    widths(1:11) = [5, 6, 3, 3, 5, 5, 5, 1, 6, 6, 7]
     remaining = max(0, content_width - sum(widths))
-    widths(7) = remaining
+    widths(12) = remaining
     call shrink_process_widths_to_fit(widths, content_width)
   end subroutine process_table_column_widths
 

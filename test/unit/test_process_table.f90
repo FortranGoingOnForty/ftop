@@ -38,10 +38,13 @@ program test_process_table
 
   call render_process_panel(buffer, widget_rect(1, 1, 80, 10), sample_snapshot(), border_style, title_style, dim_style)
   call require(index(row_text(buffer, 2), "PID") > 0, "process table should render PID header")
+  call require(index(row_text(buffer, 2), "PRI") > 0, "process table should render priority header")
+  call require(index(row_text(buffer, 2), "TIME+") > 0, "process table should render CPU time header")
   call require(index(row_text(buffer, 3), "100") > 0, "process table should render pid")
   call require(index(row_text(buffer, 3), "parent --test") > 0, "process table should render command")
   call require(index(row_text(buffer, 3), "12.5%") > 0, "process table should render cpu percent")
-  call require(index(row_text(buffer, 3), "64.0 MiB") > 0, "process table should render RSS")
+  call require(index(row_text(buffer, 3), "64.0M") > 0, "process table should render resident memory")
+  call require(index(row_text(buffer, 3), "0:01") > 0, "process table should render CPU time")
   call require(index(row_text(buffer, 4), "200") > 0, "process table should render child pid")
   call require(index(row_text(buffer, 4), "└") > 0, "process table should render child branch")
   call require(index(row_text(buffer, 4), "child --task") > 0, "process table should render child command")
@@ -77,11 +80,11 @@ program test_process_table
 
   state%sort_key = PROCESS_SORT_USER
   state%sort_direction = TABLE_SORT_DESCENDING
-  call require(process_table_sort_at(state, widget_rect(1, 1, 80, 10), 2, 19), &
+  call require(process_table_sort_at(state, widget_rect(1, 1, 80, 10), 2, 45), &
                "process table mouse header hit should sort clicked column")
   call require(state%sort_key == PROCESS_SORT_CPU, "process table mouse header hit should choose CPU sort")
   call require(state%sort_direction == TABLE_SORT_ASCENDING, "process table mouse header hit should reset new sort asc")
-  call require(process_table_sort_at(state, widget_rect(1, 1, 80, 10), 2, 19), &
+  call require(process_table_sort_at(state, widget_rect(1, 1, 80, 10), 2, 45), &
                "process table mouse header hit should toggle clicked column")
   call require(state%sort_direction == TABLE_SORT_DESCENDING, "process table mouse header hit should toggle current sort")
 
@@ -223,9 +226,14 @@ contains
     snapshot%processes%items(1)%command = "parent --test"
     snapshot%processes%items(1)%state = "R"
     snapshot%processes%items(1)%start_time = 1000_int64
+    snapshot%processes%items(1)%priority = 20
+    snapshot%processes%items(1)%nice = 0
     snapshot%processes%items(1)%cpu_percent = 12.5_real64
     snapshot%processes%items(1)%mem_percent = 1.5_real64
+    snapshot%processes%items(1)%cpu_time = 1250_int64
+    snapshot%processes%items(1)%mem_virt_bytes = 128_int64 * 1024_int64 * 1024_int64
     snapshot%processes%items(1)%mem_rss_bytes = 64_int64 * 1024_int64 * 1024_int64
+    snapshot%processes%items(1)%mem_shared_bytes = 8_int64 * 1024_int64 * 1024_int64
     snapshot%processes%items(2)%valid = .true.
     snapshot%processes%items(2)%pid = 200
     snapshot%processes%items(2)%ppid = 100
@@ -236,6 +244,12 @@ contains
     snapshot%processes%items(2)%command = "child --task"
     snapshot%processes%items(2)%state = "S"
     snapshot%processes%items(2)%start_time = 2000_int64
+    snapshot%processes%items(2)%priority = 30
+    snapshot%processes%items(2)%nice = 5
+    snapshot%processes%items(2)%cpu_time = 2500_int64
+    snapshot%processes%items(2)%mem_virt_bytes = 256_int64 * 1024_int64 * 1024_int64
+    snapshot%processes%items(2)%mem_rss_bytes = 32_int64 * 1024_int64 * 1024_int64
+    snapshot%processes%items(2)%mem_shared_bytes = 4_int64 * 1024_int64 * 1024_int64
   end function sample_snapshot
 
   function sample_history_snapshot() result(snapshot)

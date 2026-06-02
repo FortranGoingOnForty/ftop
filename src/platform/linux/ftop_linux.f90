@@ -520,6 +520,9 @@ contains
 
     if (linux_status_int(status_text, "Uid:", value)) process%uid = max(0, value)
     if (linux_status_int(status_text, "Threads:", value)) process%threads = max(0, value)
+    if (linux_status_int(status_text, "RssShmem:", value)) then
+      process%mem_shared_bytes = int(max(0, value), int64) * 1024_int64
+    end if
   end subroutine parse_linux_process_status
 
   subroutine parse_linux_process_io(io_text, process)

@@ -1,6 +1,7 @@
 program test_proc_data
   use, intrinsic :: iso_fortran_env, only : int64, real64
-  use ftop_proc_data, only : PROCESS_HISTORY_CAPACITY, PROCESS_SORT_CPU, PROCESS_SORT_PID, &
+  use ftop_proc_data, only : PROCESS_HISTORY_CAPACITY, PROCESS_SORT_CPU, PROCESS_SORT_NICE, PROCESS_SORT_PID, &
+                             PROCESS_SORT_PRIORITY, PROCESS_SORT_SHARED, PROCESS_SORT_TIME, PROCESS_SORT_VIRT, &
                              append_process_histories, assign_process_cpu_percent, build_process_tree, &
                              process_count, process_display_command, process_info, process_state_label, &
                              process_table, process_user_label, sort_process_table
@@ -151,12 +152,27 @@ contains
     sorted%items(1)%valid = .true.
     sorted%items(1)%pid = 30
     sorted%items(1)%cpu_percent = 5.0_real64
+    sorted%items(1)%priority = 30
+    sorted%items(1)%nice = 10
+    sorted%items(1)%mem_virt_bytes = 300_int64
+    sorted%items(1)%mem_shared_bytes = 30_int64
+    sorted%items(1)%cpu_time = 3000_int64
     sorted%items(2)%valid = .true.
     sorted%items(2)%pid = 10
     sorted%items(2)%cpu_percent = 5.0_real64
+    sorted%items(2)%priority = 10
+    sorted%items(2)%nice = 0
+    sorted%items(2)%mem_virt_bytes = 100_int64
+    sorted%items(2)%mem_shared_bytes = 10_int64
+    sorted%items(2)%cpu_time = 1000_int64
     sorted%items(3)%valid = .true.
     sorted%items(3)%pid = 20
     sorted%items(3)%cpu_percent = 9.0_real64
+    sorted%items(3)%priority = 20
+    sorted%items(3)%nice = 5
+    sorted%items(3)%mem_virt_bytes = 200_int64
+    sorted%items(3)%mem_shared_bytes = 20_int64
+    sorted%items(3)%cpu_time = 2000_int64
 
     call sort_process_table(sorted, PROCESS_SORT_PID)
     call require(all(sorted%items%pid == [10, 20, 30]), "process sort should order pid ascending")
@@ -169,6 +185,36 @@ contains
     sorted%items(3)%cpu_percent = 9.0_real64
     call sort_process_table(sorted, PROCESS_SORT_CPU, descending=.true.)
     call require(all(sorted%items%pid == [20, 30, 10]), "process sort should be stable descending")
+
+    sorted%items(1)%pid = 30
+    sorted%items(1)%priority = 30
+    sorted%items(1)%nice = 10
+    sorted%items(1)%mem_virt_bytes = 300_int64
+    sorted%items(1)%mem_shared_bytes = 30_int64
+    sorted%items(1)%cpu_time = 3000_int64
+    sorted%items(2)%pid = 10
+    sorted%items(2)%priority = 10
+    sorted%items(2)%nice = 0
+    sorted%items(2)%mem_virt_bytes = 100_int64
+    sorted%items(2)%mem_shared_bytes = 10_int64
+    sorted%items(2)%cpu_time = 1000_int64
+    sorted%items(3)%pid = 20
+    sorted%items(3)%priority = 20
+    sorted%items(3)%nice = 5
+    sorted%items(3)%mem_virt_bytes = 200_int64
+    sorted%items(3)%mem_shared_bytes = 20_int64
+    sorted%items(3)%cpu_time = 2000_int64
+
+    call sort_process_table(sorted, PROCESS_SORT_PRIORITY)
+    call require(all(sorted%items%pid == [10, 20, 30]), "process sort should order priority ascending")
+    call sort_process_table(sorted, PROCESS_SORT_NICE, descending=.true.)
+    call require(all(sorted%items%pid == [30, 20, 10]), "process sort should order nice descending")
+    call sort_process_table(sorted, PROCESS_SORT_VIRT)
+    call require(all(sorted%items%pid == [10, 20, 30]), "process sort should order virtual memory ascending")
+    call sort_process_table(sorted, PROCESS_SORT_SHARED, descending=.true.)
+    call require(all(sorted%items%pid == [30, 20, 10]), "process sort should order shared memory descending")
+    call sort_process_table(sorted, PROCESS_SORT_TIME)
+    call require(all(sorted%items%pid == [10, 20, 30]), "process sort should order CPU time ascending")
   end subroutine test_process_sorting
 
   subroutine test_process_tree()

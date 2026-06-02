@@ -14,10 +14,16 @@ module ftop_proc_data
 
   integer, parameter, public :: PROCESS_SORT_PID = 1
   integer, parameter, public :: PROCESS_SORT_USER = 2
-  integer, parameter, public :: PROCESS_SORT_CPU = 3
-  integer, parameter, public :: PROCESS_SORT_MEMORY = 4
-  integer, parameter, public :: PROCESS_SORT_RSS = 5
-  integer, parameter, public :: PROCESS_SORT_COMMAND = 6
+  integer, parameter, public :: PROCESS_SORT_PRIORITY = 3
+  integer, parameter, public :: PROCESS_SORT_NICE = 4
+  integer, parameter, public :: PROCESS_SORT_VIRT = 5
+  integer, parameter, public :: PROCESS_SORT_RSS = 6
+  integer, parameter, public :: PROCESS_SORT_SHARED = 7
+  integer, parameter, public :: PROCESS_SORT_STATE = 8
+  integer, parameter, public :: PROCESS_SORT_CPU = 9
+  integer, parameter, public :: PROCESS_SORT_MEMORY = 10
+  integer, parameter, public :: PROCESS_SORT_TIME = 11
+  integer, parameter, public :: PROCESS_SORT_COMMAND = 12
 
   type, public :: process_info
     logical :: valid = .false.
@@ -33,6 +39,7 @@ module ftop_proc_data
     real(real64) :: mem_percent = 0.0_real64
     integer(int64) :: mem_rss_bytes = 0_int64
     integer(int64) :: mem_virt_bytes = 0_int64
+    integer(int64) :: mem_shared_bytes = 0_int64
     integer :: threads = 0
     integer :: nice = 0
     integer :: priority = 0
@@ -447,12 +454,24 @@ contains
     select case (sort_key)
     case (PROCESS_SORT_USER)
       comparison = compare_text(process_user_label(left), process_user_label(right))
+    case (PROCESS_SORT_PRIORITY)
+      comparison = compare_integer(left%priority, right%priority)
+    case (PROCESS_SORT_NICE)
+      comparison = compare_integer(left%nice, right%nice)
+    case (PROCESS_SORT_VIRT)
+      comparison = compare_int64(left%mem_virt_bytes, right%mem_virt_bytes)
+    case (PROCESS_SORT_RSS)
+      comparison = compare_int64(left%mem_rss_bytes, right%mem_rss_bytes)
+    case (PROCESS_SORT_SHARED)
+      comparison = compare_int64(left%mem_shared_bytes, right%mem_shared_bytes)
+    case (PROCESS_SORT_STATE)
+      comparison = compare_text(process_state_label(left), process_state_label(right))
     case (PROCESS_SORT_CPU)
       comparison = compare_real(left%cpu_percent, right%cpu_percent)
     case (PROCESS_SORT_MEMORY)
       comparison = compare_real(left%mem_percent, right%mem_percent)
-    case (PROCESS_SORT_RSS)
-      comparison = compare_int64(left%mem_rss_bytes, right%mem_rss_bytes)
+    case (PROCESS_SORT_TIME)
+      comparison = compare_int64(left%cpu_time, right%cpu_time)
     case (PROCESS_SORT_COMMAND)
       comparison = compare_text(process_display_command(left), process_display_command(right))
     case default
