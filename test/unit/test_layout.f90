@@ -166,16 +166,22 @@ contains
 
     layout = default_dashboard_layout(120, 24)
     call require(layout%cpu_panel%row == 3, "wide dashboard should place cpu in body")
-    call require(layout%memory_panel%row == layout%cpu_panel%row, "wide dashboard should be one row")
+    call require(layout%memory_panel%row == layout%cpu_panel%row, "wide dashboard metrics should share a row")
     call require(layout%memory_panel%col > layout%cpu_panel%col, "wide dashboard should place memory right")
     call require(layout%network_panel%row == layout%cpu_panel%row, "wide dashboard should place network in row")
     call require(layout%network_panel%col > layout%memory_panel%col, "wide dashboard should place network right")
+    call require(layout%process_panel%row > layout%cpu_panel%row, "wide dashboard should place process below metrics")
+    call require(layout%process_panel%height >= 8, "wide dashboard should give process table usable height")
 
     layout = default_dashboard_layout(80, 24)
     call require(layout%memory_panel%row > layout%cpu_panel%row, "narrow dashboard should stack panels")
     call require(layout%memory_panel%col == layout%cpu_panel%col, "stacked panels should align")
     call require(layout%network_panel%row > layout%memory_panel%row, "narrow dashboard should stack network")
     call require(layout%network_panel%col == layout%cpu_panel%col, "stacked network should align")
+    call require(layout%process_panel%row > layout%network_panel%row, "narrow dashboard should stack process")
+    call require(layout%process_panel%col == layout%cpu_panel%col, "stacked process should align")
+    call require(layout%process_panel%row + layout%process_panel%height <= layout%footer%row, &
+                 "stacked process should stay above footer")
   end subroutine test_dashboard_fallback_layout
 
   subroutine require(condition, message)

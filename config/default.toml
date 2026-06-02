@@ -11,20 +11,26 @@ weight = 1
 [[row.column]]
 widget = "cpu"
 weight = 1
-min_width = 28
+min_width = 24
 min_height = 9
 
 [[row.column]]
 widget = "memory"
 weight = 1
-min_width = 28
+min_width = 24
 min_height = 8
-
-[[row]]
-weight = 1
 
 [[row.column]]
 widget = "network"
 weight = 1
-min_width = 28
+min_width = 24
+min_height = 8
+
+[[row]]
+weight = 2
+
+[[row.column]]
+widget = "process"
+weight = 1
+min_width = 40
 min_height = 8

@@ -128,9 +128,9 @@ contains
 
     if (.not. is_zoomed .and. layout%cpu_panel%height < 3 .and. layout%memory_panel%height < 3 .and. &
         layout%network_panel%height < 3 .and. layout%process_panel%height < 3) then
-      title_col = max(2, (width - len_trim("CPU / Memory / Network")) / 2 + 1)
+      title_col = max(2, (width - len_trim("CPU / Memory / Network / Processes")) / 2 + 1)
       title_rect = widget_rect(max(2, height / 2), title_col, width - title_col, 1)
-      call render_text(buffer, title_rect, "CPU / Memory / Network", title_style)
+      call render_text(buffer, title_rect, "CPU / Memory / Network / Processes", title_style)
     end if
 
     call render_footer(buffer, layout%footer, snapshot, refresh_ms, frame_count, status_text, &

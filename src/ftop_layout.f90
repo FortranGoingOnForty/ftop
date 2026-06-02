@@ -151,17 +151,19 @@ contains
     if (present(stacked)) use_stacked = stacked
 
     if (use_stacked) then
-      allocate(grid%rows(3))
-      grid%rows(1) = make_layout_row(1, [make_layout_column(LAYOUT_WIDGET_CPU, 1, 24, 5)])
-      grid%rows(2) = make_layout_row(1, [make_layout_column(LAYOUT_WIDGET_MEMORY, 1, 24, 5)])
-      grid%rows(3) = make_layout_row(1, [make_layout_column(LAYOUT_WIDGET_NETWORK, 1, 24, 5)])
+      allocate(grid%rows(4))
+      grid%rows(1) = make_layout_row(1, [make_layout_column(LAYOUT_WIDGET_CPU, 1, 24, 3)])
+      grid%rows(2) = make_layout_row(1, [make_layout_column(LAYOUT_WIDGET_MEMORY, 1, 24, 3)])
+      grid%rows(3) = make_layout_row(1, [make_layout_column(LAYOUT_WIDGET_NETWORK, 1, 24, 3)])
+      grid%rows(4) = make_layout_row(2, [make_layout_column(LAYOUT_WIDGET_PROCESS, 1, 40, 5)])
     else
-      allocate(grid%rows(1))
+      allocate(grid%rows(2))
       grid%rows(1) = make_layout_row(1, [ &
         make_layout_column(LAYOUT_WIDGET_CPU, 1, 28, 9), &
         make_layout_column(LAYOUT_WIDGET_MEMORY, 1, 28, 8), &
         make_layout_column(LAYOUT_WIDGET_NETWORK, 1, 28, 8) &
       ])
+      grid%rows(2) = make_layout_row(2, [make_layout_column(LAYOUT_WIDGET_PROCESS, 1, 40, 8)])
     end if
   end function default_dashboard_grid
 

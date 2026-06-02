@@ -33,6 +33,8 @@ contains
     call require(layout%memory_panel%col > layout%cpu_panel%col, "wide layout memory panel should be right of cpu")
     call require(layout%network_panel%row == layout%cpu_panel%row, "wide layout should place network beside cpu")
     call require(layout%network_panel%col > layout%memory_panel%col, "wide layout network panel should be right of memory")
+    call require(layout%process_panel%row > layout%cpu_panel%row, "wide layout should place process below metrics")
+    call require(layout%process_panel%height >= 8, "wide layout should reserve process table height")
     call require(layout%footer%row == 22, "wide layout footer should stay above bottom border")
 
     layout = default_dashboard_layout(80, 24)
@@ -41,6 +43,10 @@ contains
     call require(layout%memory_panel%width == layout%cpu_panel%width, "narrow panels should share width")
     call require(layout%network_panel%row > layout%memory_panel%row, "narrow layout network panel should follow memory")
     call require(layout%network_panel%width == layout%cpu_panel%width, "narrow network panel should share width")
+    call require(layout%process_panel%row > layout%network_panel%row, "narrow layout process panel should follow network")
+    call require(layout%process_panel%width == layout%cpu_panel%width, "narrow process panel should share width")
+    call require(layout%process_panel%row + layout%process_panel%height <= layout%footer%row, &
+                 "narrow process panel should stay above footer")
   end subroutine test_default_layout
 
   subroutine test_dashboard_renders_metrics()
@@ -56,6 +62,7 @@ contains
     call require(index(text, "CPU") > 0, "dashboard should render cpu panel")
     call require(index(text, "Memory") > 0, "dashboard should render memory panel")
     call require(index(text, "Network") > 0, "dashboard should render network panel")
+    call require(index(text, "Processes") > 0, "dashboard should render process panel by default")
     call require(index(text, "42.5%") > 0, "dashboard should render cpu usage")
     call require(index(text, "37.5%") > 0, "dashboard should render memory usage")
     call require(index(text, "6.0 GiB / 16.0 GiB") > 0, "dashboard should render memory bytes")
