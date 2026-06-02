@@ -115,7 +115,24 @@ module ftop_app
   integer, parameter :: MAX_REFRESH_MS = 60000
   integer, parameter :: DOUBLE_CLICK_MS = 500
   integer, parameter :: PROCESS_SIGNAL_CHOICE_COUNT = 7
+  integer, parameter :: LAYOUT_PRESET_COUNT = 4
+  integer, parameter :: LAYOUT_PRESET_NAME_LEN = 16
+  integer, parameter :: LAYOUT_PRESET_FILE_LEN = 40
   character(len=*), parameter :: DEBUG_LOG_PATH = "ftop-debug.log"
+  character(len=LAYOUT_PRESET_NAME_LEN), parameter :: LAYOUT_PRESET_NAMES(LAYOUT_PRESET_COUNT) = [ &
+    character(len=LAYOUT_PRESET_NAME_LEN) :: &
+    "full", &
+    "compact", &
+    "process", &
+    "network" &
+  ]
+  character(len=LAYOUT_PRESET_FILE_LEN), parameter :: LAYOUT_PRESET_FILES(LAYOUT_PRESET_COUNT) = [ &
+    character(len=LAYOUT_PRESET_FILE_LEN) :: &
+    "default.toml", &
+    "compact.toml", &
+    "process-focused.toml", &
+    "network-focused.toml" &
+  ]
 
   type :: terminal_session
     type(termios_guard) :: guard
@@ -127,10 +144,12 @@ module ftop_app
     type(network_table_state) :: network_state
     type(process_table_state) :: process_state
     character(len=:), allocatable :: config_path
+    character(len=LAYOUT_PRESET_NAME_LEN) :: layout_preset_name = "full"
     character(len=:), allocatable :: status_text
     integer :: refresh_ms = DEFAULT_REFRESH_MS
     integer :: frame_count = 0
     integer :: focus_index = 1
+    integer :: layout_preset_index = 1
     integer :: last_render_count = 0
     integer :: last_refresh_count = 0
     integer :: last_process_click_count = 0
@@ -307,14 +326,16 @@ contains
     focus = focused_widget_name(session)
     if (session%layout_loaded) then
       call render_dashboard(session%current, snapshot, session%refresh_ms, session%frame_count, &
-                             session%status_text, session%layout, focus, session%zoomed, &
-                             render_fps=session%render_fps, process_state=session%process_state, &
-                             network_state=session%network_state)
+                              session%status_text, session%layout, focus, session%zoomed, &
+                              layout_name=trim(session%layout_preset_name), render_fps=session%render_fps, &
+                              process_state=session%process_state, &
+                              network_state=session%network_state)
     else
       call render_dashboard(session%current, snapshot, session%refresh_ms, session%frame_count, &
-                             session%status_text, focused_widget=focus, zoomed=session%zoomed, &
-                             render_fps=session%render_fps, process_state=session%process_state, &
-                             network_state=session%network_state)
+                              session%status_text, focused_widget=focus, zoomed=session%zoomed, &
+                              layout_name=trim(session%layout_preset_name), render_fps=session%render_fps, &
+                              process_state=session%process_state, &
+                              network_state=session%network_state)
     end if
   end subroutine draw_frame
 
@@ -325,6 +346,8 @@ contains
     character(len=:), allocatable :: process_error
 
     if (allocated(session%config_path)) then
+      session%layout_preset_index = 0
+      session%layout_preset_name = "custom"
       path = session%config_path
       call parse_layout_file(path, session%layout, error)
       if (error%failed) then
@@ -338,34 +361,67 @@ contains
       return
     end if
 
-    path = discover_layout_config_path()
-    if (len(path) == 0) return
-    call parse_layout_file(path, session%layout, error)
-    if (error%failed) then
-      call set_status(session, "layout config failed: " // error%message)
-    else if (.not. apply_layout_config(session, process_error)) then
-      call set_status(session, "layout config failed: " // process_error)
+    path = discover_user_layout_config_path()
+    if (len(path) > 0) then
+      session%layout_preset_index = 0
+      session%layout_preset_name = "custom"
+      call parse_layout_file(path, session%layout, error)
+      if (error%failed) then
+        call set_status(session, "layout config failed: " // error%message)
+      else if (.not. apply_layout_config(session, process_error)) then
+        call set_status(session, "layout config failed: " // process_error)
+      else
+        session%layout_loaded = .true.
+        call set_status(session, "layout custom")
+      end if
+      return
+    end if
+
+    if (load_layout_preset(session, 1, process_error)) then
+      call set_status(session, "layout " // trim(session%layout_preset_name))
     else
-      session%layout_loaded = .true.
-      call set_status(session, "layout config " // path)
+      call set_status(session, process_error)
     end if
   end subroutine initialize_layout
 
-  logical function apply_layout_config(session, error_message) result(applied)
+  logical function load_layout_preset(session, preset_index, error_message) result(loaded)
     type(terminal_session), intent(inout) :: session
+    integer, intent(in) :: preset_index
     character(len=:), allocatable, intent(out) :: error_message
+    type(layout_error) :: error
+    character(len=:), allocatable :: path
+    character(len=:), allocatable :: process_error
 
-    applied = .true.
+    loaded = .false.
     error_message = ""
-    call set_network_interface_filters(session%layout%network)
-    if (session%layout%process%column_count <= 0) return
+    if (preset_index < 1 .or. preset_index > LAYOUT_PRESET_COUNT) then
+      error_message = "layout preset unavailable"
+      return
+    end if
 
-    applied = process_table_set_columns(session%process_state, &
-                                        session%layout%process%columns(:session%layout%process%column_count), &
-                                        session%layout%process%column_count, error_message)
-  end function apply_layout_config
+    path = discover_layout_preset_path(trim(LAYOUT_PRESET_FILES(preset_index)))
+    if (len(path) == 0) then
+      error_message = "layout preset missing: " // trim(LAYOUT_PRESET_FILES(preset_index))
+      return
+    end if
 
-  function discover_layout_config_path() result(path)
+    call parse_layout_file(path, session%layout, error)
+    if (error%failed) then
+      error_message = "layout preset failed: " // error%message
+      return
+    end if
+    if (.not. apply_layout_config(session, process_error)) then
+      error_message = "layout preset failed: " // process_error
+      return
+    end if
+
+    session%layout_loaded = .true.
+    session%layout_preset_index = preset_index
+    session%layout_preset_name = LAYOUT_PRESET_NAMES(preset_index)
+    loaded = .true.
+  end function load_layout_preset
+
+  function discover_user_layout_config_path() result(path)
     character(len=:), allocatable :: path
     character(len=:), allocatable :: config_home
     character(len=:), allocatable :: home
@@ -382,10 +438,117 @@ contains
       if (path_exists(path)) return
     end if
 
-    path = "config/default.toml"
-    if (path_exists(path)) return
     path = ""
-  end function discover_layout_config_path
+  end function discover_user_layout_config_path
+
+  subroutine switch_layout_preset(session, preset_index)
+    type(terminal_session), intent(inout) :: session
+    integer, intent(in) :: preset_index
+    character(len=:), allocatable :: error_message
+    character(len=:), allocatable :: old_focus
+    logical :: old_zoomed
+
+    old_focus = focused_widget_name(session)
+    old_zoomed = session%zoomed
+    if (.not. load_layout_preset(session, preset_index, error_message)) then
+      call set_status(session, error_message)
+      return
+    end if
+
+    session%focus_index = 1
+    if (old_zoomed .and. layout_contains_widget(session%layout, old_focus)) then
+      session%zoomed = .false.
+      call focus_widget_named(session, old_focus)
+      session%zoomed = .true.
+    else
+      session%zoomed = .false.
+    end if
+    call set_status(session, "layout " // trim(session%layout_preset_name))
+    session%needs_full_render = .true.
+    session%dirty = .true.
+  end subroutine switch_layout_preset
+
+  subroutine cycle_layout_preset(session)
+    type(terminal_session), intent(inout) :: session
+    integer :: preset_index
+
+    if (session%layout_preset_index <= 0) then
+      preset_index = 1
+    else
+      preset_index = modulo(session%layout_preset_index, LAYOUT_PRESET_COUNT) + 1
+    end if
+    call switch_layout_preset(session, preset_index)
+  end subroutine cycle_layout_preset
+
+  logical function layout_contains_widget(grid, widget) result(contains_widget)
+    type(layout_grid), intent(in) :: grid
+    character(len=*), intent(in) :: widget
+    integer :: count
+    integer :: index
+
+    contains_widget = .false.
+    if (len_trim(widget) == 0) return
+    count = layout_focus_count(grid)
+    do index = 1, count
+      if (layout_focus_widget(grid, index) == trim(widget)) then
+        contains_widget = .true.
+        return
+      end if
+    end do
+  end function layout_contains_widget
+
+  logical function apply_layout_config(session, error_message) result(applied)
+    type(terminal_session), intent(inout) :: session
+    character(len=:), allocatable, intent(out) :: error_message
+
+    applied = .true.
+    error_message = ""
+    call set_network_interface_filters(session%layout%network)
+    if (session%layout%process%column_count <= 0) return
+
+    applied = process_table_set_columns(session%process_state, &
+                                        session%layout%process%columns(:session%layout%process%column_count), &
+                                        session%layout%process%column_count, error_message)
+  end function apply_layout_config
+
+  function discover_layout_preset_path(file_name) result(path)
+    character(len=*), intent(in) :: file_name
+    character(len=:), allocatable :: path
+    character(len=:), allocatable :: executable_dir
+    character(len=:), allocatable :: source_config
+
+    source_config = join_path("config", trim(file_name))
+    path = source_config
+    if (path_exists(path)) return
+
+    executable_dir = executable_directory()
+    if (len(executable_dir) > 0) then
+      path = join_path(join_path(executable_dir, "config"), trim(file_name))
+      if (path_exists(path)) return
+      path = join_path(join_path(executable_dir, "../config"), trim(file_name))
+      if (path_exists(path)) return
+      path = join_path(join_path(executable_dir, "../../config"), trim(file_name))
+      if (path_exists(path)) return
+      path = join_path(join_path(executable_dir, "../share/ftop"), trim(file_name))
+      if (path_exists(path)) return
+    end if
+
+    path = ""
+  end function discover_layout_preset_path
+
+  function executable_directory() result(directory)
+    character(len=:), allocatable :: directory
+    character(len=4096) :: argument
+    integer :: slash_index
+
+    call get_command_argument(0, argument)
+    slash_index = last_index(trim(argument), "/")
+    if (slash_index > 0) then
+      directory = trim(argument(:slash_index - 1))
+    else
+      directory = ""
+    end if
+  end function executable_directory
 
   function environment_value(name) result(value)
     character(len=*), intent(in) :: name
@@ -401,6 +564,21 @@ contains
       value = ""
     end if
   end function environment_value
+
+  integer function last_index(text, needle) result(position)
+    character(len=*), intent(in) :: text
+    character(len=*), intent(in) :: needle
+    integer :: index
+
+    position = 0
+    if (len(needle) <= 0) return
+    do index = len_trim(text) - len(needle) + 1, 1, -1
+      if (text(index:index + len(needle) - 1) == needle) then
+        position = index
+        return
+      end if
+    end do
+  end function last_index
 
   function join_path(root, relative) result(path)
     character(len=*), intent(in) :: root
@@ -683,6 +861,10 @@ contains
         continue
       else if (handle_network_printable_key(session, text)) then
         continue
+      else if (text == "p") then
+        call cycle_layout_preset(session)
+      else if (handle_layout_preset_key(session, text)) then
+        continue
       else if (text == "z") then
         call toggle_zoom(session)
       else if (text == "q") then
@@ -714,6 +896,22 @@ contains
       call set_status(session, "key: " // event%key_name)
     end select
   end subroutine handle_key_event
+
+  logical function handle_layout_preset_key(session, text) result(handled)
+    type(terminal_session), intent(inout) :: session
+    character(len=*), intent(in) :: text
+    integer :: preset_index
+    integer :: read_status
+
+    handled = .false.
+    if (len_trim(text) /= 1) return
+    read(text, *, iostat=read_status) preset_index
+    if (read_status /= 0) return
+    if (preset_index < 1 .or. preset_index > LAYOUT_PRESET_COUNT) return
+
+    call switch_layout_preset(session, preset_index)
+    handled = .true.
+  end function handle_layout_preset_key
 
   logical function handle_process_printable_key(session, text) result(handled)
     type(terminal_session), intent(inout) :: session

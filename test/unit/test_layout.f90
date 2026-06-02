@@ -13,6 +13,7 @@ program test_layout
     make_layout_row, &
     layout_widget_registered, &
     layout_widget_renderable, &
+    parse_layout_file, &
     parse_layout_toml, &
     resolve_layout
   use ftop_widgets, only : widget_rect
@@ -24,6 +25,7 @@ program test_layout
   call test_reject_invalid_layout_toml()
   call test_grid_resolution()
   call test_dashboard_fallback_layout()
+  call test_preset_config_files()
 
 contains
 
@@ -183,6 +185,56 @@ contains
     call require(layout%process_panel%row + layout%process_panel%height <= layout%footer%row, &
                  "stacked process should stay above footer")
   end subroutine test_dashboard_fallback_layout
+
+  subroutine test_preset_config_files()
+    character(len=512) :: config_root
+    type(layout_error) :: error
+    type(layout_grid) :: grid
+
+    if (command_argument_count() < 1) return
+    call get_command_argument(1, config_root)
+
+    call parse_layout_file(trim(config_root) // "/default.toml", grid, error)
+    call require(.not. error%failed, "default preset should parse")
+    call require(layout_has_widget(grid, LAYOUT_WIDGET_CPU), "default preset should include cpu")
+    call require(layout_has_widget(grid, LAYOUT_WIDGET_MEMORY), "default preset should include memory")
+    call require(layout_has_widget(grid, LAYOUT_WIDGET_NETWORK), "default preset should include network")
+    call require(layout_has_widget(grid, LAYOUT_WIDGET_PROCESS), "default preset should include process")
+
+    call parse_layout_file(trim(config_root) // "/compact.toml", grid, error)
+    call require(.not. error%failed, "compact preset should parse")
+    call require(layout_has_widget(grid, LAYOUT_WIDGET_CPU), "compact preset should include cpu")
+    call require(layout_has_widget(grid, LAYOUT_WIDGET_MEMORY), "compact preset should include memory")
+    call require(.not. layout_has_widget(grid, LAYOUT_WIDGET_PROCESS), "compact preset should omit process")
+
+    call parse_layout_file(trim(config_root) // "/process-focused.toml", grid, error)
+    call require(.not. error%failed, "process preset should parse")
+    call require(layout_has_widget(grid, LAYOUT_WIDGET_PROCESS), "process preset should include process")
+
+    call parse_layout_file(trim(config_root) // "/network-focused.toml", grid, error)
+    call require(.not. error%failed, "network preset should parse")
+    call require(layout_has_widget(grid, LAYOUT_WIDGET_NETWORK), "network preset should include network")
+    call require(.not. layout_has_widget(grid, LAYOUT_WIDGET_PROCESS), "network preset should focus network")
+  end subroutine test_preset_config_files
+
+  logical function layout_has_widget(grid, widget) result(found)
+    type(layout_grid), intent(in) :: grid
+    character(len=*), intent(in) :: widget
+    integer :: column_index
+    integer :: row_index
+
+    found = .false.
+    if (.not. allocated(grid%rows)) return
+    do row_index = 1, size(grid%rows)
+      if (.not. allocated(grid%rows(row_index)%columns)) cycle
+      do column_index = 1, size(grid%rows(row_index)%columns)
+        if (grid%rows(row_index)%columns(column_index)%widget == trim(widget)) then
+          found = .true.
+          return
+        end if
+      end do
+    end do
+  end function layout_has_widget
 
   subroutine require(condition, message)
     logical, intent(in) :: condition

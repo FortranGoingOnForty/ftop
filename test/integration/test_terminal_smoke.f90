@@ -57,6 +57,17 @@ program test_terminal_smoke
   match = wait_for_string(session, "Memory", 2500)
   if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop frame did not render"
 
+  match = wait_for_string(session, "layout full", 2500)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not show full layout preset"
+
+  if (.not. send_text(session, "p")) error stop "failed to send layout cycle key"
+  match = wait_for_string(session, "layout compact", 2500)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not cycle layout preset"
+
+  if (.not. send_text(session, "3")) error stop "failed to send direct layout key"
+  match = wait_for_string(session, "layout process", 2500)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not jump to layout preset"
+
   if (.not. send_text(session, achar(9))) error stop "failed to send Tab"
   match = wait_for_string(session, "focus memory", 2500)
   if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not cycle focus"

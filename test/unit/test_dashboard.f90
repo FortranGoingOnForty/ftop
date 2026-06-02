@@ -79,7 +79,12 @@ contains
     call require(index(text, "8080(web)") > 0, "dashboard should render service names")
     call require(index(text, "refresh 1000ms frame 7 fps 1.0 samples 3") > 0, &
                  "dashboard should render footer")
+    call require(index(text, "p layout 1-4 presets") > 0, "dashboard should render layout key hints")
     call require(index(text, "ready") > 0, "dashboard should render status")
+
+    call render_dashboard(buffer, snapshot, 1000, 7, "ready", layout_name="network")
+    text = buffer_text(buffer)
+    call require(index(text, "layout network") > 0, "dashboard should render active layout name")
   end subroutine test_dashboard_renders_metrics
 
   subroutine test_dashboard_renders_zoomed_widget()

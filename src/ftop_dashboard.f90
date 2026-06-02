@@ -26,7 +26,7 @@ module ftop_dashboard
 contains
 
   subroutine render_dashboard(buffer, snapshot, refresh_ms, frame_count, status_text, grid, focused_widget, zoomed, render_fps, &
-                              process_state, network_state)
+                              process_state, network_state, layout_name)
     type(screen_buffer), intent(inout) :: buffer
     type(collector_snapshot), intent(in) :: snapshot
     integer, intent(in) :: refresh_ms
@@ -38,6 +38,7 @@ contains
     real, intent(in), optional :: render_fps
     type(process_table_state), intent(inout), optional :: process_state
     type(network_table_state), intent(inout), optional :: network_state
+    character(len=*), intent(in), optional :: layout_name
     type(dashboard_layout) :: layout
     type(screen_style) :: border_style
     type(screen_style) :: cpu_border_style
@@ -134,7 +135,7 @@ contains
     end if
 
     call render_footer(buffer, layout%footer, snapshot, refresh_ms, frame_count, status_text, &
-                       dim_style, focus, is_zoomed, render_fps=render_fps)
+                       dim_style, focus, is_zoomed, render_fps=render_fps, layout_name=layout_name)
   end subroutine render_dashboard
 
   subroutine render_dashboard_panel(buffer, rect, widget, snapshot, border_style, title_style, dim_style, expanded, &
@@ -172,7 +173,7 @@ contains
   end subroutine render_dashboard_panel
 
   subroutine render_footer(buffer, footer, snapshot, refresh_ms, frame_count, status_text, dim_style, focused_widget, &
-                           zoomed, render_fps)
+                           zoomed, render_fps, layout_name)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: footer
     type(collector_snapshot), intent(in) :: snapshot
@@ -183,6 +184,7 @@ contains
     character(len=*), intent(in) :: focused_widget
     logical, intent(in) :: zoomed
     real, intent(in), optional :: render_fps
+    character(len=*), intent(in), optional :: layout_name
     type(widget_rect) :: line
     character(len=:), allocatable :: status
 
@@ -190,7 +192,7 @@ contains
 
     line = widget_rect(footer%row, footer%col, footer%width, 1)
     call render_text(buffer, line, footer_text(snapshot, refresh_ms, frame_count, focused_widget, zoomed, &
-                                             render_fps=render_fps), dim_style)
+                                             render_fps=render_fps, layout_name=layout_name), dim_style)
 
     if (footer%height < 2) return
     status = trim(status_text)
@@ -199,16 +201,18 @@ contains
     call render_text(buffer, line, status, dim_style)
   end subroutine render_footer
 
-  function footer_text(snapshot, refresh_ms, frame_count, focused_widget, zoomed, render_fps) result(text)
+  function footer_text(snapshot, refresh_ms, frame_count, focused_widget, zoomed, render_fps, layout_name) result(text)
     type(collector_snapshot), intent(in) :: snapshot
     integer, intent(in) :: refresh_ms
     integer, intent(in) :: frame_count
     character(len=*), intent(in) :: focused_widget
     logical, intent(in) :: zoomed
     real, intent(in), optional :: render_fps
+    character(len=*), intent(in), optional :: layout_name
     character(len=:), allocatable :: text
     character(len=:), allocatable :: focus_text
     character(len=:), allocatable :: fps
+    character(len=:), allocatable :: layout_text
     character(len=:), allocatable :: running_text
 
     if (snapshot%running) then
@@ -225,10 +229,19 @@ contains
     else
       focus_text = ""
     end if
+    if (present(layout_name)) then
+      if (len_trim(layout_name) > 0) then
+        layout_text = " layout " // trim(layout_name)
+      else
+        layout_text = ""
+      end if
+    else
+      layout_text = ""
+    end if
     fps = real_text(footer_fps(refresh_ms, render_fps))
     text = "refresh " // integer_text(refresh_ms) // "ms frame " // integer_text(frame_count) // &
-           " fps " // fps // " samples " // integer_text(snapshot%sample_count) // "  " // running_text // &
-           focus_text // "  Tab focus z zoom q quit Ctrl+Z suspend"
+            " fps " // fps // " samples " // integer_text(snapshot%sample_count) // "  " // running_text // &
+           focus_text // layout_text // "  Tab focus p layout 1-4 presets z zoom q quit Ctrl+Z suspend"
   end function footer_text
 
   real function footer_fps(refresh_ms, render_fps) result(fps)

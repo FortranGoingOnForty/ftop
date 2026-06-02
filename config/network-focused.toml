@@ -1,5 +1,4 @@
-# Default dashboard layout. Keep this showcasing every implemented widget.
-# Do not add placeholders for disk or GPU until those widgets ship.
+# Network-focused layout.
 
 [network]
 include_loopback = false
@@ -12,25 +11,19 @@ weight = 1
 widget = "cpu"
 weight = 1
 min_width = 24
-min_height = 9
+min_height = 6
 
 [[row.column]]
 widget = "memory"
 weight = 1
 min_width = 24
-min_height = 8
-
-[[row.column]]
-widget = "network"
-weight = 1
-min_width = 24
-min_height = 8
+min_height = 6
 
 [[row]]
 weight = 2
 
 [[row.column]]
-widget = "process"
+widget = "network"
 weight = 1
 min_width = 40
 min_height = 8
