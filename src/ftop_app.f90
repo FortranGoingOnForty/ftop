@@ -17,6 +17,8 @@ module ftop_app
     FGOF_KEY_F2, &
     FGOF_KEY_F3, &
     FGOF_KEY_F4, &
+    FGOF_KEY_F5, &
+    FGOF_KEY_F6, &
     FGOF_KEY_HOME, &
     FGOF_KEY_LEFT, &
     FGOF_KEY_PAGEDOWN, &
@@ -128,8 +130,6 @@ module ftop_app
   integer, parameter :: LAYOUT_PRESET_NAME_LEN = 16
   integer, parameter :: LAYOUT_PRESET_FILE_LEN = 40
   character(len=*), parameter :: DEBUG_LOG_PATH = "ftop-debug.log"
-  character(len=*), parameter :: FTOP_KEY_F5 = "f5"
-  character(len=*), parameter :: FTOP_KEY_F6 = "f6"
   character(len=LAYOUT_PRESET_NAME_LEN), parameter :: LAYOUT_PRESET_NAMES(LAYOUT_PRESET_COUNT) = [ &
     character(len=LAYOUT_PRESET_NAME_LEN) :: &
     "full", &
@@ -800,13 +800,6 @@ contains
       return
     end if
 
-    if (input_bytes == achar(27) // "[15~") then
-      if (handle_process_function_key(session, FTOP_KEY_F5)) return
-    end if
-    if (input_bytes == achar(27) // "[17~") then
-      if (handle_process_function_key(session, FTOP_KEY_F6)) return
-    end if
-
     call buffer_input(session%decoder, input_bytes)
     do while (has_pending_input(session%decoder))
       event = decode_next_event(session%decoder)
@@ -1235,9 +1228,9 @@ contains
       call process_table_toggle_tree(session%process_state)
     case (FGOF_KEY_F4)
       call process_table_begin_filter(session%process_state)
-    case (FTOP_KEY_F5)
+    case (FGOF_KEY_F5)
       call process_table_toggle_sort_direction(session%process_state)
-    case (FTOP_KEY_F6)
+    case (FGOF_KEY_F6)
       call process_table_toggle_metric_sparklines(session%process_state)
     case default
       return

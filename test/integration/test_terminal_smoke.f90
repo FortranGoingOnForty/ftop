@@ -170,6 +170,14 @@ contains
     filter_match = wait_for_string(filter_session, "sort cpu asc", 2500)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not sort process table from mouse header"
 
+    if (.not. send_text(filter_session, achar(27) // "[15~")) error stop "failed to send process F5"
+    filter_match = wait_for_string(filter_session, "sort cpu desc", 2500)
+    if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not sort process table from F5"
+
+    if (.not. send_text(filter_session, achar(27) // "[17~")) error stop "failed to send process F6"
+    filter_match = wait_for_string(filter_session, "history numeric", 2500)
+    if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not toggle process sparklines from F6"
+
     if (.not. send_text(filter_session, achar(27) // "OQ")) error stop "failed to open process signal prompt"
     filter_match = wait_for_string(filter_session, "signal SIGTERM pid", 2500)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not open process signal prompt"
@@ -195,7 +203,7 @@ contains
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "global focus key captured filter text"
 
     if (.not. send_text(filter_session, achar(27) // achar(27))) error stop "failed to clear process filter"
-    filter_match = wait_for_string(filter_session, "sort cpu asc", 2500)
+    filter_match = wait_for_string(filter_session, "sort cpu desc", 2500)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not clear process filter"
 
     if (.not. send_text(filter_session, achar(9))) error stop "failed to leave process focus before quit"
