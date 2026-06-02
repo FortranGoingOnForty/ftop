@@ -88,6 +88,7 @@ add_library(
   src/collect/ftop_linux_meminfo.f90
   src/collect/ftop_linux_proc_stat.f90
   src/collect/ftop_mem_data.f90
+  src/collect/ftop_net_data.f90
   src/collect/ftop_ring_buffer.f90
   src/shim/ftop_dl.f90
   src/shim/ftop_pthread.f90
