@@ -12,11 +12,13 @@ program test_dashboard_snapshots
   use ftop_cpu, only : render_cpu_panel
   use ftop_dashboard, only : render_dashboard
   use ftop_memory, only : render_memory_panel
+  use ftop_network, only : render_network_panel
   use ftop_widgets, only : widget_rect
   implicit none
 
   integer, parameter :: CPU_PANEL_HEIGHT = 14
   integer, parameter :: MEMORY_PANEL_HEIGHT = 12
+  integer, parameter :: NETWORK_PANEL_HEIGHT = 10
   integer, parameter :: PANEL_WIDTH = 44
   integer, parameter :: GRID_HEIGHT = 20
   integer, parameter :: GRID_WIDTH = 72
@@ -35,6 +37,8 @@ program test_dashboard_snapshots
                         CPU_PANEL_HEIGHT, print_snapshots)
   call compare_snapshot("memory_panel", render_memory_snapshot(), golden_file(golden_root, "dashboard_memory_panel.txt"), &
                         MEMORY_PANEL_HEIGHT, print_snapshots)
+  call compare_snapshot("network_panel", render_network_snapshot(), golden_file(golden_root, "dashboard_network_panel.txt"), &
+                        NETWORK_PANEL_HEIGHT, print_snapshots)
   call compare_snapshot("grid", render_grid_snapshot(), golden_file(golden_root, "dashboard_grid.txt"), &
                         GRID_HEIGHT, print_snapshots)
 
@@ -63,6 +67,18 @@ contains
     call render_memory_panel(buffer, widget_rect(1, 1, PANEL_WIDTH, MEMORY_PANEL_HEIGHT), sample_snapshot(), &
                              border_style, title_style, dim_style)
   end function render_memory_snapshot
+
+  function render_network_snapshot() result(buffer)
+    type(screen_buffer) :: buffer
+    type(screen_style) :: border_style
+    type(screen_style) :: dim_style
+    type(screen_style) :: title_style
+
+    call dashboard_styles(border_style, title_style, dim_style)
+    buffer = allocate_screen(PANEL_WIDTH, NETWORK_PANEL_HEIGHT)
+    call render_network_panel(buffer, widget_rect(1, 1, PANEL_WIDTH, NETWORK_PANEL_HEIGHT), sample_snapshot(), &
+                              border_style, title_style, dim_style)
+  end function render_network_snapshot
 
   function render_grid_snapshot() result(buffer)
     type(screen_buffer) :: buffer
@@ -125,6 +141,27 @@ contains
     snapshot%memory%swap_total_bytes = 2_int64 * GIB
     snapshot%memory%swap_used_bytes = GIB
     snapshot%memory_usage_history = [20.0_real64, 30.0_real64, 37.5_real64]
+
+    snapshot%network%valid = .true.
+    allocate(snapshot%network%interfaces(2))
+    allocate(snapshot%network%connections(0))
+    allocate(snapshot%network%processes(0))
+    snapshot%network%interfaces(1)%valid = .true.
+    snapshot%network%interfaces(1)%name = "eth0"
+    snapshot%network%interfaces(1)%state = "up"
+    snapshot%network%interfaces(1)%rx_bytes_per_sec = 1536.0_real64
+    snapshot%network%interfaces(1)%tx_bytes_per_sec = 2.0_real64 * 1024.0_real64 * 1024.0_real64
+    snapshot%network%interfaces(1)%history_count = 4
+    snapshot%network%interfaces(1)%rx_history(:4) = [128.0_real64, 512.0_real64, 1024.0_real64, 1536.0_real64]
+    snapshot%network%interfaces(1)%tx_history(:4) = [256.0_real64, 1024.0_real64, 4096.0_real64, 8192.0_real64]
+    snapshot%network%interfaces(2)%valid = .true.
+    snapshot%network%interfaces(2)%name = "wlan0"
+    snapshot%network%interfaces(2)%state = "down"
+    snapshot%network%interfaces(2)%rx_bytes_per_sec = 0.0_real64
+    snapshot%network%interfaces(2)%tx_bytes_per_sec = 512.0_real64
+    snapshot%network%interfaces(2)%history_count = 4
+    snapshot%network%interfaces(2)%rx_history(:4) = [0.0_real64, 0.0_real64, 0.0_real64, 0.0_real64]
+    snapshot%network%interfaces(2)%tx_history(:4) = [0.0_real64, 128.0_real64, 256.0_real64, 512.0_real64]
   end function sample_snapshot
 
   function golden_file(root, name) result(path)

@@ -12,6 +12,11 @@ module ftop_platform
     c_size_t
   use, intrinsic :: iso_fortran_env, only : int64, real64
   use ftop_cpu_data, only : cpu_core_info, cpu_state_ticks, cpu_state_total_ticks
+  use ftop_net_data, only : &
+    NET_INTERFACE_NAME_LEN, &
+    NET_STATE_LEN, &
+    interface_info, &
+    network_table
   use ftop_platform_types, only : &
     cpu_tick_sample, &
     cpu_topology_info, &
@@ -31,6 +36,7 @@ module ftop_platform
   integer, parameter, public :: FREEBSD_PROCESS_COMMAND_LEN = 32
   integer, parameter, public :: FREEBSD_DEVSTAT_NAME_LEN = 16
   integer, parameter :: FREEBSD_PROCESS_CAPACITY = 4096
+  integer, parameter :: FREEBSD_NETWORK_INTERFACE_CAPACITY = 128
 
   integer, allocatable, save :: user_cache_uids(:)
   character(len=PROCESS_USER_LEN), allocatable, save :: user_cache_names(:)
@@ -70,6 +76,18 @@ module ftop_platform
     character(kind=c_char) :: name(FREEBSD_DEVSTAT_NAME_LEN)
   end type freebsd_devstat_info
 
+  type, bind(C), public :: freebsd_net_interface_info
+    integer(c_int) :: valid
+    character(kind=c_char) :: name(NET_INTERFACE_NAME_LEN)
+    integer(c_long_long) :: rx_bytes
+    integer(c_long_long) :: tx_bytes
+    integer(c_long_long) :: rx_packets
+    integer(c_long_long) :: tx_packets
+    character(kind=c_char) :: state(NET_STATE_LEN)
+    integer(c_int) :: speed_mbps
+    integer(c_int) :: mtu
+  end type freebsd_net_interface_info
+
   type, bind(C) :: freebsd_cpu_state_tick_sample
     integer(c_long_long) :: user
     integer(c_long_long) :: nice
@@ -89,6 +107,7 @@ module ftop_platform
     procedure :: get_load_average => freebsd_get_load_average
     procedure :: get_system_uptime => freebsd_get_system_uptime
     procedure :: get_process_table => freebsd_get_process_table
+    procedure :: get_network_table => freebsd_get_network_table
   end type freebsd_backend
 
   public :: create_platform
@@ -99,12 +118,15 @@ module ftop_platform
   public :: freebsd_kvm_close
   public :: freebsd_kvm_getprocs
   public :: freebsd_kvm_open
+  public :: freebsd_network_interfaces
+  public :: freebsd_network_snapshot
   public :: freebsd_sysctl_bytes
   public :: freebsd_sysctl_int
   public :: freebsd_sysctl_long
   public :: freebsd_sysctl_string
   public :: load_average_info
   public :: memory_info
+  public :: network_table
   public :: platform_backend
   public :: process_table
   public :: system_uptime_info
@@ -246,6 +268,15 @@ module ftop_platform
       integer(c_long_long), intent(out) :: generation
       integer(c_int), intent(out) :: sys_errno
     end function c_ftop_freebsd_devstat_getdevs
+
+    integer(c_int) function c_ftop_freebsd_network_interfaces(interfaces, capacity, interface_count, sys_errno) &
+        bind(C, name="ftop_freebsd_network_interfaces")
+      import :: c_int, c_size_t, freebsd_net_interface_info
+      type(freebsd_net_interface_info), intent(out) :: interfaces(*)
+      integer(c_size_t), value :: capacity
+      integer(c_size_t), intent(out) :: interface_count
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_freebsd_network_interfaces
 
     integer(c_int) function c_ftop_freebsd_user_name(uid, value, value_capacity, value_len, sys_errno) &
         bind(C, name="ftop_freebsd_user_name")
@@ -483,6 +514,57 @@ contains
       table%items(process_index) = freebsd_process_from_c(raw_processes(process_index), memory%total_bytes)
     end do
   end function freebsd_get_process_table
+
+  function freebsd_get_network_table(self) result(table)
+    class(freebsd_backend), intent(in) :: self
+    type(network_table) :: table
+
+    associate(unused => self)
+    end associate
+
+    if (.not. freebsd_network_snapshot(table)) table = network_table()
+  end function freebsd_get_network_table
+
+  logical function freebsd_network_snapshot(table, error_code) result(success)
+    type(network_table), intent(out) :: table
+    integer, intent(out), optional :: error_code
+    type(freebsd_net_interface_info), allocatable :: raw_interfaces(:)
+    integer :: interface_count
+    integer :: interface_index
+
+    table = network_table()
+    allocate(raw_interfaces(FREEBSD_NETWORK_INTERFACE_CAPACITY))
+    success = freebsd_network_interfaces(raw_interfaces, interface_count, error_code)
+    if (.not. success) return
+
+    interface_count = max(0, min(interface_count, size(raw_interfaces)))
+    allocate(table%interfaces(interface_count))
+    allocate(table%connections(0))
+    allocate(table%processes(0))
+    table%valid = .true.
+    do interface_index = 1, interface_count
+      table%interfaces(interface_index) = freebsd_interface_from_c(raw_interfaces(interface_index))
+    end do
+  end function freebsd_network_snapshot
+
+  function freebsd_interface_from_c(raw) result(interface)
+    type(freebsd_net_interface_info), intent(in) :: raw
+    type(interface_info) :: interface
+    character(len=:), allocatable :: name
+    character(len=:), allocatable :: state
+
+    interface%valid = raw%valid /= 0_c_int
+    call c_chars_to_string(raw%name, name)
+    call c_chars_to_string(raw%state, state)
+    interface%name = bounded_text(name, len(interface%name))
+    interface%rx_bytes = int(max(0_c_long_long, raw%rx_bytes), int64)
+    interface%tx_bytes = int(max(0_c_long_long, raw%tx_bytes), int64)
+    interface%rx_packets = int(max(0_c_long_long, raw%rx_packets), int64)
+    interface%tx_packets = int(max(0_c_long_long, raw%tx_packets), int64)
+    interface%state = bounded_text(state, len(interface%state))
+    interface%speed_mbps = int(max(0_c_int, raw%speed_mbps))
+    interface%mtu = int(max(0_c_int, raw%mtu))
+  end function freebsd_interface_from_c
 
   function freebsd_process_from_c(raw, memory_total_bytes) result(process)
     type(freebsd_process_info), intent(in) :: raw
@@ -810,6 +892,27 @@ contains
     end if
     call assign_error(error_code, sys_errno)
   end function freebsd_devstat_getdevs
+
+  logical function freebsd_network_interfaces(interfaces, interface_count, error_code) result(success)
+    type(freebsd_net_interface_info), intent(out) :: interfaces(:)
+    integer, intent(out) :: interface_count
+    integer, intent(out), optional :: error_code
+    integer(c_size_t) :: c_interface_count
+    integer(c_int) :: sys_errno
+    integer(c_int) :: rc
+
+    interface_count = 0
+    if (size(interfaces) <= 0) then
+      call assign_error(error_code, 0_c_int)
+      success = .false.
+      return
+    end if
+
+    rc = c_ftop_freebsd_network_interfaces(interfaces, int(size(interfaces), c_size_t), c_interface_count, sys_errno)
+    success = rc == 0_c_int
+    if (success) interface_count = int(c_interface_count)
+    call assign_error(error_code, sys_errno)
+  end function freebsd_network_interfaces
 
   subroutine c_chars_to_string(c_buffer, text)
     character(kind=c_char), intent(in) :: c_buffer(:)

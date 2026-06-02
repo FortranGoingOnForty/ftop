@@ -1,6 +1,7 @@
 module ftop_platform_types
   use, intrinsic :: iso_fortran_env, only : int64, real64
   use ftop_cpu_data, only : CPU_MODEL_NAME_LEN, cpu_core_info, cpu_state_ticks
+  use ftop_net_data, only : network_table
   use ftop_proc_data, only : process_table
   implicit none
   private
@@ -10,6 +11,7 @@ module ftop_platform_types
   public :: cpu_usage_percent
   public :: load_average_info
   public :: memory_info
+  public :: network_table
   public :: platform_backend
   public :: process_table
   public :: system_uptime_info
@@ -61,6 +63,7 @@ module ftop_platform_types
     procedure(get_load_average_interface), deferred :: get_load_average
     procedure(get_system_uptime_interface), deferred :: get_system_uptime
     procedure(get_process_table_interface), deferred :: get_process_table
+    procedure(get_network_table_interface), deferred :: get_network_table
   end type platform_backend
 
   abstract interface
@@ -117,6 +120,12 @@ module ftop_platform_types
       class(platform_backend), intent(in) :: self
       type(process_table) :: table
     end function get_process_table_interface
+
+    function get_network_table_interface(self) result(table)
+      import :: network_table, platform_backend
+      class(platform_backend), intent(in) :: self
+      type(network_table) :: table
+    end function get_network_table_interface
   end interface
 
 contains

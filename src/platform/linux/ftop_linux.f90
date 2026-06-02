@@ -6,6 +6,10 @@ module ftop_platform
   use ftop_linux_meminfo, only : linux_meminfo_parse
   use ftop_linux_proc_stat, only : linux_proc_stat_parse
   use ftop_mem_data, only : metric_memory_info => memory_info
+  use ftop_net_data, only : &
+    interface_info, &
+    network_table, &
+    parse_linux_proc_net_dev
   use ftop_platform_types, only : &
     cpu_tick_sample, &
     cpu_topology_info, &
@@ -28,6 +32,8 @@ module ftop_platform
   integer, parameter :: LINUX_PROC_MEMINFO_BUFFER_LEN = 65536
   integer, parameter :: LINUX_PROC_LOADAVG_BUFFER_LEN = 256
   integer, parameter :: LINUX_PROC_UPTIME_BUFFER_LEN = 128
+  integer, parameter :: LINUX_PROC_NET_DEV_BUFFER_LEN = 262144
+  integer, parameter :: LINUX_NET_IFACE_FIELD_BUFFER_LEN = 128
   integer, parameter :: LINUX_PROCESS_CAPACITY = 4096
   integer, parameter :: LINUX_PROCESS_STAT_LEN = 512
   integer, parameter :: LINUX_PROCESS_STATUS_LEN = 2048
@@ -70,6 +76,7 @@ module ftop_platform
     procedure :: get_load_average => linux_get_load_average
     procedure :: get_system_uptime => linux_get_system_uptime
     procedure :: get_process_table => linux_get_process_table
+    procedure :: get_network_table => linux_get_network_table
   end type linux_backend
 
   public :: create_platform
@@ -82,9 +89,11 @@ module ftop_platform
   public :: linux_hwmon_discover
   public :: linux_load_average_snapshot
   public :: linux_memory_snapshot
+  public :: linux_network_snapshot
   public :: linux_process_snapshot
   public :: load_average_info
   public :: memory_info
+  public :: network_table
   public :: platform_backend
   public :: process_table
   public :: system_uptime_info
@@ -131,6 +140,26 @@ module ftop_platform
       integer(c_size_t), intent(out) :: value_len
       integer(c_int), intent(out) :: sys_errno
     end function c_ftop_linux_read_proc_uptime
+
+    integer(c_int) function c_ftop_linux_read_proc_net_dev(buffer, buffer_capacity, value_len, sys_errno) &
+        bind(C, name="ftop_linux_read_proc_net_dev")
+      import :: c_char, c_int, c_size_t
+      character(kind=c_char), intent(out) :: buffer(*)
+      integer(c_size_t), value :: buffer_capacity
+      integer(c_size_t), intent(out) :: value_len
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_linux_read_proc_net_dev
+
+    integer(c_int) function c_ftop_linux_read_net_interface_file(interface_name, field_name, buffer, &
+        buffer_capacity, value_len, sys_errno) bind(C, name="ftop_linux_read_net_interface_file")
+      import :: c_char, c_int, c_size_t
+      character(kind=c_char), intent(in) :: interface_name(*)
+      character(kind=c_char), intent(in) :: field_name(*)
+      character(kind=c_char), intent(out) :: buffer(*)
+      integer(c_size_t), value :: buffer_capacity
+      integer(c_size_t), intent(out) :: value_len
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_linux_read_net_interface_file
 
     integer(c_int) function c_ftop_linux_read_cpu_frequency(cpu_index, buffer, buffer_capacity, value_len, sys_errno) &
         bind(C, name="ftop_linux_read_cpu_frequency")
@@ -390,6 +419,109 @@ contains
     memory = linux_get_memory_info(self)
     if (.not. linux_process_snapshot(table, memory%total_bytes)) table = process_table()
   end function linux_get_process_table
+
+  function linux_get_network_table(self) result(table)
+    class(linux_backend), intent(in) :: self
+    type(network_table) :: table
+
+    associate(unused => self)
+    end associate
+
+    if (.not. linux_network_snapshot(table)) table = network_table()
+  end function linux_get_network_table
+
+  logical function linux_network_snapshot(table, error_code) result(success)
+    type(network_table), intent(out) :: table
+    integer, intent(out), optional :: error_code
+    character(kind=c_char), allocatable :: c_buffer(:)
+    character(len=:), allocatable :: buffer
+    integer(c_size_t) :: value_len
+    integer(c_int) :: sys_errno
+    integer(c_int) :: rc
+
+    table = network_table()
+    allocate(c_buffer(LINUX_PROC_NET_DEV_BUFFER_LEN))
+    rc = c_ftop_linux_read_proc_net_dev(c_buffer, int(size(c_buffer), c_size_t), value_len, sys_errno)
+    success = rc == 0_c_int
+    if (success) then
+      call c_chars_to_string(c_buffer, int(value_len), buffer)
+      table = parse_linux_proc_net_dev(buffer)
+      call assign_linux_interface_metadata(table)
+      success = table%valid
+    end if
+    call assign_error(error_code, sys_errno)
+  end function linux_network_snapshot
+
+  subroutine assign_linux_interface_metadata(table)
+    type(network_table), intent(inout) :: table
+    integer :: interface_index
+
+    if (.not. allocated(table%interfaces)) return
+    do interface_index = 1, size(table%interfaces)
+      if (.not. table%interfaces(interface_index)%valid) cycle
+      call assign_linux_interface_state(table%interfaces(interface_index))
+      call assign_linux_interface_integer_field(table%interfaces(interface_index), "speed", &
+                                                table%interfaces(interface_index)%speed_mbps)
+      call assign_linux_interface_integer_field(table%interfaces(interface_index), "mtu", &
+                                                table%interfaces(interface_index)%mtu)
+    end do
+  end subroutine assign_linux_interface_metadata
+
+  subroutine assign_linux_interface_state(interface)
+    type(interface_info), intent(inout) :: interface
+    character(len=LINUX_NET_IFACE_FIELD_BUFFER_LEN) :: value
+    integer :: value_len
+
+    if (.not. linux_net_interface_field(interface%name, "operstate", value, value_len)) return
+    if (value_len <= 0) return
+    interface%state = bounded_text(value(:value_len), len(interface%state))
+  end subroutine assign_linux_interface_state
+
+  subroutine assign_linux_interface_integer_field(interface, field_name, destination)
+    type(interface_info), intent(in) :: interface
+    character(len=*), intent(in) :: field_name
+    integer, intent(inout) :: destination
+    character(len=LINUX_NET_IFACE_FIELD_BUFFER_LEN) :: value
+    integer :: read_status
+    integer :: parsed_value
+    integer :: value_len
+
+    if (.not. linux_net_interface_field(interface%name, field_name, value, value_len)) return
+    if (value_len <= 0) return
+    read(value(:value_len), *, iostat=read_status) parsed_value
+    if (read_status == 0 .and. parsed_value > 0) destination = parsed_value
+  end subroutine assign_linux_interface_integer_field
+
+  logical function linux_net_interface_field(interface_name, field_name, value, value_len, error_code) result(success)
+    character(len=*), intent(in) :: interface_name
+    character(len=*), intent(in) :: field_name
+    character(len=*), intent(out) :: value
+    integer, intent(out) :: value_len
+    integer, intent(out), optional :: error_code
+    character(kind=c_char), allocatable :: c_field_name(:)
+    character(kind=c_char), allocatable :: c_interface_name(:)
+    character(kind=c_char), allocatable :: c_value(:)
+    integer(c_size_t) :: c_value_len
+    integer(c_int) :: sys_errno
+    integer(c_int) :: rc
+
+    value = ""
+    value_len = 0
+    if (len(value) <= 0) then
+      call assign_error(error_code, 0_c_int)
+      success = .false.
+      return
+    end if
+
+    call to_c_string(interface_name, c_interface_name)
+    call to_c_string(field_name, c_field_name)
+    allocate(c_value(len(value) + 1))
+    rc = c_ftop_linux_read_net_interface_file(c_interface_name, c_field_name, c_value, &
+                                              int(size(c_value), c_size_t), c_value_len, sys_errno)
+    success = rc == 0_c_int
+    if (success) call copy_c_line_value(c_value, int(c_value_len), value, value_len)
+    call assign_error(error_code, sys_errno)
+  end function linux_net_interface_field
 
   logical function linux_process_snapshot(table, memory_total_bytes, error_code) result(success)
     type(process_table), intent(out) :: table
@@ -919,6 +1051,26 @@ contains
       text(i:i) = achar(iachar(c_buffer(i)))
     end do
   end subroutine c_chars_to_string
+
+  subroutine copy_c_line_value(c_buffer, c_value_len, value, value_len)
+    character(kind=c_char), intent(in) :: c_buffer(:)
+    integer, intent(in) :: c_value_len
+    character(len=*), intent(out) :: value
+    integer, intent(out) :: value_len
+    integer :: i
+    integer :: limit
+
+    value = ""
+    value_len = 0
+    limit = min(len(value), max(0, min(c_value_len, size(c_buffer))))
+    do i = 1, limit
+      if (c_buffer(i) == c_null_char) exit
+      if (achar(iachar(c_buffer(i))) == new_line("a")) exit
+      if (achar(iachar(c_buffer(i))) == achar(13)) exit
+      value(i:i) = achar(iachar(c_buffer(i)))
+      value_len = value_len + 1
+    end do
+  end subroutine copy_c_line_value
 
   subroutine c_cmdline_to_string(c_buffer, value_len, text)
     character(kind=c_char), intent(in) :: c_buffer(:)

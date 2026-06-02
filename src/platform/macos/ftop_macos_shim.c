@@ -6,13 +6,17 @@
 #include <mach/mach_init.h>
 #include <mach/processor_info.h>
 #include <mach/vm_map.h>
+#include <ifaddrs.h>
 #include <libproc.h>
+#include <limits.h>
+#include <net/if.h>
 #include <pwd.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/sysctl.h>
+#include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <time.h>
@@ -26,6 +30,8 @@ struct ftop_macos_processor_ticks {
 };
 
 #define FTOP_MACOS_PROCESS_COMMAND_LEN 256
+#define FTOP_NET_INTERFACE_NAME_LEN 32
+#define FTOP_NET_STATE_LEN 16
 #define FTOP_USER_LOOKUP_BUFFER_LEN 16384
 
 struct ftop_macos_process_info {
@@ -40,6 +46,18 @@ struct ftop_macos_process_info {
   int nice;
   long long start_time;
   long long cpu_time;
+};
+
+struct ftop_macos_net_interface_info {
+  int valid;
+  char name[FTOP_NET_INTERFACE_NAME_LEN];
+  long long rx_bytes;
+  long long tx_bytes;
+  long long rx_packets;
+  long long tx_packets;
+  char state[FTOP_NET_STATE_LEN];
+  int speed_mbps;
+  int mtu;
 };
 
 typedef struct __IOHIDEvent *IOHIDEventRef;
@@ -774,6 +792,92 @@ int ftop_macos_process_snapshot(
 
   free(pids);
   *process_count = count;
+  return 0;
+}
+
+static void ftop_copy_bounded_string(char *destination, size_t capacity, const char *source) {
+  size_t copied_len;
+  size_t source_len;
+
+  if (destination == NULL || capacity == 0U) return;
+  destination[0] = '\0';
+  if (source == NULL) return;
+  source_len = strlen(source);
+  copied_len = source_len < capacity - 1U ? source_len : capacity - 1U;
+  memcpy(destination, source, copied_len);
+  destination[copied_len] = '\0';
+}
+
+static long long ftop_nonnegative_unsigned_long_long(unsigned long long value) {
+  return value > (unsigned long long)LLONG_MAX ? LLONG_MAX : (long long)value;
+}
+
+static int ftop_baud_to_mbps(unsigned long long baudrate) {
+  unsigned long long mbps;
+
+  mbps = baudrate / 1000000ULL;
+  if (mbps > (unsigned long long)INT_MAX) return INT_MAX;
+  return (int)mbps;
+}
+
+static int ftop_network_interface_exists(
+    const struct ftop_macos_net_interface_info *buffer, size_t count, const char *name) {
+  size_t i;
+
+  for (i = 0U; i < count; ++i) {
+    if (strncmp(buffer[i].name, name, FTOP_NET_INTERFACE_NAME_LEN) == 0) return 1;
+  }
+  return 0;
+}
+
+static void ftop_copy_network_interface(
+    struct ftop_macos_net_interface_info *destination, const struct ifaddrs *source) {
+  const struct if_data *data;
+  unsigned long long baudrate;
+
+  memset(destination, 0, sizeof(*destination));
+  data = (const struct if_data *)source->ifa_data;
+  destination->valid = 1;
+  ftop_copy_bounded_string(destination->name, sizeof(destination->name), source->ifa_name);
+  destination->rx_bytes = ftop_nonnegative_unsigned_long_long((unsigned long long)data->ifi_ibytes);
+  destination->tx_bytes = ftop_nonnegative_unsigned_long_long((unsigned long long)data->ifi_obytes);
+  destination->rx_packets = ftop_nonnegative_unsigned_long_long((unsigned long long)data->ifi_ipackets);
+  destination->tx_packets = ftop_nonnegative_unsigned_long_long((unsigned long long)data->ifi_opackets);
+  ftop_copy_bounded_string(destination->state, sizeof(destination->state),
+      (source->ifa_flags & IFF_UP) != 0U ? "up" : "down");
+  baudrate = (unsigned long long)data->ifi_baudrate;
+  destination->speed_mbps = ftop_baud_to_mbps(baudrate);
+  destination->mtu = data->ifi_mtu > 0 ? (int)data->ifi_mtu : 0;
+}
+
+int ftop_macos_network_interfaces(
+    struct ftop_macos_net_interface_info *buffer, size_t capacity, size_t *interface_count, int *sys_errno) {
+  struct ifaddrs *interfaces;
+  struct ifaddrs *interface;
+  size_t count;
+
+  if (buffer == NULL || interface_count == NULL || sys_errno == NULL || capacity == 0U) return -1;
+
+  *interface_count = 0U;
+  *sys_errno = 0;
+  interfaces = NULL;
+  if (getifaddrs(&interfaces) != 0) {
+    *sys_errno = errno;
+    return -1;
+  }
+
+  count = 0U;
+  for (interface = interfaces; interface != NULL && count < capacity; interface = interface->ifa_next) {
+    if (interface->ifa_name == NULL || interface->ifa_addr == NULL || interface->ifa_data == NULL) continue;
+    if (interface->ifa_addr->sa_family != AF_LINK) continue;
+    if ((interface->ifa_flags & IFF_LOOPBACK) != 0U) continue;
+    if (ftop_network_interface_exists(buffer, count, interface->ifa_name)) continue;
+    ftop_copy_network_interface(&buffer[count], interface);
+    ++count;
+  }
+
+  freeifaddrs(interfaces);
+  *interface_count = count;
   return 0;
 }
 

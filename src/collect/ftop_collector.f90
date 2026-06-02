@@ -18,6 +18,13 @@ module ftop_collector
     cpu_state_ticks, &
     cpu_total_info
   use ftop_mem_data, only : metric_memory_info => memory_info
+  use ftop_net_data, only : &
+    NET_HISTORY_CAPACITY, &
+    NET_INTERFACE_NAME_LEN, &
+    NET_STATE_LEN, &
+    append_interface_histories, &
+    assign_interface_rates, &
+    network_table
   use ftop_platform, only : &
     create_platform, &
     cpu_topology_info, &
@@ -55,6 +62,7 @@ module ftop_collector
   integer, parameter, public :: FTOP_COLLECTOR_HISTORY_CAPACITY = PROCESS_HISTORY_CAPACITY
   integer, parameter, public :: FTOP_COLLECTOR_MAX_CPU_CORES = 512
   integer, parameter, public :: FTOP_COLLECTOR_MAX_PROCESSES = 256
+  integer, parameter, public :: FTOP_COLLECTOR_MAX_INTERFACES = 64
 
   type, bind(C) :: collector_shared_state
     integer(c_int) :: stop_requested
@@ -121,6 +129,22 @@ module ftop_collector
     real(c_double) :: process_mem_history(FTOP_COLLECTOR_MAX_PROCESSES, PROCESS_HISTORY_CAPACITY)
     character(kind=c_char) :: process_cgroup(PROCESS_CGROUP_LEN, FTOP_COLLECTOR_MAX_PROCESSES)
     integer(c_int) :: process_jid(FTOP_COLLECTOR_MAX_PROCESSES)
+    integer(c_int) :: network_table_valid
+    integer(c_int) :: network_interface_count
+    integer(c_int) :: network_interface_valid(FTOP_COLLECTOR_MAX_INTERFACES)
+    character(kind=c_char) :: network_interface_name(NET_INTERFACE_NAME_LEN, FTOP_COLLECTOR_MAX_INTERFACES)
+    integer(c_long_long) :: network_interface_rx_bytes(FTOP_COLLECTOR_MAX_INTERFACES)
+    integer(c_long_long) :: network_interface_tx_bytes(FTOP_COLLECTOR_MAX_INTERFACES)
+    integer(c_long_long) :: network_interface_rx_packets(FTOP_COLLECTOR_MAX_INTERFACES)
+    integer(c_long_long) :: network_interface_tx_packets(FTOP_COLLECTOR_MAX_INTERFACES)
+    character(kind=c_char) :: network_interface_state(NET_STATE_LEN, FTOP_COLLECTOR_MAX_INTERFACES)
+    integer(c_int) :: network_interface_speed_mbps(FTOP_COLLECTOR_MAX_INTERFACES)
+    integer(c_int) :: network_interface_mtu(FTOP_COLLECTOR_MAX_INTERFACES)
+    real(c_double) :: network_interface_rx_bytes_per_sec(FTOP_COLLECTOR_MAX_INTERFACES)
+    real(c_double) :: network_interface_tx_bytes_per_sec(FTOP_COLLECTOR_MAX_INTERFACES)
+    integer(c_int) :: network_interface_history_count(FTOP_COLLECTOR_MAX_INTERFACES)
+    real(c_double) :: network_interface_rx_history(FTOP_COLLECTOR_MAX_INTERFACES, NET_HISTORY_CAPACITY)
+    real(c_double) :: network_interface_tx_history(FTOP_COLLECTOR_MAX_INTERFACES, NET_HISTORY_CAPACITY)
     integer(c_int) :: history_start
     integer(c_int) :: history_count
     real(c_double) :: cpu_usage_history(FTOP_COLLECTOR_HISTORY_CAPACITY)
@@ -139,6 +163,7 @@ module ftop_collector
     type(cpu_core_info), allocatable :: cpu_cores(:)
     type(metric_memory_info) :: memory
     type(process_table) :: processes
+    type(network_table) :: network
     real(real64), allocatable :: cpu_usage_history(:)
     real(real64), allocatable :: cpu_core_usage_history(:, :)
     real(real64), allocatable :: memory_usage_history(:)
@@ -291,6 +316,11 @@ contains
       call ignore_mutex_unlock(self%mutex)
       return
     end if
+    if (.not. copy_network(self%state, snapshot)) then
+      call clear_snapshot(snapshot)
+      call ignore_mutex_unlock(self%mutex)
+      return
+    end if
     if (.not. copy_cpu_cores(self%state, snapshot)) then
       call clear_snapshot(snapshot)
       call ignore_mutex_unlock(self%mutex)
@@ -348,9 +378,13 @@ contains
     type(process_table) :: processes
     type(process_table) :: empty_processes
     type(process_table) :: previous_processes
+    type(network_table) :: network
+    type(network_table) :: empty_network
+    type(network_table) :: previous_network
     type(system_uptime_info) :: system_uptime
     integer(c_long_long) :: deadline_ms
     integer(c_long_long) :: metadata_refresh_ms
+    integer(c_long_long) :: previous_network_sample_ms
     integer(c_long_long) :: previous_process_sample_ms
     integer(c_long_long) :: process_refresh_ms
     logical :: warming_up
@@ -374,10 +408,14 @@ contains
     system_uptime = backend%get_system_uptime()
     processes = backend%get_process_table()
     call append_process_histories(processes, empty_processes)
+    network = backend%get_network_table()
+    call append_interface_histories(network, empty_network)
     deadline_ms = monotonic_ms()
     previous_processes = processes
+    previous_network = network
     previous_process_sample_ms = deadline_ms
-    call publish_sample(state, topology, total_cpu, core_cpus, .true., memory, load_average, system_uptime, processes)
+    previous_network_sample_ms = deadline_ms
+    call publish_sample(state, topology, total_cpu, core_cpus, .true., memory, load_average, system_uptime, processes, network)
 
     metadata_refresh_ms = deadline_ms + 1000_c_long_long
     process_refresh_ms = deadline_ms + 1000_c_long_long
@@ -418,9 +456,16 @@ contains
         previous_process_sample_ms = deadline_ms
         process_refresh_ms = deadline_ms + 1000_c_long_long
       end if
+      network = backend%get_network_table()
+      call assign_interface_rates(network, previous_network, &
+                                  int(max(0_c_long_long, deadline_ms - previous_network_sample_ms), int64))
+      call append_interface_histories(network, previous_network)
+      previous_network = network
+      previous_network_sample_ms = deadline_ms
       call merge_cpu_metadata(core_cpus, cpu_metadata)
 
-      call publish_sample(state, topology, total_cpu, core_cpus, warming_up, memory, load_average, system_uptime, processes)
+      call publish_sample(state, topology, total_cpu, core_cpus, warming_up, memory, load_average, system_uptime, &
+                          processes, network)
       if (should_stop(state)) exit
     end do
 
@@ -535,6 +580,22 @@ contains
     state%process_mem_history = 0.0_c_double
     state%process_cgroup = c_null_char
     state%process_jid = 0_c_int
+    state%network_table_valid = 0_c_int
+    state%network_interface_count = 0_c_int
+    state%network_interface_valid = 0_c_int
+    state%network_interface_name = c_null_char
+    state%network_interface_rx_bytes = 0_c_long_long
+    state%network_interface_tx_bytes = 0_c_long_long
+    state%network_interface_rx_packets = 0_c_long_long
+    state%network_interface_tx_packets = 0_c_long_long
+    state%network_interface_state = c_null_char
+    state%network_interface_speed_mbps = 0_c_int
+    state%network_interface_mtu = 0_c_int
+    state%network_interface_rx_bytes_per_sec = 0.0_c_double
+    state%network_interface_tx_bytes_per_sec = 0.0_c_double
+    state%network_interface_history_count = 0_c_int
+    state%network_interface_rx_history = 0.0_c_double
+    state%network_interface_tx_history = 0.0_c_double
     state%history_start = 1_c_int
     state%history_count = 0_c_int
     state%cpu_usage_history = 0.0_c_double
@@ -608,6 +669,22 @@ contains
     state%process_mem_history = 0.0_c_double
     state%process_cgroup = c_null_char
     state%process_jid = 0_c_int
+    state%network_table_valid = 0_c_int
+    state%network_interface_count = 0_c_int
+    state%network_interface_valid = 0_c_int
+    state%network_interface_name = c_null_char
+    state%network_interface_rx_bytes = 0_c_long_long
+    state%network_interface_tx_bytes = 0_c_long_long
+    state%network_interface_rx_packets = 0_c_long_long
+    state%network_interface_tx_packets = 0_c_long_long
+    state%network_interface_state = c_null_char
+    state%network_interface_speed_mbps = 0_c_int
+    state%network_interface_mtu = 0_c_int
+    state%network_interface_rx_bytes_per_sec = 0.0_c_double
+    state%network_interface_tx_bytes_per_sec = 0.0_c_double
+    state%network_interface_history_count = 0_c_int
+    state%network_interface_rx_history = 0.0_c_double
+    state%network_interface_tx_history = 0.0_c_double
     state%history_start = 1_c_int
     state%history_count = 0_c_int
     state%cpu_usage_history = 0.0_c_double
@@ -644,6 +721,7 @@ contains
     snapshot%memory%swap_total_bytes = 0_int64
     snapshot%memory%swap_used_bytes = 0_int64
     snapshot%processes%valid = .false.
+    snapshot%network%valid = .false.
   end subroutine clear_snapshot
 
   logical function copy_cpu_cores(state, snapshot) result(success)
@@ -733,6 +811,62 @@ contains
     success = .true.
   end function copy_processes
 
+  logical function copy_network(state, snapshot) result(success)
+    type(collector_shared_state), intent(in) :: state
+    type(collector_snapshot), intent(inout) :: snapshot
+    integer :: allocation_status
+    integer :: history_count
+    integer :: history_index
+    integer :: interface_count
+    integer :: interface_index
+    logical :: string_valid
+
+    success = .false.
+    interface_count = bounded_interface_count(int(state%network_interface_count))
+    snapshot%network%valid = state%network_table_valid /= 0_c_int
+    allocate(snapshot%network%interfaces(interface_count), stat=allocation_status)
+    if (allocation_status /= 0) return
+    allocate(snapshot%network%connections(0), stat=allocation_status)
+    if (allocation_status /= 0) return
+    allocate(snapshot%network%processes(0), stat=allocation_status)
+    if (allocation_status /= 0) return
+
+    do interface_index = 1, interface_count
+      snapshot%network%interfaces(interface_index)%valid = state%network_interface_valid(interface_index) /= 0_c_int
+      call copy_c_chars_to_fortran(state%network_interface_name(:, interface_index), &
+                                   state%network_interface_valid(interface_index), &
+                                   snapshot%network%interfaces(interface_index)%name, string_valid)
+      snapshot%network%interfaces(interface_index)%rx_bytes = int(state%network_interface_rx_bytes(interface_index), int64)
+      snapshot%network%interfaces(interface_index)%tx_bytes = int(state%network_interface_tx_bytes(interface_index), int64)
+      snapshot%network%interfaces(interface_index)%rx_packets = &
+        int(state%network_interface_rx_packets(interface_index), int64)
+      snapshot%network%interfaces(interface_index)%tx_packets = &
+        int(state%network_interface_tx_packets(interface_index), int64)
+      call copy_c_chars_to_fortran(state%network_interface_state(:, interface_index), &
+                                   state%network_interface_valid(interface_index), &
+                                   snapshot%network%interfaces(interface_index)%state, string_valid)
+      snapshot%network%interfaces(interface_index)%speed_mbps = &
+        int(state%network_interface_speed_mbps(interface_index))
+      snapshot%network%interfaces(interface_index)%mtu = int(state%network_interface_mtu(interface_index))
+      snapshot%network%interfaces(interface_index)%rx_bytes_per_sec = &
+        real(state%network_interface_rx_bytes_per_sec(interface_index), real64)
+      snapshot%network%interfaces(interface_index)%tx_bytes_per_sec = &
+        real(state%network_interface_tx_bytes_per_sec(interface_index), real64)
+      history_count = bounded_interface_history_count(int(state%network_interface_history_count(interface_index)))
+      snapshot%network%interfaces(interface_index)%history_count = history_count
+      snapshot%network%interfaces(interface_index)%rx_history = 0.0_real64
+      snapshot%network%interfaces(interface_index)%tx_history = 0.0_real64
+      do history_index = 1, history_count
+        snapshot%network%interfaces(interface_index)%rx_history(history_index) = &
+          real(state%network_interface_rx_history(interface_index, history_index), real64)
+        snapshot%network%interfaces(interface_index)%tx_history(history_index) = &
+          real(state%network_interface_tx_history(interface_index, history_index), real64)
+      end do
+    end do
+
+    success = .true.
+  end function copy_network
+
   logical function copy_history(state, snapshot) result(success)
     type(collector_shared_state), intent(in) :: state
     type(collector_snapshot), intent(inout) :: snapshot
@@ -785,11 +919,23 @@ contains
     bounded = max(0, min(FTOP_COLLECTOR_MAX_PROCESSES, process_count))
   end function bounded_process_count
 
+  integer function bounded_interface_count(interface_count) result(bounded)
+    integer, intent(in) :: interface_count
+
+    bounded = max(0, min(FTOP_COLLECTOR_MAX_INTERFACES, interface_count))
+  end function bounded_interface_count
+
   integer function bounded_process_history_count(history_count) result(bounded)
     integer, intent(in) :: history_count
 
     bounded = max(0, min(PROCESS_HISTORY_CAPACITY, history_count))
   end function bounded_process_history_count
+
+  integer function bounded_interface_history_count(history_count) result(bounded)
+    integer, intent(in) :: history_count
+
+    bounded = max(0, min(NET_HISTORY_CAPACITY, history_count))
+  end function bounded_interface_history_count
 
   integer function bounded_interval_ms(interval_ms) result(bounded)
     integer, intent(in), optional :: interval_ms
@@ -872,7 +1018,7 @@ contains
   end function should_stop
 
   subroutine publish_sample(state, topology, total_cpu, core_cpus, warming_up, memory, load_average, system_uptime, &
-                            processes)
+                            processes, network)
     type(collector_shared_state), intent(inout) :: state
     type(cpu_topology_info), intent(in) :: topology
     type(cpu_core_info), intent(in) :: total_cpu
@@ -882,6 +1028,7 @@ contains
     type(load_average_info), intent(in) :: load_average
     type(system_uptime_info), intent(in) :: system_uptime
     type(process_table), intent(in) :: processes
+    type(network_table), intent(in) :: network
     type(ftop_mutex_handle) :: mutex
     integer :: core_count
     integer :: physical_core_count
@@ -924,6 +1071,7 @@ contains
     state%memory_swap_total_bytes = int(max(0_int64, memory%swap_total_bytes), c_long_long)
     state%memory_swap_used_bytes = int(clamp_memory_value(memory%swap_used_bytes, memory%swap_total_bytes), c_long_long)
     call publish_processes(state, processes)
+    call publish_network(state, network)
     call append_history(state, real(state%cpu_usage_percent, real64), memory_usage_percent(memory), core_cpus, core_count)
 
     if (.not. ftop_mutex_unlock(mutex)) return
@@ -1010,6 +1158,63 @@ contains
     end do
   end subroutine publish_processes
 
+  subroutine publish_network(state, network)
+    type(collector_shared_state), intent(inout) :: state
+    type(network_table), intent(in) :: network
+    integer :: interface_count
+    integer :: interface_index
+    integer(c_int) :: string_valid
+
+    state%network_table_valid = merge(1_c_int, 0_c_int, network%valid)
+    state%network_interface_count = 0_c_int
+    state%network_interface_valid = 0_c_int
+    state%network_interface_name = c_null_char
+    state%network_interface_rx_bytes = 0_c_long_long
+    state%network_interface_tx_bytes = 0_c_long_long
+    state%network_interface_rx_packets = 0_c_long_long
+    state%network_interface_tx_packets = 0_c_long_long
+    state%network_interface_state = c_null_char
+    state%network_interface_speed_mbps = 0_c_int
+    state%network_interface_mtu = 0_c_int
+    state%network_interface_rx_bytes_per_sec = 0.0_c_double
+    state%network_interface_tx_bytes_per_sec = 0.0_c_double
+    state%network_interface_history_count = 0_c_int
+    state%network_interface_rx_history = 0.0_c_double
+    state%network_interface_tx_history = 0.0_c_double
+    if (.not. network%valid .or. .not. allocated(network%interfaces)) return
+
+    interface_count = bounded_interface_count(size(network%interfaces))
+    state%network_interface_count = int(interface_count, c_int)
+    do interface_index = 1, interface_count
+      state%network_interface_valid(interface_index) = &
+        merge(1_c_int, 0_c_int, network%interfaces(interface_index)%valid)
+      call copy_fortran_string_to_c_chars(network%interfaces(interface_index)%name, &
+                                          len_trim(network%interfaces(interface_index)%name) > 0, &
+                                          state%network_interface_name(:, interface_index), string_valid)
+      state%network_interface_rx_bytes(interface_index) = &
+        int(max(0_int64, network%interfaces(interface_index)%rx_bytes), c_long_long)
+      state%network_interface_tx_bytes(interface_index) = &
+        int(max(0_int64, network%interfaces(interface_index)%tx_bytes), c_long_long)
+      state%network_interface_rx_packets(interface_index) = &
+        int(max(0_int64, network%interfaces(interface_index)%rx_packets), c_long_long)
+      state%network_interface_tx_packets(interface_index) = &
+        int(max(0_int64, network%interfaces(interface_index)%tx_packets), c_long_long)
+      call copy_fortran_string_to_c_chars(network%interfaces(interface_index)%state, &
+                                          len_trim(network%interfaces(interface_index)%state) > 0, &
+                                          state%network_interface_state(:, interface_index), string_valid)
+      state%network_interface_speed_mbps(interface_index) = &
+        int(max(0, network%interfaces(interface_index)%speed_mbps), c_int)
+      state%network_interface_mtu(interface_index) = int(max(0, network%interfaces(interface_index)%mtu), c_int)
+      state%network_interface_rx_bytes_per_sec(interface_index) = &
+        real(max(0.0_real64, network%interfaces(interface_index)%rx_bytes_per_sec), c_double)
+      state%network_interface_tx_bytes_per_sec(interface_index) = &
+        real(max(0.0_real64, network%interfaces(interface_index)%tx_bytes_per_sec), c_double)
+      state%network_interface_history_count(interface_index) = &
+        int(bounded_interface_history_count(network%interfaces(interface_index)%history_count), c_int)
+      call copy_interface_history_to_state(state, interface_index, network)
+    end do
+  end subroutine publish_network
+
   subroutine copy_process_history_to_state(state, process_index, process)
     type(collector_shared_state), intent(inout) :: state
     integer, intent(in) :: process_index
@@ -1025,6 +1230,22 @@ contains
         real(clamp_percent(process%mem_history(history_index)), c_double)
     end do
   end subroutine copy_process_history_to_state
+
+  subroutine copy_interface_history_to_state(state, interface_index, network)
+    type(collector_shared_state), intent(inout) :: state
+    integer, intent(in) :: interface_index
+    type(network_table), intent(in) :: network
+    integer :: history_count
+    integer :: history_index
+
+    history_count = bounded_interface_history_count(network%interfaces(interface_index)%history_count)
+    do history_index = 1, history_count
+      state%network_interface_rx_history(interface_index, history_index) = &
+        real(max(0.0_real64, network%interfaces(interface_index)%rx_history(history_index)), c_double)
+      state%network_interface_tx_history(interface_index, history_index) = &
+        real(max(0.0_real64, network%interfaces(interface_index)%tx_history(history_index)), c_double)
+    end do
+  end subroutine copy_interface_history_to_state
 
   subroutine publish_cpu_cores(state, core_cpus, core_count, warming_up)
     type(collector_shared_state), intent(inout) :: state

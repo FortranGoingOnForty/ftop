@@ -8,6 +8,7 @@ program test_platform
     create_platform, &
     load_average_info, &
     memory_info, &
+    network_table, &
     platform_backend, &
     system_uptime_info
   use ftop_proc_data, only : process_lookup_index, process_table
@@ -25,6 +26,7 @@ program test_platform
   type(load_average_info) :: load_average
   type(system_uptime_info) :: uptime
   type(process_table) :: processes
+  type(network_table) :: network
   integer :: cpu_count
   integer :: current_pid
   integer :: current_process_index
@@ -109,7 +111,45 @@ program test_platform
   if (.not. processes%items(current_process_index)%user_valid) error stop "current process user must be valid"
   if (len_trim(processes%items(current_process_index)%user) <= 0) error stop "current process user must not be empty"
 
+  network = backend%get_network_table()
+  if (.not. network%valid) error stop "network table must be valid"
+  if (.not. allocated(network%interfaces)) error stop "network interfaces must be allocated"
+  if (size(network%interfaces) <= 0) error stop "network table must include interfaces"
+  call validate_network_interfaces(network)
+
 contains
+
+  subroutine validate_network_interfaces(network)
+    type(network_table), intent(in) :: network
+    integer :: interface_index
+    logical :: have_valid_interface
+
+    have_valid_interface = .false.
+    do interface_index = 1, size(network%interfaces)
+      if (.not. network%interfaces(interface_index)%valid) cycle
+      have_valid_interface = .true.
+      if (len_trim(network%interfaces(interface_index)%name) <= 0) error stop "network interface name must not be empty"
+      if (starts_with(trim(network%interfaces(interface_index)%name), "lo")) then
+        error stop "network snapshot must filter loopback interfaces"
+      end if
+      if (network%interfaces(interface_index)%rx_bytes < 0) error stop "network rx bytes must not be negative"
+      if (network%interfaces(interface_index)%tx_bytes < 0) error stop "network tx bytes must not be negative"
+      if (network%interfaces(interface_index)%rx_packets < 0) error stop "network rx packets must not be negative"
+      if (network%interfaces(interface_index)%tx_packets < 0) error stop "network tx packets must not be negative"
+      if (network%interfaces(interface_index)%speed_mbps < 0) error stop "network speed must not be negative"
+      if (network%interfaces(interface_index)%mtu < 0) error stop "network mtu must not be negative"
+    end do
+    if (.not. have_valid_interface) error stop "network table must include valid interfaces"
+  end subroutine validate_network_interfaces
+
+  logical function starts_with(text, prefix) result(matches)
+    character(len=*), intent(in) :: text
+    character(len=*), intent(in) :: prefix
+
+    matches = .false.
+    if (len_trim(text) < len(prefix)) return
+    matches = text(:len(prefix)) == prefix
+  end function starts_with
 
   function wait_for_next_sample(backend, previous) result(sample)
     class(platform_backend), intent(in) :: backend

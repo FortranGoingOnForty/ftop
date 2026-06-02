@@ -2,6 +2,7 @@ program test_layout
   use ftop_layout, only : &
     LAYOUT_WIDGET_CPU, &
     LAYOUT_WIDGET_MEMORY, &
+    LAYOUT_WIDGET_NETWORK, &
     LAYOUT_WIDGET_PROCESS, &
     default_dashboard_layout, &
     distribute_weighted_space, &
@@ -41,9 +42,11 @@ contains
   subroutine test_widget_registry()
     call require(layout_widget_registered(LAYOUT_WIDGET_CPU), "cpu should be registered")
     call require(layout_widget_registered(LAYOUT_WIDGET_MEMORY), "memory should be registered")
+    call require(layout_widget_registered(LAYOUT_WIDGET_NETWORK), "network should be registered")
     call require(layout_widget_registered(LAYOUT_WIDGET_PROCESS), "process should be registered")
     call require(layout_widget_renderable(LAYOUT_WIDGET_CPU), "cpu should be renderable")
     call require(layout_widget_renderable(LAYOUT_WIDGET_MEMORY), "memory should be renderable")
+    call require(layout_widget_renderable(LAYOUT_WIDGET_NETWORK), "network should be renderable")
     call require(layout_widget_renderable(LAYOUT_WIDGET_PROCESS), "process should be renderable")
     call require(.not. layout_widget_registered("unknown"), "unknown widget should not be registered")
   end subroutine test_widget_registry
@@ -143,14 +146,18 @@ contains
     use ftop_layout, only : dashboard_layout
     type(dashboard_layout) :: layout
 
-    layout = default_dashboard_layout(80, 24)
+    layout = default_dashboard_layout(120, 24)
     call require(layout%cpu_panel%row == 3, "wide dashboard should place cpu in body")
     call require(layout%memory_panel%row == layout%cpu_panel%row, "wide dashboard should be one row")
     call require(layout%memory_panel%col > layout%cpu_panel%col, "wide dashboard should place memory right")
+    call require(layout%network_panel%row == layout%cpu_panel%row, "wide dashboard should place network in row")
+    call require(layout%network_panel%col > layout%memory_panel%col, "wide dashboard should place network right")
 
-    layout = default_dashboard_layout(60, 20)
+    layout = default_dashboard_layout(80, 24)
     call require(layout%memory_panel%row > layout%cpu_panel%row, "narrow dashboard should stack panels")
     call require(layout%memory_panel%col == layout%cpu_panel%col, "stacked panels should align")
+    call require(layout%network_panel%row > layout%memory_panel%row, "narrow dashboard should stack network")
+    call require(layout%network_panel%col == layout%cpu_panel%col, "stacked network should align")
   end subroutine test_dashboard_fallback_layout
 
   subroutine require(condition, message)

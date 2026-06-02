@@ -101,6 +101,7 @@ contains
     call require(all(snapshot%processes%items%history_count >= 0), "collector process history counts must not be negative")
     call require(all(snapshot%processes%items%history_count <= FTOP_COLLECTOR_HISTORY_CAPACITY), &
                  "collector process history counts must stay capped")
+    call validate_network_snapshot(snapshot)
 
     call require(metrics%stop(), "collector stop failed")
     call require(.not. metrics%running(), "collector must stop running")
@@ -228,6 +229,37 @@ contains
       call wait_poll_interval()
     end do
   end function wait_for_snapshot
+
+  subroutine validate_network_snapshot(snapshot)
+    type(collector_snapshot), intent(in) :: snapshot
+    integer :: interface_index
+    logical :: have_valid_interface
+
+    call require(snapshot%network%valid, "collector network table must be valid")
+    call require(allocated(snapshot%network%interfaces), "collector network interfaces must be allocated")
+    call require(size(snapshot%network%interfaces) > 0, "collector network table must include interfaces")
+
+    have_valid_interface = .false.
+    do interface_index = 1, size(snapshot%network%interfaces)
+      if (.not. snapshot%network%interfaces(interface_index)%valid) cycle
+      have_valid_interface = .true.
+      call require(len_trim(snapshot%network%interfaces(interface_index)%name) > 0, &
+                   "collector network interface name must not be empty")
+      call require(snapshot%network%interfaces(interface_index)%rx_bytes >= 0, &
+                   "collector network rx bytes must not be negative")
+      call require(snapshot%network%interfaces(interface_index)%tx_bytes >= 0, &
+                   "collector network tx bytes must not be negative")
+      call require(snapshot%network%interfaces(interface_index)%rx_bytes_per_sec >= 0.0_real64, &
+                   "collector network rx rate must not be negative")
+      call require(snapshot%network%interfaces(interface_index)%tx_bytes_per_sec >= 0.0_real64, &
+                   "collector network tx rate must not be negative")
+      call require(snapshot%network%interfaces(interface_index)%history_count > 0, &
+                   "collector network histories must include samples")
+      call require(snapshot%network%interfaces(interface_index)%history_count <= FTOP_COLLECTOR_HISTORY_CAPACITY, &
+                   "collector network history counts must stay capped")
+    end do
+    call require(have_valid_interface, "collector network table must include valid interfaces")
+  end subroutine validate_network_snapshot
 
   function wait_for_later_snapshot(metrics, previous_sample_count) result(snapshot)
     type(collector), intent(in) :: metrics

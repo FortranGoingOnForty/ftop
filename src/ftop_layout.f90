@@ -17,6 +17,7 @@ module ftop_layout
 
   character(len=*), parameter, public :: LAYOUT_WIDGET_CPU = "cpu"
   character(len=*), parameter, public :: LAYOUT_WIDGET_MEMORY = "memory"
+  character(len=*), parameter, public :: LAYOUT_WIDGET_NETWORK = "network"
   character(len=*), parameter, public :: LAYOUT_WIDGET_PROCESS = "process"
   integer, parameter, public :: LAYOUT_PROCESS_COLUMN_CAPACITY = 12
   integer, parameter, public :: LAYOUT_PROCESS_COLUMN_NAME_LEN = 16
@@ -51,6 +52,7 @@ module ftop_layout
     type(widget_rect) :: frame
     type(widget_rect) :: cpu_panel
     type(widget_rect) :: memory_panel
+    type(widget_rect) :: network_panel
     type(widget_rect) :: process_panel
     type(widget_rect) :: footer
   end type dashboard_layout
@@ -85,7 +87,7 @@ contains
     type(dashboard_layout) :: layout
     type(layout_grid) :: grid
 
-    grid = default_dashboard_grid(stacked=width < 72)
+    grid = default_dashboard_grid(stacked=width < 96)
     layout = dashboard_layout_from_grid(width, height, grid)
   end function default_dashboard_layout
 
@@ -112,6 +114,8 @@ contains
         layout%cpu_panel = assignments(item)%rect
       case (LAYOUT_WIDGET_MEMORY)
         layout%memory_panel = assignments(item)%rect
+      case (LAYOUT_WIDGET_NETWORK)
+        layout%network_panel = assignments(item)%rect
       case (LAYOUT_WIDGET_PROCESS)
         layout%process_panel = assignments(item)%rect
       end select
@@ -126,6 +130,7 @@ contains
     layout%frame = widget_rect(1, 1, max(0, width), max(0, height))
     layout%cpu_panel = widget_rect(0, 0, 0, 0)
     layout%memory_panel = widget_rect(0, 0, 0, 0)
+    layout%network_panel = widget_rect(0, 0, 0, 0)
     layout%process_panel = widget_rect(0, 0, 0, 0)
     layout%footer = widget_rect(max(1, height - 2), 3, max(0, width - 4), &
                                 min(2, max(0, height - 2)))
@@ -140,14 +145,16 @@ contains
     if (present(stacked)) use_stacked = stacked
 
     if (use_stacked) then
-      allocate(grid%rows(2))
-      grid%rows(1) = make_layout_row(1, [make_layout_column(LAYOUT_WIDGET_CPU, 1, 24, 6)])
-      grid%rows(2) = make_layout_row(1, [make_layout_column(LAYOUT_WIDGET_MEMORY, 1, 24, 6)])
+      allocate(grid%rows(3))
+      grid%rows(1) = make_layout_row(1, [make_layout_column(LAYOUT_WIDGET_CPU, 1, 24, 5)])
+      grid%rows(2) = make_layout_row(1, [make_layout_column(LAYOUT_WIDGET_MEMORY, 1, 24, 5)])
+      grid%rows(3) = make_layout_row(1, [make_layout_column(LAYOUT_WIDGET_NETWORK, 1, 24, 5)])
     else
       allocate(grid%rows(1))
       grid%rows(1) = make_layout_row(1, [ &
         make_layout_column(LAYOUT_WIDGET_CPU, 1, 28, 9), &
-        make_layout_column(LAYOUT_WIDGET_MEMORY, 1, 28, 8) &
+        make_layout_column(LAYOUT_WIDGET_MEMORY, 1, 28, 8), &
+        make_layout_column(LAYOUT_WIDGET_NETWORK, 1, 28, 8) &
       ])
     end if
   end function default_dashboard_grid
@@ -509,7 +516,7 @@ contains
     character(len=*), intent(in) :: widget
 
     select case (trim(widget))
-    case (LAYOUT_WIDGET_CPU, LAYOUT_WIDGET_MEMORY, LAYOUT_WIDGET_PROCESS)
+    case (LAYOUT_WIDGET_CPU, LAYOUT_WIDGET_MEMORY, LAYOUT_WIDGET_NETWORK, LAYOUT_WIDGET_PROCESS)
       registered = .true.
     case default
       registered = .false.
@@ -520,7 +527,7 @@ contains
     character(len=*), intent(in) :: widget
 
     select case (trim(widget))
-    case (LAYOUT_WIDGET_CPU, LAYOUT_WIDGET_MEMORY, LAYOUT_WIDGET_PROCESS)
+    case (LAYOUT_WIDGET_CPU, LAYOUT_WIDGET_MEMORY, LAYOUT_WIDGET_NETWORK, LAYOUT_WIDGET_PROCESS)
       renderable = .true.
     case default
       renderable = .false.

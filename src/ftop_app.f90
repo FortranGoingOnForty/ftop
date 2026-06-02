@@ -417,7 +417,7 @@ contains
     if (session%layout_loaded) then
       count = layout_focus_count(session%layout)
     else
-      fallback_grid = default_dashboard_grid(stacked=session%current%size%width < 72)
+      fallback_grid = default_dashboard_grid(stacked=session%current%size%width < 96)
       count = layout_focus_count(fallback_grid)
     end if
   end function current_focus_count
@@ -436,7 +436,7 @@ contains
     if (session%layout_loaded) then
       widget = layout_focus_widget(session%layout, index)
     else
-      fallback_grid = default_dashboard_grid(stacked=session%current%size%width < 72)
+        fallback_grid = default_dashboard_grid(stacked=session%current%size%width < 96)
       widget = layout_focus_widget(fallback_grid, index)
     end if
   end function focused_widget_name
@@ -482,7 +482,7 @@ contains
       if (session%layout_loaded) then
         widget = layout_focus_widget(session%layout, index)
       else
-        fallback_grid = default_dashboard_grid(stacked=session%current%size%width < 72)
+        fallback_grid = default_dashboard_grid(stacked=session%current%size%width < 96)
         widget = layout_focus_widget(fallback_grid, index)
       end if
       if (widget == name) then

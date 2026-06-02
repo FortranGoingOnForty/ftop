@@ -83,6 +83,44 @@ int ftop_linux_read_proc_uptime(char *buffer, size_t buffer_len, size_t *value_l
   return ftop_read_file_into_buffer("/proc/uptime", buffer, buffer_len, value_len, sys_errno);
 }
 
+int ftop_linux_read_proc_net_dev(char *buffer, size_t buffer_len, size_t *value_len, int *sys_errno) {
+  return ftop_read_file_into_buffer("/proc/net/dev", buffer, buffer_len, value_len, sys_errno);
+}
+
+static int ftop_linux_safe_net_name(const char *name) {
+  size_t i;
+
+  if (name == NULL || name[0] == '\0') return 0;
+  for (i = 0U; name[i] != '\0'; ++i) {
+    if (name[i] == '/') return 0;
+  }
+  return 1;
+}
+
+static int ftop_linux_allowed_net_field(const char *field) {
+  if (field == NULL) return 0;
+  return strcmp(field, "mtu") == 0 || strcmp(field, "operstate") == 0 || strcmp(field, "speed") == 0;
+}
+
+int ftop_linux_read_net_interface_file(
+    const char *interface_name, const char *field_name, char *buffer, size_t buffer_len,
+    size_t *value_len, int *sys_errno) {
+  char path[256];
+  int written;
+
+  if (!ftop_linux_safe_net_name(interface_name) || !ftop_linux_allowed_net_field(field_name)) {
+    if (sys_errno != NULL) *sys_errno = EINVAL;
+    return -1;
+  }
+
+  written = snprintf(path, sizeof(path), "/sys/class/net/%s/%s", interface_name, field_name);
+  if (written < 0 || (size_t)written >= sizeof(path)) {
+    if (sys_errno != NULL) *sys_errno = EOVERFLOW;
+    return -1;
+  }
+  return ftop_read_file_into_buffer(path, buffer, buffer_len, value_len, sys_errno);
+}
+
 static int ftop_linux_pid_from_name(const char *name, int *pid) {
   char *end;
   long value;
