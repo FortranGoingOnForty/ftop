@@ -291,26 +291,52 @@ contains
   subroutine sort_connections(connections, state)
     type(net_connection), intent(inout) :: connections(:)
     type(network_table_state), intent(in) :: state
-    type(net_connection) :: temp
-    integer :: i
-    integer :: j
 
-    do i = 1, size(connections) - 1
-      do j = i + 1, size(connections)
-        if (connections_out_of_order(connections(i), connections(j), state)) then
-          temp = connections(i)
-          connections(i) = connections(j)
-          connections(j) = temp
-        end if
-      end do
-    end do
+    if (size(connections) <= 1) return
+    call sort_connections_range(connections, state, 1, size(connections))
   end subroutine sort_connections
 
-  logical function connections_out_of_order(left, right, state) result(out_of_order)
+  recursive subroutine sort_connections_range(connections, state, lower, upper)
+    type(net_connection), intent(inout) :: connections(:)
+    type(network_table_state), intent(in) :: state
+    integer, intent(in) :: lower
+    integer, intent(in) :: upper
+    type(net_connection) :: pivot
+    type(net_connection) :: temp
+    integer :: left_index
+    integer :: right_index
+
+    if (lower >= upper) return
+
+    left_index = lower
+    right_index = upper
+    pivot = connections(lower + (upper - lower) / 2)
+
+    do
+      do while (compare_connections(connections(left_index), pivot, state) < 0)
+        left_index = left_index + 1
+      end do
+      do while (compare_connections(connections(right_index), pivot, state) > 0)
+        right_index = right_index - 1
+      end do
+      if (left_index <= right_index) then
+        temp = connections(left_index)
+        connections(left_index) = connections(right_index)
+        connections(right_index) = temp
+        left_index = left_index + 1
+        right_index = right_index - 1
+      end if
+      if (left_index > right_index) exit
+    end do
+
+    if (lower < right_index) call sort_connections_range(connections, state, lower, right_index)
+    if (left_index < upper) call sort_connections_range(connections, state, left_index, upper)
+  end subroutine sort_connections_range
+
+  integer function compare_connections(left, right, state) result(order)
     type(net_connection), intent(in) :: left
     type(net_connection), intent(in) :: right
     type(network_table_state), intent(in) :: state
-    integer :: order
 
     select case (state%sort_key)
     case (NETWORK_SORT_PROTOCOL)
@@ -329,13 +355,9 @@ contains
       order = compare_text(trim(left%state), trim(right%state))
     end select
     if (order == 0) order = compare_text(endpoint_text(left%local_addr, left%local_port, left%protocol), &
-                                         endpoint_text(right%local_addr, right%local_port, right%protocol))
-    if (state%sort_direction == TABLE_SORT_DESCENDING) then
-      out_of_order = order < 0
-    else
-      out_of_order = order > 0
-    end if
-  end function connections_out_of_order
+                                          endpoint_text(right%local_addr, right%local_port, right%protocol))
+    if (state%sort_direction == TABLE_SORT_DESCENDING) order = -order
+  end function compare_connections
 
   integer function compare_text(left, right) result(order)
     character(len=*), intent(in) :: left

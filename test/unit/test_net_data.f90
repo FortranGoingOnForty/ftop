@@ -10,6 +10,7 @@ program test_net_data
 
   call test_linux_proc_net_dev_parser()
   call test_linux_proc_net_connection_parser()
+  call test_large_linux_proc_net_connection_parser()
   call test_interface_rates()
   call test_process_bandwidth_rates()
   call test_interface_histories()
@@ -111,6 +112,20 @@ contains
     call require(trim(connections(5)%local_addr) == "::", "network connection parser udp6 wildcard address mismatch")
     call require(trim(connections(5)%state) == "OPEN", "network connection parser should label udp6 state")
   end subroutine test_linux_proc_net_connection_parser
+
+  subroutine test_large_linux_proc_net_connection_parser()
+    integer, parameter :: connection_count = 2048
+    type(net_connection), allocatable :: connections(:)
+
+    connections = parse_linux_proc_net_connections(linux_proc_net_tcp_text(connection_count), "", "", "")
+    call require(size(connections) == connection_count, "network parser should handle large connection tables")
+    call require(all(connections%valid), "large connection table rows should be valid")
+    call require(trim(connections(connection_count)%protocol) == "tcp", "large connection parser protocol mismatch")
+    call require(connections(connection_count)%local_port == 10000 + mod(connection_count, 40000), &
+                 "large connection parser local port mismatch")
+    call require(connections(connection_count)%inode == 500000_int64 + int(connection_count, int64), &
+                 "large connection parser inode mismatch")
+  end subroutine test_large_linux_proc_net_connection_parser
 
   subroutine test_interface_rates()
     type(network_table) :: previous
@@ -295,6 +310,21 @@ contains
       write(table%processes(index_value)%process_name, '(A, I0)') "proc", index_value
     end do
   end function sample_process_bandwidth_table
+
+  function linux_proc_net_tcp_text(connection_count) result(text)
+    integer, intent(in) :: connection_count
+    character(len=:), allocatable :: text
+    character(len=192) :: line
+    integer :: row
+
+    text = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode" // &
+           new_line("a")
+    do row = 1, connection_count
+      write(line, '(" ", I0, ": 0100007F:", Z4.4, " 0200000A:01BB 01 00000000:00000000 00:00000000 00000000 1000 0 ", I0)') &
+        row - 1, 10000 + mod(row, 40000), 500000 + row
+      text = text // trim(line) // new_line("a")
+    end do
+  end function linux_proc_net_tcp_text
 
   logical function near(left, right) result(matches)
     real(real64), intent(in) :: left

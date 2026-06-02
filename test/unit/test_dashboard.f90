@@ -16,6 +16,7 @@ program test_dashboard
   call test_dashboard_renders_metrics()
   call test_dashboard_renders_zoomed_widget()
   call test_dashboard_renders_zoomed_network_table()
+  call test_dashboard_handles_large_network_table()
   call test_dashboard_renders_network_process_bandwidth()
   call test_tiny_dashboard()
 
@@ -117,6 +118,26 @@ contains
     call require(network_state%total_row_count == 3, "network table state should track total rows")
     call require(network_state%viewport_rows > 0, "network table state should track viewport rows")
   end subroutine test_dashboard_renders_zoomed_network_table
+
+  subroutine test_dashboard_handles_large_network_table()
+    integer, parameter :: connection_count = 2048
+    type(screen_buffer) :: buffer
+    type(collector_snapshot) :: snapshot
+    type(network_table_state) :: network_state
+    character(len=:), allocatable :: text
+
+    snapshot = large_network_table_snapshot(connection_count)
+    buffer = allocate_screen(100, 28)
+    call render_dashboard(buffer, snapshot, 1000, 7, "network-test", focused_widget="network", zoomed=.true., &
+                          network_state=network_state)
+    text = buffer_text(buffer)
+
+    call require(index(text, "Connections 2048") > 0, "zoomed network should summarize large connection tables")
+    call require(index(text, "PROTO") > 0, "zoomed network should render a large connection table")
+    call require(network_state%row_count == connection_count, "network table state should track large visible rows")
+    call require(network_state%total_row_count == connection_count, "network table state should track large total rows")
+    call require(network_state%viewport_rows > 0, "network table state should keep a viewport for large tables")
+  end subroutine test_dashboard_handles_large_network_table
 
   subroutine test_dashboard_renders_network_process_bandwidth()
     type(screen_buffer) :: buffer
@@ -283,6 +304,34 @@ contains
     snapshot%network%connections(3)%pid = 5353
     snapshot%network%connections(3)%process_name = "dnsmasq"
   end function network_table_snapshot
+
+  function large_network_table_snapshot(connection_count) result(snapshot)
+    integer, intent(in) :: connection_count
+    type(collector_snapshot) :: snapshot
+    integer :: connection_index
+
+    snapshot = sample_snapshot()
+    if (allocated(snapshot%network%connections)) deallocate(snapshot%network%connections)
+    allocate(snapshot%network%connections(connection_count))
+
+    do connection_index = 1, connection_count
+      snapshot%network%connections(connection_index)%valid = .true.
+      if (mod(connection_index, 2) == 0) then
+        snapshot%network%connections(connection_index)%protocol = "tcp"
+        snapshot%network%connections(connection_index)%remote_port = 443
+        snapshot%network%connections(connection_index)%state = "ESTABLISHED"
+      else
+        snapshot%network%connections(connection_index)%protocol = "udp"
+        snapshot%network%connections(connection_index)%remote_port = 53
+        snapshot%network%connections(connection_index)%state = "OPEN"
+      end if
+      snapshot%network%connections(connection_index)%local_addr = "127.0.0.1"
+      snapshot%network%connections(connection_index)%local_port = 10000 + mod(connection_index, 40000)
+      snapshot%network%connections(connection_index)%remote_addr = "10.0.0.2"
+      snapshot%network%connections(connection_index)%pid = 1000 + connection_index
+      write(snapshot%network%connections(connection_index)%process_name, '("proc", I0)') connection_index
+    end do
+  end function large_network_table_snapshot
 
   function buffer_text(buffer) result(text)
     type(screen_buffer), intent(in) :: buffer
