@@ -98,6 +98,7 @@ module ftop_app
   integer, parameter :: DEFAULT_REFRESH_MS = 1000
   integer, parameter :: MIN_REFRESH_MS = 100
   integer, parameter :: MAX_REFRESH_MS = 60000
+  integer, parameter :: DOUBLE_CLICK_MS = 500
   integer, parameter :: PROCESS_SIGNAL_CHOICE_COUNT = 7
   character(len=*), parameter :: DEBUG_LOG_PATH = "ftop-debug.log"
 
@@ -116,6 +117,8 @@ module ftop_app
     integer :: focus_index = 1
     integer :: last_render_count = 0
     integer :: last_refresh_count = 0
+    integer :: last_process_click_count = 0
+    integer :: last_process_click_row = 0
     integer :: clock_rate = 0
     real :: render_fps = 0.0
     logical :: guard_bound = .false.
@@ -544,30 +547,44 @@ contains
     type(terminal_session), intent(inout) :: session
     type(sgr_mouse_event), intent(in) :: mouse
     type(widget_rect) :: panel
+    logical :: double_clicked
+    logical :: node_toggled
     logical :: selected
     integer :: scroll_step
 
     handled = .false.
     panel = current_process_panel_rect(session)
     if (.not. point_in_rect(panel, mouse%row, mouse%col)) return
+    node_toggled = .false.
 
     if (mouse_scroll_up(mouse)) then
       scroll_step = -max(1, session%process_state%viewport_rows / 3)
+      call clear_process_click(session)
       call focus_widget_named(session, "process")
       call process_table_scroll_delta(session%process_state, scroll_step)
     else if (mouse_scroll_down(mouse)) then
       scroll_step = max(1, session%process_state%viewport_rows / 3)
+      call clear_process_click(session)
       call focus_widget_named(session, "process")
       call process_table_scroll_delta(session%process_state, scroll_step)
     else if (mouse_left_press(mouse)) then
+      double_clicked = process_mouse_double_click(session, mouse)
       call focus_widget_named(session, "process")
       if (.not. process_table_sort_at(session%process_state, panel, mouse%row, mouse%col)) then
         selected = process_table_select_at(session%process_state, panel, mouse%row, mouse%col)
         if (.not. selected) then
           handled = .true.
+          call clear_process_click(session)
           call set_status(session, "focus process")
           return
         end if
+        if (double_clicked) then
+          node_toggled = process_table_toggle_selected_node(session%process_state)
+          if (node_toggled) call clear_process_click(session)
+        end if
+        if (.not. node_toggled) call remember_process_click(session, mouse)
+      else
+        call clear_process_click(session)
       end if
     else
       return
@@ -576,6 +593,40 @@ contains
     handled = .true.
     call set_status(session, process_table_status(session%process_state))
   end function handle_process_mouse_event
+
+  logical function process_mouse_double_click(session, mouse) result(double_clicked)
+    type(terminal_session), intent(in) :: session
+    type(sgr_mouse_event), intent(in) :: mouse
+    integer :: elapsed_ms
+    integer :: now_count
+    integer :: rate
+
+    double_clicked = .false.
+    if (session%last_process_click_count <= 0) return
+    if (session%last_process_click_row /= mouse%row) return
+
+    call system_clock(now_count, rate)
+    if (rate <= 0) rate = session%clock_rate
+    if (rate <= 0) return
+
+    elapsed_ms = int((real(now_count - session%last_process_click_count) / real(rate)) * 1000.0)
+    double_clicked = elapsed_ms >= 0 .and. elapsed_ms <= DOUBLE_CLICK_MS
+  end function process_mouse_double_click
+
+  subroutine remember_process_click(session, mouse)
+    type(terminal_session), intent(inout) :: session
+    type(sgr_mouse_event), intent(in) :: mouse
+
+    session%last_process_click_row = mouse%row
+    call system_clock(session%last_process_click_count)
+  end subroutine remember_process_click
+
+  subroutine clear_process_click(session)
+    type(terminal_session), intent(inout) :: session
+
+    session%last_process_click_count = 0
+    session%last_process_click_row = 0
+  end subroutine clear_process_click
 
   subroutine handle_key_event(session, event)
     type(terminal_session), intent(inout) :: session
