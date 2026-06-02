@@ -5,6 +5,7 @@
 #include <mach/host_info.h>
 #include <mach/mach_host.h>
 #include <mach/mach_init.h>
+#include <mach/mach_time.h>
 #include <mach/processor_info.h>
 #include <mach/vm_map.h>
 #include <ifaddrs.h>
@@ -691,9 +692,29 @@ static void ftop_macos_copy_process_command(char *destination, const char *sourc
   destination[i] = '\0';
 }
 
+static uint64_t ftop_macos_absolute_to_nanoseconds(uint64_t value) {
+  static mach_timebase_info_data_t timebase;
+  static int initialized;
+  long double nanoseconds;
+
+  if (!initialized) {
+    if (mach_timebase_info(&timebase) != KERN_SUCCESS || timebase.denom == 0U) {
+      timebase.numer = 1U;
+      timebase.denom = 1U;
+    }
+    initialized = 1;
+  }
+
+  nanoseconds = ((long double)value * (long double)timebase.numer) / (long double)timebase.denom;
+  if (nanoseconds <= 0.0L) return 0ULL;
+  if (nanoseconds >= (long double)UINT64_MAX) return UINT64_MAX;
+  return (uint64_t)nanoseconds;
+}
+
 static void ftop_macos_fill_task_info(pid_t pid, struct ftop_macos_process_info *process) {
   struct proc_taskinfo task;
   uint64_t total_time;
+  uint64_t total_time_ns;
   int rc;
 
   if (pid <= 0 || process == NULL) return;
@@ -706,7 +727,8 @@ static void ftop_macos_fill_task_info(pid_t pid, struct ftop_macos_process_info 
   process->mem_virt_bytes = task.pti_virtual_size > 0 ? (long long)task.pti_virtual_size : 0;
   process->threads = task.pti_threadnum > 0 ? (int)task.pti_threadnum : 0;
   total_time = task.pti_total_user + task.pti_total_system;
-  process->cpu_time = total_time > 0 ? (long long)(total_time / 1000000ULL) : 0;
+  total_time_ns = ftop_macos_absolute_to_nanoseconds(total_time);
+  process->cpu_time = total_time_ns > 0 ? (long long)(total_time_ns / 1000000ULL) : 0;
 }
 
 static int ftop_macos_fill_process_info(pid_t pid, struct ftop_macos_process_info *process) {

@@ -18,7 +18,25 @@ static void sleep_milliseconds(int milliseconds) {
   }
 }
 
-int ftop_process_stress_spawn(int requested, int *pids, int capacity, int *spawned, int *sys_errno) {
+static void reset_child_signals(void) {
+  signal(SIGTERM, SIG_DFL);
+  signal(SIGINT, SIG_DFL);
+  signal(SIGCHLD, SIG_DFL);
+}
+
+static void run_sleeping_child(void) {
+  reset_child_signals();
+  for (;;) sleep(60);
+}
+
+static void run_busy_child(void) {
+  volatile unsigned long long value = 1ULL;
+
+  reset_child_signals();
+  for (;;) value = value * 1103515245ULL + 12345ULL;
+}
+
+static int spawn_children(int requested, int *pids, int capacity, int *spawned, int *sys_errno, int busy) {
   int index;
 
   if (spawned != 0) *spawned = 0;
@@ -36,10 +54,11 @@ int ftop_process_stress_spawn(int requested, int *pids, int capacity, int *spawn
     }
 
     if (pid == 0) {
-      signal(SIGTERM, SIG_DFL);
-      signal(SIGINT, SIG_DFL);
-      signal(SIGCHLD, SIG_DFL);
-      for (;;) sleep(60);
+      if (busy) {
+        run_busy_child();
+      } else {
+        run_sleeping_child();
+      }
     }
 
     pids[index] = (int)pid;
@@ -51,6 +70,14 @@ int ftop_process_stress_spawn(int requested, int *pids, int capacity, int *spawn
     return -1;
   }
   return 0;
+}
+
+int ftop_process_stress_spawn(int requested, int *pids, int capacity, int *spawned, int *sys_errno) {
+  return spawn_children(requested, pids, capacity, spawned, sys_errno, 0);
+}
+
+int ftop_process_stress_spawn_busy(int requested, int *pids, int capacity, int *spawned, int *sys_errno) {
+  return spawn_children(requested, pids, capacity, spawned, sys_errno, 1);
 }
 
 int ftop_process_stress_cleanup(const int *pids, int count, int *sys_errno) {

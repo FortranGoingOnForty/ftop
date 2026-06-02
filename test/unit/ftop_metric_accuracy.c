@@ -1,6 +1,7 @@
 #include <errno.h>
 #include <ctype.h>
 #include <math.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,6 +9,8 @@
 #if defined(FTOP_PLATFORM_freebsd) || defined(FTOP_PLATFORM_macos)
 #include <sys/sysctl.h>
 #endif
+
+#define FTOP_ACCURACY_PROCESS_CAPACITY 8
 
 static int read_command_output(const char *command, char *buffer, size_t capacity) {
   FILE *pipe;
@@ -57,6 +60,21 @@ static int copy_line(const char *line_start, char *line, size_t capacity) {
   }
   line[len] = '\0';
   return len > 0U ? 0 : -1;
+}
+
+static int append_command(char *command, size_t capacity, size_t *used, const char *format, ...) {
+  int written;
+  va_list args;
+
+  if (command == NULL || used == NULL || format == NULL || *used >= capacity) return -1;
+
+  va_start(args, format);
+  written = vsnprintf(command + *used, capacity - *used, format, args);
+  va_end(args);
+  if (written < 0 || (size_t)written >= capacity - *used) return -1;
+
+  *used += (size_t)written;
+  return 0;
 }
 
 static int line_first_pid_matches(const char *line_start, const char *line_end, int pid) {
@@ -302,7 +320,53 @@ static int parse_macos_process_line(const char *line, double *cpu_percent, doubl
   *mem_percent = 100.0 * (double)mem_bytes / (double)total_bytes;
   return 0;
 }
+
+static int parse_macos_ps_process_line(const char *line, double *cpu_percent, double *mem_percent) {
+  int pid;
+  long long rss_kb;
+  long long total_bytes;
+
+  if (line == NULL || cpu_percent == NULL || mem_percent == NULL) return -1;
+  if (sscanf(line, " %d %lf %lld", &pid, cpu_percent, &rss_kb) != 3) return -1;
+  if (rss_kb < 0) return -1;
+  if (macos_total_memory(&total_bytes) != 0 || total_bytes <= 0) return -1;
+  *mem_percent = 100.0 * (double)(rss_kb * 1024LL) / (double)total_bytes;
+  return 0;
+}
 #endif
+
+static int build_processes_command(const int *pids, int count, char *command, size_t capacity) {
+  int index;
+  size_t used;
+
+  if (pids == NULL || command == NULL || capacity == 0U || count <= 0 || count > FTOP_ACCURACY_PROCESS_CAPACITY) {
+    return -1;
+  }
+  for (index = 0; index < count; ++index) {
+    if (pids[index] <= 0) return -1;
+  }
+
+  command[0] = '\0';
+  used = 0U;
+#if defined(FTOP_PLATFORM_linux)
+  if (append_command(command, capacity, &used, "top -bn2 -d 1 -p ") != 0) return -1;
+  for (index = 0; index < count; ++index) {
+    if (append_command(command, capacity, &used, "%s%d", index == 0 ? "" : ",", pids[index]) != 0) return -1;
+  }
+#elif defined(FTOP_PLATFORM_freebsd)
+  (void)pids;
+  if (append_command(command, capacity, &used, "top -b -d 2 -s 1 -o cpu 128") != 0) return -1;
+#elif defined(FTOP_PLATFORM_macos)
+  if (append_command(command, capacity, &used, "sleep 1; ps -p ") != 0) return -1;
+  for (index = 0; index < count; ++index) {
+    if (append_command(command, capacity, &used, "%s%d", index == 0 ? "" : ",", pids[index]) != 0) return -1;
+  }
+  if (append_command(command, capacity, &used, " -o pid=,pcpu=,rss=") != 0) return -1;
+#else
+  return -1;
+#endif
+  return 0;
+}
 
 int ftop_accuracy_reference_cpu(double *usage_percent, int *sys_errno) {
   char output[65536];
@@ -388,4 +452,58 @@ int ftop_accuracy_reference_process(int pid, double *cpu_percent, double *mem_pe
 #endif
   if (rc != 0) *sys_errno = errno != 0 ? errno : EINVAL;
   return rc;
+}
+
+int ftop_accuracy_reference_processes(const int *pids, int count, double *cpu_percents, double *mem_percents,
+                                      int *matched_count, int *sys_errno) {
+  char command[512];
+  char line[512];
+  char output[131072];
+  int index;
+  int rc;
+
+  if (matched_count != NULL) *matched_count = 0;
+  if (sys_errno != NULL) *sys_errno = 0;
+  if (pids == NULL || cpu_percents == NULL || mem_percents == NULL || matched_count == NULL || sys_errno == NULL ||
+      count <= 0 || count > FTOP_ACCURACY_PROCESS_CAPACITY) {
+    if (sys_errno != NULL) *sys_errno = EINVAL;
+    return -1;
+  }
+
+  for (index = 0; index < count; ++index) {
+    cpu_percents[index] = 0.0;
+    mem_percents[index] = 0.0;
+  }
+
+  rc = build_processes_command(pids, count, command, sizeof(command));
+  if (rc != 0) {
+    *sys_errno = EINVAL;
+    return -1;
+  }
+
+  rc = read_command_output(command, output, sizeof(output));
+  if (rc != 0) {
+    *sys_errno = errno != 0 ? errno : EINVAL;
+    return -1;
+  }
+
+  for (index = 0; index < count; ++index) {
+    rc = last_process_line(output, pids[index], line, sizeof(line));
+#if defined(FTOP_PLATFORM_linux)
+    if (rc == 0) rc = parse_linux_process_line(line, &cpu_percents[index], &mem_percents[index]);
+#elif defined(FTOP_PLATFORM_freebsd)
+    if (rc == 0) rc = parse_freebsd_process_line(line, &cpu_percents[index], &mem_percents[index]);
+#elif defined(FTOP_PLATFORM_macos)
+    if (rc == 0) rc = parse_macos_ps_process_line(line, &cpu_percents[index], &mem_percents[index]);
+#else
+    rc = -1;
+#endif
+    if (rc != 0) {
+      *sys_errno = errno != 0 ? errno : EINVAL;
+      return -1;
+    }
+    *matched_count += 1;
+  }
+
+  return 0;
 }
