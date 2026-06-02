@@ -130,6 +130,17 @@ contains
     filter_match = wait_for_string(filter_session, "focus process", 2500)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not focus process before filter"
 
+    filter_match = wait_for_string(filter_session, "PID", 2500)
+    if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "process table did not publish rows before signal prompt"
+
+    if (.not. send_text(filter_session, "k")) error stop "failed to open process signal prompt"
+    filter_match = wait_for_string(filter_session, "signal SIGTERM pid", 2500)
+    if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not open process signal prompt"
+
+    if (.not. send_text(filter_session, achar(27) // achar(27))) error stop "failed to cancel process signal prompt"
+    filter_match = wait_for_string(filter_session, "signal cancelled", 2500)
+    if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not cancel process signal prompt"
+
     if (.not. send_text(filter_session, "/ftop")) error stop "failed to send process filter"
     filter_match = wait_for_string(filter_session, "filter ftop", 2500)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not enter process filter"

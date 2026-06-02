@@ -38,6 +38,7 @@ module ftop_process_table
   integer, parameter :: PROCESS_SORT_KEY_COUNT = 6
   integer, parameter :: PROCESS_COLLAPSED_CAPACITY = 256
   integer, parameter, public :: PROCESS_FILTER_LEN = 96
+  integer, parameter :: PROCESS_SIGNAL_NAME_LEN = 16
 
   type, public :: process_table_state
     integer :: selected_row = 1
@@ -53,6 +54,11 @@ module ftop_process_table
     integer :: collapsed_count = 0
     integer :: collapsed_pid(PROCESS_COLLAPSED_CAPACITY) = 0
     integer(int64) :: collapsed_start_time(PROCESS_COLLAPSED_CAPACITY) = 0_int64
+    logical :: signal_pending = .false.
+    integer :: signal_pid = 0
+    integer(int64) :: signal_start_time = 0_int64
+    integer :: signal_number = 0
+    character(len=PROCESS_SIGNAL_NAME_LEN) :: signal_name = ""
     integer :: filter_length = 0
     character(len=PROCESS_FILTER_LEN) :: filter_text = ""
     logical :: filter_active = .false.
@@ -61,12 +67,15 @@ module ftop_process_table
 
   public :: process_panel_min_size
   public :: process_table_append_filter_text
+  public :: process_table_begin_signal
   public :: process_table_begin_filter
+  public :: process_table_cancel_signal
   public :: process_table_clear_filter
   public :: process_table_cycle_sort_key
   public :: process_table_delete_filter_char
   public :: process_table_page_delta
   public :: process_table_select_delta
+  public :: process_table_signal_status
   public :: process_table_sort_direction_label
   public :: process_table_sort_key_label
   public :: process_table_status
@@ -569,6 +578,33 @@ contains
     state%scroll_row = 1
   end subroutine process_table_delete_filter_char
 
+  logical function process_table_begin_signal(state, signal_number, signal_name) result(started)
+    type(process_table_state), intent(inout) :: state
+    integer, intent(in) :: signal_number
+    character(len=*), intent(in) :: signal_name
+
+    started = .false.
+    if (state%selected_pid <= 0) return
+    if (signal_number <= 0) return
+
+    state%signal_pending = .true.
+    state%signal_pid = state%selected_pid
+    state%signal_start_time = state%selected_start_time
+    state%signal_number = signal_number
+    state%signal_name = signal_name
+    started = .true.
+  end function process_table_begin_signal
+
+  subroutine process_table_cancel_signal(state)
+    type(process_table_state), intent(inout) :: state
+
+    state%signal_pending = .false.
+    state%signal_pid = 0
+    state%signal_start_time = 0_int64
+    state%signal_number = 0
+    state%signal_name = ""
+  end subroutine process_table_cancel_signal
+
   subroutine process_table_select_delta(state, delta)
     type(process_table_state), intent(inout) :: state
     integer, intent(in) :: delta
@@ -651,11 +687,24 @@ contains
     if (state%tree_view .and. state%collapsed_count > 0) then
       text = text // " collapsed " // integer_text(max(0, state%collapsed_count))
     end if
+    if (state%signal_pending) text = text // " " // process_table_signal_status(state)
     if (process_table_filter_visible(state)) then
       text = text // " filter " // process_table_filter_text(state) // " showing " // &
              integer_text(max(0, state%row_count)) // "/" // integer_text(max(0, state%total_row_count))
     end if
   end function process_table_status
+
+  function process_table_signal_status(state) result(text)
+    type(process_table_state), intent(in) :: state
+    character(len=:), allocatable :: text
+
+    if (state%signal_pending) then
+      text = "signal " // process_signal_name_text(state) // " pid " // integer_text(max(0, state%signal_pid)) // &
+             " enter to send escape to cancel"
+    else
+      text = "signal inactive"
+    end if
+  end function process_table_signal_status
 
   function process_table_sort_key_label(state) result(label)
     type(process_table_state), intent(in) :: state
@@ -687,6 +736,17 @@ contains
       label = "asc"
     end if
   end function process_table_sort_direction_label
+
+  function process_signal_name_text(state) result(text)
+    type(process_table_state), intent(in) :: state
+    character(len=:), allocatable :: text
+
+    if (len_trim(state%signal_name) > 0) then
+      text = trim(state%signal_name)
+    else
+      text = "signal " // integer_text(max(0, state%signal_number))
+    end if
+  end function process_signal_name_text
 
   subroutine normalize_process_table_state(state, row_count, viewport_rows)
     type(process_table_state), intent(inout) :: state

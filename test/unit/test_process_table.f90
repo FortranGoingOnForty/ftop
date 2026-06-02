@@ -6,9 +6,11 @@ program test_process_table
   use ftop_color, only : COLOR_UI_ACCENT, COLOR_UI_BORDER, COLOR_UI_DIM, COLOR_UI_PANEL, style_from_rgb
   use ftop_proc_data, only : PROCESS_SORT_COMMAND, PROCESS_SORT_USER
   use ftop_process_table, only : process_table_append_filter_text, process_table_begin_filter, &
-                                 process_table_clear_filter, process_table_cycle_sort_key, &
+                                 process_table_begin_signal, process_table_cancel_signal, process_table_clear_filter, &
+                                 process_table_cycle_sort_key, &
                                  process_table_delete_filter_char, process_table_page_delta, &
-                                 process_table_select_delta, process_table_state, process_table_status, &
+                                 process_table_select_delta, process_table_signal_status, process_table_state, &
+                                 process_table_status, &
                                  process_table_toggle_selected_node, process_table_toggle_sort_direction, render_process_panel
   use ftop_table, only : TABLE_SORT_DESCENDING
   use ftop_widgets, only : widget_rect
@@ -119,6 +121,15 @@ contains
     call process_table_clear_filter(local_state)
     call require(.not. local_state%filter_active, "process table filter clear should leave edit mode")
     call require(local_state%filter_length == 0, "process table filter clear should remove text")
+
+    local_state%selected_pid = 4242
+    call require(process_table_begin_signal(local_state, 15, "SIGTERM"), &
+                 "process table should arm selected process signal")
+    call require(local_state%signal_pending, "process table signal should be pending")
+    call require(index(process_table_signal_status(local_state), "SIGTERM pid 4242") > 0, &
+                 "process table signal status should include signal and pid")
+    call process_table_cancel_signal(local_state)
+    call require(.not. local_state%signal_pending, "process table signal cancel should clear pending signal")
   end subroutine test_process_state_updates
 
   function sample_snapshot() result(snapshot)

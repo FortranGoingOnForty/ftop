@@ -41,12 +41,15 @@ module ftop_app
   use ftop_process_table, only : &
     process_table_append_filter_text, &
     process_table_begin_filter, &
+    process_table_begin_signal, &
+    process_table_cancel_signal, &
     process_table_clear_filter, &
     process_table_cycle_sort_key, &
     process_table_delete_filter_char, &
     process_table_finish_filter, &
     process_table_page_delta, &
     process_table_select_delta, &
+    process_table_signal_status, &
     process_table_state, &
     process_table_status, &
     process_table_toggle_selected_node, &
@@ -59,7 +62,9 @@ module ftop_app
     FTOP_SIGNAL_TSTP, &
     FTOP_SIGNAL_WINCH, &
     terminal_signal_clear => ftop_signal_clear, &
+    terminal_kill => ftop_kill, &
     terminal_signal_pending => ftop_signal_check, &
+    terminal_signal_number => ftop_signal_number, &
     terminal_signal_setup => ftop_signal_setup, &
     terminal_signal_suspend_self => ftop_signal_suspend_self
   use ftop_terminal_io, only : &
@@ -500,6 +505,11 @@ contains
 
     handled = .false.
     if (.not. process_widget_focused(session)) return
+    if (session%process_state%signal_pending) then
+      handled = .true.
+      call set_status(session, process_table_signal_status(session%process_state))
+      return
+    end if
     if (session%process_state%filter_active) then
       call process_table_append_filter_text(session%process_state, text)
       handled = .true.
@@ -509,6 +519,8 @@ contains
     select case (text)
     case ("/")
       call process_table_begin_filter(session%process_state)
+    case ("k")
+      call begin_process_signal(session)
     case ("s")
       call process_table_toggle_sort_direction(session%process_state)
     case ("t")
@@ -527,6 +539,19 @@ contains
 
     handled = .false.
     if (.not. process_widget_focused(session)) return
+    if (session%process_state%signal_pending) then
+      select case (key_name)
+      case (FGOF_KEY_ENTER)
+        call send_pending_process_signal(session)
+      case (FGOF_KEY_ESCAPE)
+        call process_table_cancel_signal(session%process_state)
+        call set_status(session, "signal cancelled")
+      case default
+        call set_status(session, process_table_signal_status(session%process_state))
+      end select
+      handled = .true.
+      return
+    end if
     select case (key_name)
     case (FGOF_KEY_BACKSPACE, FGOF_KEY_DELETE)
       if (.not. session%process_state%filter_active) return
@@ -569,6 +594,59 @@ contains
 
     focused = focused_widget_name(session) == "process"
   end function process_widget_focused
+
+  subroutine begin_process_signal(session)
+    type(terminal_session), intent(inout) :: session
+    integer :: signal_number
+    logical :: started
+
+    signal_number = terminal_signal_number(FTOP_SIGNAL_TERM)
+    started = process_table_begin_signal(session%process_state, signal_number, "SIGTERM")
+    if (started) then
+      call set_status(session, process_table_signal_status(session%process_state))
+    else
+      call set_status(session, "no process selected")
+    end if
+  end subroutine begin_process_signal
+
+  subroutine send_pending_process_signal(session)
+    type(terminal_session), intent(inout) :: session
+    character(len=:), allocatable :: signal_name
+    integer :: error_code
+    integer :: pid
+    integer :: signal_number
+
+    if (.not. session%process_state%signal_pending) return
+    pid = session%process_state%signal_pid
+    signal_number = session%process_state%signal_number
+    signal_name = trim(session%process_state%signal_name)
+    if (len(signal_name) <= 0) signal_name = "signal " // integer_text(max(0, signal_number))
+
+    if (terminal_kill(pid, signal_number, error_code)) then
+      call process_table_cancel_signal(session%process_state)
+      call set_status(session, "sent " // signal_name // " to pid " // integer_text(max(0, pid)))
+    else
+      call process_table_cancel_signal(session%process_state)
+      call set_status(session, process_signal_error_status(pid, signal_name, error_code))
+    end if
+  end subroutine send_pending_process_signal
+
+  function process_signal_error_status(pid, signal_name, error_code) result(message)
+    integer, intent(in) :: pid
+    character(len=*), intent(in) :: signal_name
+    integer, intent(in) :: error_code
+    character(len=:), allocatable :: message
+
+    select case (error_code)
+    case (1)
+      message = "permission denied sending " // signal_name // " to pid " // integer_text(max(0, pid))
+    case (3)
+      message = "process not found for pid " // integer_text(max(0, pid))
+    case default
+      message = "failed sending " // signal_name // " to pid " // integer_text(max(0, pid)) // &
+                " errno=" // integer_text(error_code)
+    end select
+  end function process_signal_error_status
 
   subroutine handle_pending_signals(session)
     type(terminal_session), intent(inout) :: session
