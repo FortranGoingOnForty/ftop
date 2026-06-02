@@ -13,6 +13,7 @@ program test_dashboard
   call test_dashboard_renders_metrics()
   call test_dashboard_renders_zoomed_widget()
   call test_dashboard_renders_zoomed_network_table()
+  call test_dashboard_renders_network_process_bandwidth()
   call test_tiny_dashboard()
 
 contains
@@ -111,6 +112,32 @@ contains
     call require(network_state%total_row_count == 3, "network table state should track total rows")
     call require(network_state%viewport_rows > 0, "network table state should track viewport rows")
   end subroutine test_dashboard_renders_zoomed_network_table
+
+  subroutine test_dashboard_renders_network_process_bandwidth()
+    type(screen_buffer) :: buffer
+    type(collector_snapshot) :: snapshot
+    type(network_table_state) :: network_state
+    character(len=:), allocatable :: text
+
+    snapshot = network_table_snapshot()
+    if (allocated(snapshot%network%processes)) deallocate(snapshot%network%processes)
+    allocate(snapshot%network%processes(1))
+    snapshot%network%processes(1)%valid = .true.
+    snapshot%network%processes(1)%pid = 1234
+    snapshot%network%processes(1)%start_time = 42_int64
+    snapshot%network%processes(1)%process_name = "curl"
+    snapshot%network%processes(1)%rx_bytes_per_sec = 2048.0_real64
+    snapshot%network%processes(1)%tx_bytes_per_sec = 512.0_real64
+
+    buffer = allocate_screen(100, 28)
+    call render_dashboard(buffer, snapshot, 1000, 7, "network-test", focused_widget="network", zoomed=.true., &
+                          network_state=network_state)
+    text = buffer_text(buffer)
+
+    call require(index(text, "Process curl") > 0, "zoomed network should render process bandwidth owner")
+    call require(index(text, "rx 2.0 KB/s") > 0, "zoomed network should render process rx bandwidth")
+    call require(index(text, "tx 512 B/s") > 0, "zoomed network should render process tx bandwidth")
+  end subroutine test_dashboard_renders_network_process_bandwidth
 
   subroutine test_tiny_dashboard()
     type(screen_buffer) :: buffer
