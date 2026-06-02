@@ -17,6 +17,7 @@ module ftop_process_table
     process_table, &
     process_user_label, &
     sort_process_table
+  use ftop_sparkline, only : sparkline_glyph
   use ftop_table, only : &
     TABLE_SORT_ASCENDING, &
     TABLE_SORT_DESCENDING, &
@@ -38,6 +39,7 @@ module ftop_process_table
   integer, parameter :: PROCESS_SORT_KEY_COUNT = 6
   integer, parameter :: PROCESS_COLLAPSED_CAPACITY = 256
   integer, parameter :: PROCESS_SIGNAL_FEEDBACK_FRAMES = 6
+  integer, parameter :: PROCESS_METRIC_SPARKLINE_WIDTH = 6
   integer, parameter, public :: PROCESS_FILTER_LEN = 96
   integer, parameter :: PROCESS_SIGNAL_NAME_LEN = 16
   integer, parameter :: PROCESS_SIGNAL_INPUT_LEN = 4
@@ -568,8 +570,10 @@ contains
     if (row_index < 1 .or. row_index > size(cells, 1)) return
     cells(row_index, 1) = process_cell(integer_text(process%pid), row_style)
     cells(row_index, 2) = process_cell(process_user_label(process), row_style)
-    cells(row_index, 3) = process_cell(format_percent(real(clamp_percent(process%cpu_percent))), row_style)
-    cells(row_index, 4) = process_cell(format_percent(real(clamp_percent(process%mem_percent))), row_style)
+    cells(row_index, 3) = process_cell(process_metric_text(process%cpu_percent, process%cpu_history, &
+                                                          process%history_count), row_style)
+    cells(row_index, 4) = process_cell(process_metric_text(process%mem_percent, process%mem_history, &
+                                                          process%history_count), row_style)
     cells(row_index, 5) = process_cell(format_bytes(max(0_int64, process%mem_rss_bytes)), row_style)
     cells(row_index, 6) = process_cell(process_state_label(process), row_style)
     cells(row_index, 7) = process_cell(process_tree_display_command(process), row_style)
@@ -586,6 +590,40 @@ contains
       cell = make_table_cell(text)
     end if
   end function process_cell
+
+  function process_metric_text(value, history, history_count) result(text)
+    real(real64), intent(in) :: value
+    real(real64), intent(in) :: history(:)
+    integer, intent(in) :: history_count
+    character(len=:), allocatable :: text
+
+    if (history_count >= 2 .and. size(history) > 0) then
+      text = process_sparkline_text(history, history_count)
+    else
+      text = format_percent(real(clamp_percent(value)))
+    end if
+  end function process_metric_text
+
+  function process_sparkline_text(history, history_count) result(text)
+    real(real64), intent(in) :: history(:)
+    integer, intent(in) :: history_count
+    character(len=:), allocatable :: text
+    integer :: count
+    integer :: first
+    integer :: sample_index
+
+    count = max(0, min(min(size(history), history_count), PROCESS_METRIC_SPARKLINE_WIDTH))
+    if (count <= 0) then
+      text = ""
+      return
+    end if
+
+    text = ""
+    first = max(1, min(size(history), history_count) - count + 1)
+    do sample_index = first, first + count - 1
+      text = text // sparkline_glyph(real(clamp_percent(history(sample_index)) / 100.0_real64))
+    end do
+  end function process_sparkline_text
 
   function process_tree_display_command(process) result(text)
     type(process_info), intent(in) :: process

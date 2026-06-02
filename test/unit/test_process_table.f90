@@ -44,6 +44,13 @@ program test_process_table
   call require(index(row_text(buffer, 4), "child --task") > 0, "process table should render child command")
 
   buffer = allocate_screen(80, 10)
+  state = process_table_state(tree_view=.false.)
+  call render_process_panel(buffer, widget_rect(1, 1, 80, 10), sample_history_snapshot(), border_style, title_style, &
+                            dim_style, state)
+  call require(index(row_text(buffer, 4), "▁") > 0, "process table should render process history sparkline low sample")
+  call require(index(row_text(buffer, 4), "█") > 0, "process table should render process history sparkline high sample")
+
+  buffer = allocate_screen(80, 10)
   state%selected_row = 2
   call render_process_panel(buffer, widget_rect(1, 1, 80, 10), sample_snapshot(), border_style, title_style, dim_style, &
                             state)
@@ -196,6 +203,17 @@ contains
     snapshot%processes%items(2)%state = "S"
     snapshot%processes%items(2)%start_time = 2000_int64
   end function sample_snapshot
+
+  function sample_history_snapshot() result(snapshot)
+    type(collector_snapshot) :: snapshot
+
+    snapshot = sample_snapshot()
+    snapshot%processes%items(2)%history_count = 6
+    snapshot%processes%items(2)%cpu_history(1:6) = [0.0_real64, 20.0_real64, 40.0_real64, &
+                                                    60.0_real64, 80.0_real64, 100.0_real64]
+    snapshot%processes%items(2)%mem_history(1:6) = [100.0_real64, 80.0_real64, 60.0_real64, &
+                                                    40.0_real64, 20.0_real64, 0.0_real64]
+  end function sample_history_snapshot
 
   function row_text(buffer, row) result(text)
     type(screen_buffer), intent(in) :: buffer
