@@ -10,7 +10,8 @@ program test_process_table
                                  process_table_cycle_sort_key, &
                                  process_table_delete_filter_char, process_table_page_delta, &
                                  process_table_append_signal_digit, process_table_confirm_signal, &
-                                 process_table_select_delta, process_table_set_signal, process_table_signal_status, &
+                                 process_table_mark_signal_feedback, process_table_select_delta, &
+                                 process_table_set_signal, process_table_signal_status, &
                                  process_table_state, &
                                  process_table_status, &
                                  process_table_toggle_selected_node, process_table_toggle_sort_direction, render_process_panel
@@ -49,6 +50,23 @@ program test_process_table
   call require(state%row_count == 2, "process table state should track row count")
   call require(state%viewport_rows > 0, "process table state should track viewport rows")
   call require(row_has_bold(buffer, 4), "process table should highlight selected row")
+
+  buffer = allocate_screen(80, 10)
+  state = process_table_state(tree_view=.false., selected_row=1)
+  call process_table_mark_signal_feedback(state, 200, 2000_int64)
+  state%signal_feedback_frames = 1
+  call render_process_panel(buffer, widget_rect(1, 1, 80, 10), sample_snapshot(), border_style, title_style, dim_style, &
+                            state)
+  call require(row_has_inverse(buffer, 4), "process table should highlight signaled row")
+  call require(state%signal_feedback_pid == 0, "process table signal feedback should expire after final frame")
+
+  buffer = allocate_screen(80, 10)
+  state = process_table_state(tree_view=.false., selected_row=1)
+  call process_table_mark_signal_feedback(state, 200, 9999_int64)
+  call render_process_panel(buffer, widget_rect(1, 1, 80, 10), sample_snapshot(), border_style, title_style, dim_style, &
+                            state)
+  call require(.not. row_has_inverse(buffer, 4), "process table should not highlight pid reused row")
+  call require(state%signal_feedback_pid == 0, "process table should clear feedback for missing process identity")
 
   buffer = allocate_screen(80, 10)
   state = process_table_state(tree_view=.false., sort_key=PROCESS_SORT_COMMAND)
@@ -163,6 +181,7 @@ contains
     snapshot%processes%items(1)%name = "parent"
     snapshot%processes%items(1)%command = "parent --test"
     snapshot%processes%items(1)%state = "R"
+    snapshot%processes%items(1)%start_time = 1000_int64
     snapshot%processes%items(1)%cpu_percent = 12.5_real64
     snapshot%processes%items(1)%mem_percent = 1.5_real64
     snapshot%processes%items(1)%mem_rss_bytes = 64_int64 * 1024_int64 * 1024_int64
@@ -175,6 +194,7 @@ contains
     snapshot%processes%items(2)%name = "child"
     snapshot%processes%items(2)%command = "child --task"
     snapshot%processes%items(2)%state = "S"
+    snapshot%processes%items(2)%start_time = 2000_int64
   end function sample_snapshot
 
   function row_text(buffer, row) result(text)
@@ -206,6 +226,20 @@ contains
       end if
     end do
   end function row_has_bold
+
+  logical function row_has_inverse(buffer, row) result(found)
+    type(screen_buffer), intent(in) :: buffer
+    integer, intent(in) :: row
+    integer :: col
+
+    found = .false.
+    do col = 1, buffer%size%width
+      if (buffer%cells(row, col)%style%inverse) then
+        found = .true.
+        return
+      end if
+    end do
+  end function row_has_inverse
 
   subroutine require(condition, message)
     logical, intent(in) :: condition

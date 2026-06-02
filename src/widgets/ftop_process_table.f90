@@ -37,6 +37,7 @@ module ftop_process_table
   integer, parameter :: PROCESS_TABLE_COLUMNS = 7
   integer, parameter :: PROCESS_SORT_KEY_COUNT = 6
   integer, parameter :: PROCESS_COLLAPSED_CAPACITY = 256
+  integer, parameter :: PROCESS_SIGNAL_FEEDBACK_FRAMES = 6
   integer, parameter, public :: PROCESS_FILTER_LEN = 96
   integer, parameter :: PROCESS_SIGNAL_NAME_LEN = 16
   integer, parameter :: PROCESS_SIGNAL_INPUT_LEN = 4
@@ -64,6 +65,9 @@ module ftop_process_table
     logical :: signal_confirmed = .false.
     integer :: signal_input_length = 0
     character(len=PROCESS_SIGNAL_INPUT_LEN) :: signal_input_text = ""
+    integer :: signal_feedback_pid = 0
+    integer(int64) :: signal_feedback_start_time = 0_int64
+    integer :: signal_feedback_frames = 0
     integer :: filter_length = 0
     character(len=PROCESS_FILTER_LEN) :: filter_text = ""
     logical :: filter_active = .false.
@@ -82,6 +86,7 @@ module ftop_process_table
   public :: process_table_delete_filter_char
   public :: process_table_delete_signal_digit
   public :: process_table_page_delta
+  public :: process_table_mark_signal_feedback
   public :: process_table_select_delta
   public :: process_table_set_signal
   public :: process_table_signal_status
@@ -134,6 +139,7 @@ contains
       call render_text(buffer, content_line_rect(table_content, 1), "processes unavailable", dim_style)
       if (present(state)) then
         active_state%total_row_count = 0
+        call clear_signal_feedback_state(active_state)
         call normalize_process_table_state(active_state, 0, 0)
         state = active_state
       end if
@@ -144,6 +150,7 @@ contains
       call render_text(buffer, content_line_rect(table_content, 1), "no processes", dim_style)
       if (present(state)) then
         active_state%total_row_count = 0
+        call clear_signal_feedback_state(active_state)
         call normalize_process_table_state(active_state, 0, 0)
         state = active_state
       end if
@@ -155,6 +162,7 @@ contains
     sorted_processes = snapshot%processes
     active_state%total_row_count = count_valid_processes(sorted_processes)
     call prune_collapsed_nodes(active_state, sorted_processes)
+    call prune_signal_feedback_state(active_state, sorted_processes)
     call sort_process_table(sorted_processes, active_state%sort_key, &
                             descending=active_state%sort_direction == TABLE_SORT_DESCENDING)
     call filter_process_table(sorted_processes, active_state)
@@ -165,7 +173,7 @@ contains
     else
       tree_processes = sorted_processes
     end if
-    cells = process_cells(sorted_processes)
+    cells = process_cells(sorted_processes, active_state, signal_feedback_style(title_style))
     if (size(cells, 1) <= 0) then
       if (active_state%filter_length > 0) then
         call render_text(buffer, content_line_rect(table_content, 1), "no matching processes", dim_style)
@@ -174,6 +182,7 @@ contains
       end if
       if (present(state)) then
         call normalize_process_table_state(active_state, 0, table_viewport_row_count(table_content, .true.))
+        call advance_signal_feedback_state(active_state)
         state = active_state
       end if
       if (show_filter_bar) call render_process_filter_bar(buffer, content, active_state, title_style, dim_style)
@@ -187,6 +196,7 @@ contains
                       show_header=.true., striped=.false., style=dim_style, &
                       header_style=title_style, selected_style=title_style, separator_style=dim_style, &
                       scroll_row=active_state%scroll_row, selected_row=active_state%selected_row)
+    call advance_signal_feedback_state(active_state)
     if (show_filter_bar) call render_process_filter_bar(buffer, content, active_state, title_style, dim_style)
     if (present(state)) state = active_state
   end subroutine render_process_panel
@@ -253,8 +263,10 @@ contains
     end select
   end function process_sort_column
 
-  function process_cells(table) result(cells)
+  function process_cells(table, state, feedback_style) result(cells)
     type(process_table), intent(in) :: table
+    type(process_table_state), intent(in) :: state
+    type(screen_style), intent(in) :: feedback_style
     type(table_cell), allocatable :: cells(:, :)
     integer :: process_index
     integer :: row
@@ -270,7 +282,11 @@ contains
     do process_index = 1, size(table%items)
       if (.not. table%items(process_index)%valid) cycle
       row = row + 1
-      call fill_process_row(cells, row, table%items(process_index))
+      if (process_signal_feedback_matches(state, table%items(process_index))) then
+        call fill_process_row(cells, row, table%items(process_index), feedback_style)
+      else
+        call fill_process_row(cells, row, table%items(process_index))
+      end if
     end do
   end function process_cells
 
@@ -493,6 +509,15 @@ contains
     end do
   end function process_identity_exists
 
+  subroutine prune_signal_feedback_state(state, table)
+    type(process_table_state), intent(inout) :: state
+    type(process_table), intent(in) :: table
+
+    if (.not. signal_feedback_active(state)) return
+    if (process_identity_exists(table, state%signal_feedback_pid, state%signal_feedback_start_time)) return
+    call clear_signal_feedback_state(state)
+  end subroutine prune_signal_feedback_state
+
   logical function process_identity_matches(left_pid, left_start_time, right_pid, right_start_time) result(matches)
     integer, intent(in) :: left_pid
     integer(int64), intent(in) :: left_start_time
@@ -508,21 +533,59 @@ contains
     end if
   end function process_identity_matches
 
-  subroutine fill_process_row(cells, row_index, process)
+  logical function process_signal_feedback_matches(state, process) result(matches)
+    type(process_table_state), intent(in) :: state
+    type(process_info), intent(in) :: process
+
+    matches = .false.
+    if (.not. signal_feedback_active(state)) return
+    matches = process_identity_matches(process%pid, process%start_time, &
+                                       state%signal_feedback_pid, state%signal_feedback_start_time)
+  end function process_signal_feedback_matches
+
+  logical function signal_feedback_active(state) result(active)
+    type(process_table_state), intent(in) :: state
+
+    active = state%signal_feedback_pid > 0 .and. state%signal_feedback_frames > 0
+  end function signal_feedback_active
+
+  function signal_feedback_style(base_style) result(style)
+    type(screen_style), intent(in) :: base_style
+    type(screen_style) :: style
+
+    style = base_style
+    style%bold = .true.
+    style%inverse = .true.
+  end function signal_feedback_style
+
+  subroutine fill_process_row(cells, row_index, process, row_style)
     type(table_cell), intent(inout) :: cells(:, :)
     integer, intent(in) :: row_index
     type(process_info), intent(in) :: process
+    type(screen_style), intent(in), optional :: row_style
 
     if (size(cells, 2) < PROCESS_TABLE_COLUMNS) return
     if (row_index < 1 .or. row_index > size(cells, 1)) return
-    cells(row_index, 1) = make_table_cell(integer_text(process%pid))
-    cells(row_index, 2) = make_table_cell(process_user_label(process))
-    cells(row_index, 3) = make_table_cell(format_percent(real(clamp_percent(process%cpu_percent))))
-    cells(row_index, 4) = make_table_cell(format_percent(real(clamp_percent(process%mem_percent))))
-    cells(row_index, 5) = make_table_cell(format_bytes(max(0_int64, process%mem_rss_bytes)))
-    cells(row_index, 6) = make_table_cell(process_state_label(process))
-    cells(row_index, 7) = make_table_cell(process_tree_display_command(process))
+    cells(row_index, 1) = process_cell(integer_text(process%pid), row_style)
+    cells(row_index, 2) = process_cell(process_user_label(process), row_style)
+    cells(row_index, 3) = process_cell(format_percent(real(clamp_percent(process%cpu_percent))), row_style)
+    cells(row_index, 4) = process_cell(format_percent(real(clamp_percent(process%mem_percent))), row_style)
+    cells(row_index, 5) = process_cell(format_bytes(max(0_int64, process%mem_rss_bytes)), row_style)
+    cells(row_index, 6) = process_cell(process_state_label(process), row_style)
+    cells(row_index, 7) = process_cell(process_tree_display_command(process), row_style)
   end subroutine fill_process_row
+
+  function process_cell(text, row_style) result(cell)
+    character(len=*), intent(in) :: text
+    type(screen_style), intent(in), optional :: row_style
+    type(table_cell) :: cell
+
+    if (present(row_style)) then
+      cell = make_table_cell(text, row_style)
+    else
+      cell = make_table_cell(text)
+    end if
+  end function process_cell
 
   function process_tree_display_command(process) result(text)
     type(process_info), intent(in) :: process
@@ -686,6 +749,36 @@ contains
     state%signal_confirmed = .false.
     call process_table_clear_signal_input(state)
   end subroutine process_table_cancel_signal
+
+  subroutine process_table_mark_signal_feedback(state, pid, start_time)
+    type(process_table_state), intent(inout) :: state
+    integer, intent(in) :: pid
+    integer(int64), intent(in) :: start_time
+
+    if (pid <= 0) return
+    state%signal_feedback_pid = pid
+    state%signal_feedback_start_time = start_time
+    state%signal_feedback_frames = PROCESS_SIGNAL_FEEDBACK_FRAMES
+  end subroutine process_table_mark_signal_feedback
+
+  subroutine clear_signal_feedback_state(state)
+    type(process_table_state), intent(inout) :: state
+
+    state%signal_feedback_pid = 0
+    state%signal_feedback_start_time = 0_int64
+    state%signal_feedback_frames = 0
+  end subroutine clear_signal_feedback_state
+
+  subroutine advance_signal_feedback_state(state)
+    type(process_table_state), intent(inout) :: state
+
+    if (.not. signal_feedback_active(state)) then
+      call clear_signal_feedback_state(state)
+      return
+    end if
+    state%signal_feedback_frames = state%signal_feedback_frames - 1
+    if (state%signal_feedback_frames <= 0) call clear_signal_feedback_state(state)
+  end subroutine advance_signal_feedback_state
 
   subroutine process_table_select_delta(state, delta)
     type(process_table_state), intent(inout) :: state

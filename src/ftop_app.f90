@@ -51,6 +51,7 @@ module ftop_app
     process_table_delete_filter_char, &
     process_table_delete_signal_digit, &
     process_table_finish_filter, &
+    process_table_mark_signal_feedback, &
     process_table_page_delta, &
     process_table_select_delta, &
     process_table_set_signal, &
@@ -710,9 +711,11 @@ contains
     if (len(signal_name) <= 0) signal_name = "signal " // integer_text(max(0, signal_number))
 
     if (terminal_kill(pid, signal_number, error_code)) then
+      call process_table_mark_signal_feedback(session%process_state, pid, session%process_state%signal_start_time)
       call process_table_cancel_signal(session%process_state)
       call set_status(session, "sent " // signal_name // " to pid " // integer_text(max(0, pid)))
     else
+      call process_table_mark_signal_feedback(session%process_state, pid, session%process_state%signal_start_time)
       call process_table_cancel_signal(session%process_state)
       call set_status(session, process_signal_error_status(pid, signal_name, error_code))
     end if

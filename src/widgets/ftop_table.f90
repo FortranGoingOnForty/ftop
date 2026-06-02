@@ -33,6 +33,8 @@ module ftop_table
 
   type, public :: table_cell
     character(len=:), allocatable :: text
+    logical :: style_set = .false.
+    type(screen_style) :: style
   end type table_cell
 
   type, extends(widget), public :: table_widget
@@ -62,11 +64,16 @@ module ftop_table
 
 contains
 
-  function make_table_cell(text) result(cell)
+  function make_table_cell(text, style) result(cell)
     character(len=*), intent(in) :: text
+    type(screen_style), intent(in), optional :: style
     type(table_cell) :: cell
 
     cell%text = text
+    if (present(style)) then
+      cell%style = style
+      cell%style_set = .true.
+    end if
   end function make_table_cell
 
   subroutine render_table(buffer, rect, columns, cells, scroll_row, selected_row, separator, &
@@ -331,14 +338,17 @@ contains
     integer, intent(in) :: separator
     type(screen_style), intent(in) :: row_style
     type(screen_style), intent(in) :: separator_style
+    type(screen_style) :: cell_style
     integer :: col
     integer :: draw_col
 
     draw_col = rect%col
     do col = 1, size(columns)
       if (widths(col) > 0) then
+        cell_style = row_style
+        if (cells(row_index, col)%style_set) cell_style = cells(row_index, col)%style
         call render_text(buffer, widget_rect(rect%row, draw_col, widths(col), 1), &
-                         table_cell_text(cells, row_index, col), row_style, columns(col)%alignment)
+                         table_cell_text(cells, row_index, col), cell_style, columns(col)%alignment)
       end if
       draw_col = draw_col + widths(col)
       if (col < size(columns)) call render_separator(buffer, rect%row, draw_col, separator, separator_style)
