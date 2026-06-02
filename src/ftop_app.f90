@@ -58,6 +58,7 @@ module ftop_app
     process_table_signal_status, &
     process_table_state, &
     process_table_status, &
+    process_table_toggle_metric_sparklines, &
     process_table_toggle_selected_node, &
     process_table_toggle_sort_direction, &
     process_table_toggle_tree
@@ -535,6 +536,8 @@ contains
       call begin_process_signal(session)
     case ("s")
       call process_table_toggle_sort_direction(session%process_state)
+    case ("h")
+      call process_table_toggle_metric_sparklines(session%process_state)
     case ("t")
       call process_table_toggle_tree(session%process_state)
     case default

@@ -73,6 +73,7 @@ module ftop_process_table
     integer :: filter_length = 0
     character(len=PROCESS_FILTER_LEN) :: filter_text = ""
     logical :: filter_active = .false.
+    logical :: metric_sparklines = .true.
     logical :: tree_view = .true.
   end type process_table_state
 
@@ -97,6 +98,7 @@ module ftop_process_table
   public :: process_table_sort_key_label
   public :: process_table_status
   public :: process_table_finish_filter
+  public :: process_table_toggle_metric_sparklines
   public :: process_table_toggle_selected_node
   public :: process_table_toggle_sort_direction
   public :: process_table_toggle_tree
@@ -285,9 +287,9 @@ contains
       if (.not. table%items(process_index)%valid) cycle
       row = row + 1
       if (process_signal_feedback_matches(state, table%items(process_index))) then
-        call fill_process_row(cells, row, table%items(process_index), feedback_style)
+        call fill_process_row(cells, row, table%items(process_index), state%metric_sparklines, feedback_style)
       else
-        call fill_process_row(cells, row, table%items(process_index))
+        call fill_process_row(cells, row, table%items(process_index), state%metric_sparklines)
       end if
     end do
   end function process_cells
@@ -560,10 +562,11 @@ contains
     style%inverse = .true.
   end function signal_feedback_style
 
-  subroutine fill_process_row(cells, row_index, process, row_style)
+  subroutine fill_process_row(cells, row_index, process, show_sparklines, row_style)
     type(table_cell), intent(inout) :: cells(:, :)
     integer, intent(in) :: row_index
     type(process_info), intent(in) :: process
+    logical, intent(in) :: show_sparklines
     type(screen_style), intent(in), optional :: row_style
 
     if (size(cells, 2) < PROCESS_TABLE_COLUMNS) return
@@ -571,9 +574,9 @@ contains
     cells(row_index, 1) = process_cell(integer_text(process%pid), row_style)
     cells(row_index, 2) = process_cell(process_user_label(process), row_style)
     cells(row_index, 3) = process_cell(process_metric_text(process%cpu_percent, process%cpu_history, &
-                                                          process%history_count), row_style)
+                                                          process%history_count, show_sparklines), row_style)
     cells(row_index, 4) = process_cell(process_metric_text(process%mem_percent, process%mem_history, &
-                                                          process%history_count), row_style)
+                                                          process%history_count, show_sparklines), row_style)
     cells(row_index, 5) = process_cell(format_bytes(max(0_int64, process%mem_rss_bytes)), row_style)
     cells(row_index, 6) = process_cell(process_state_label(process), row_style)
     cells(row_index, 7) = process_cell(process_tree_display_command(process), row_style)
@@ -591,13 +594,14 @@ contains
     end if
   end function process_cell
 
-  function process_metric_text(value, history, history_count) result(text)
+  function process_metric_text(value, history, history_count, show_sparklines) result(text)
     real(real64), intent(in) :: value
     real(real64), intent(in) :: history(:)
     integer, intent(in) :: history_count
+    logical, intent(in) :: show_sparklines
     character(len=:), allocatable :: text
 
-    if (history_count >= 2 .and. size(history) > 0) then
+    if (show_sparklines .and. history_count >= 2 .and. size(history) > 0) then
       text = process_sparkline_text(history, history_count)
     else
       text = format_percent(real(clamp_percent(value)))
@@ -862,6 +866,12 @@ contains
     call normalize_process_table_state(state, state%row_count, state%viewport_rows)
   end subroutine process_table_toggle_tree
 
+  subroutine process_table_toggle_metric_sparklines(state)
+    type(process_table_state), intent(inout) :: state
+
+    state%metric_sparklines = .not. state%metric_sparklines
+  end subroutine process_table_toggle_metric_sparklines
+
   logical function process_table_toggle_selected_node(state) result(toggled)
     type(process_table_state), intent(inout) :: state
     integer :: node_index
@@ -899,6 +909,11 @@ contains
            process_table_sort_direction_label(state)
     if (state%tree_view .and. state%collapsed_count > 0) then
       text = text // " collapsed " // integer_text(max(0, state%collapsed_count))
+    end if
+    if (state%metric_sparklines) then
+      text = text // " history spark"
+    else
+      text = text // " history numeric"
     end if
     if (state%signal_pending) text = text // " " // process_table_signal_status(state)
     if (process_table_filter_visible(state)) then

@@ -14,6 +14,7 @@ program test_process_table
                                  process_table_set_signal, process_table_signal_status, &
                                  process_table_state, &
                                  process_table_status, &
+                                 process_table_toggle_metric_sparklines, &
                                  process_table_toggle_selected_node, process_table_toggle_sort_direction, render_process_panel
   use ftop_table, only : TABLE_SORT_DESCENDING
   use ftop_widgets, only : widget_rect
@@ -49,6 +50,13 @@ program test_process_table
                             dim_style, state)
   call require(index(row_text(buffer, 4), "▁") > 0, "process table should render process history sparkline low sample")
   call require(index(row_text(buffer, 4), "█") > 0, "process table should render process history sparkline high sample")
+
+  buffer = allocate_screen(80, 10)
+  call process_table_toggle_metric_sparklines(state)
+  call render_process_panel(buffer, widget_rect(1, 1, 80, 10), sample_history_snapshot(), border_style, title_style, &
+                            dim_style, state)
+  call require(index(row_text(buffer, 4), "0.0%") > 0, "process table should render numeric metrics when toggled")
+  call require(index(row_text(buffer, 4), "█") == 0, "process table should hide sparklines when toggled to numeric")
 
   buffer = allocate_screen(80, 10)
   state%selected_row = 2
@@ -138,6 +146,11 @@ contains
     call require(local_state%sort_direction == TABLE_SORT_DESCENDING, "process table sort direction should toggle")
     call require(index(process_table_status(local_state), "sort user desc") > 0, &
                  "process table status should describe sort state")
+    call require(index(process_table_status(local_state), "history spark") > 0, &
+                 "process table status should describe sparkline metric state")
+    call process_table_toggle_metric_sparklines(local_state)
+    call require(index(process_table_status(local_state), "history numeric") > 0, &
+                 "process table status should describe numeric metric state")
 
     call process_table_begin_filter(local_state)
     call process_table_append_filter_text(local_state, "daemon")
