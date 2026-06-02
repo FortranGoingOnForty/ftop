@@ -18,6 +18,13 @@ module ftop_layout
   character(len=*), parameter, public :: LAYOUT_WIDGET_CPU = "cpu"
   character(len=*), parameter, public :: LAYOUT_WIDGET_MEMORY = "memory"
   character(len=*), parameter, public :: LAYOUT_WIDGET_PROCESS = "process"
+  integer, parameter, public :: LAYOUT_PROCESS_COLUMN_CAPACITY = 12
+  integer, parameter, public :: LAYOUT_PROCESS_COLUMN_NAME_LEN = 16
+
+  type, public :: layout_process_config
+    integer :: column_count = 0
+    character(len=LAYOUT_PROCESS_COLUMN_NAME_LEN) :: columns(LAYOUT_PROCESS_COLUMN_CAPACITY) = ""
+  end type layout_process_config
 
   type, public :: layout_column
     character(len=:), allocatable :: widget
@@ -32,6 +39,7 @@ module ftop_layout
 
   type, public :: layout_grid
     type(layout_row), allocatable :: rows(:)
+    type(layout_process_config) :: process
   end type layout_grid
 
   type, public :: layout_assignment
@@ -217,7 +225,62 @@ contains
       call parse_row(rows%values(row_index), row_index, grid%rows(row_index), error)
       if (error%failed) return
     end do
+
+    call parse_process_config(document, grid%process, error)
   end subroutine parse_layout_document
+
+  subroutine parse_process_config(document, config, error)
+    type(toml_document), intent(in) :: document
+    type(layout_process_config), intent(out) :: config
+    type(layout_error), intent(inout) :: error
+    integer :: column_index
+    integer :: columns_index
+    integer :: process_index
+
+    config = layout_process_config()
+    process_index = table_entry_index(document%root, "process")
+    if (process_index == 0) return
+    if (document%root%table_values(process_index)%kind /= TOML_KIND_TABLE) then
+      call set_layout_error(error, "process config must be a table")
+      return
+    end if
+
+    associate (process_value => document%root%table_values(process_index))
+      columns_index = table_entry_index(process_value, "columns")
+      if (columns_index == 0) return
+      if (process_value%table_values(columns_index)%kind /= TOML_KIND_ARRAY) then
+        call set_layout_error(error, "process columns must be an array")
+        return
+      end if
+      if (.not. allocated(process_value%table_values(columns_index)%array_values)) then
+        call set_layout_error(error, "process columns must contain at least one column")
+        return
+      end if
+      if (size(process_value%table_values(columns_index)%array_values) <= 0) then
+        call set_layout_error(error, "process columns must contain at least one column")
+        return
+      end if
+      if (size(process_value%table_values(columns_index)%array_values) > LAYOUT_PROCESS_COLUMN_CAPACITY) then
+        call set_layout_error(error, "process columns cannot contain more than " // &
+                              integer_text(LAYOUT_PROCESS_COLUMN_CAPACITY) // " columns")
+        return
+      end if
+
+      config%column_count = size(process_value%table_values(columns_index)%array_values)
+      do column_index = 1, config%column_count
+        if (process_value%table_values(columns_index)%array_values(column_index)%kind /= TOML_KIND_STRING) then
+          call set_layout_error(error, "process column " // integer_text(column_index) // " must be a string")
+          return
+        end if
+        config%columns(column_index) = &
+          trim(process_value%table_values(columns_index)%array_values(column_index)%string_value%text)
+        if (len_trim(config%columns(column_index)) == 0) then
+          call set_layout_error(error, "process column " // integer_text(column_index) // " cannot be empty")
+          return
+        end if
+      end do
+    end associate
+  end subroutine parse_process_config
 
   subroutine parse_row(row_value, row_index, row, error)
     type(toml_value), intent(in) :: row_value

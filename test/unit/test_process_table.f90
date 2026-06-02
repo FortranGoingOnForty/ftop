@@ -10,9 +10,10 @@ program test_process_table
                                  process_table_cycle_sort_key, &
                                  process_table_delete_filter_char, process_table_page_delta, &
                                  process_table_append_signal_digit, process_table_confirm_signal, &
-                                 process_table_mark_signal_feedback, process_table_scroll_delta, &
-                                 process_table_select_at, process_table_select_delta, &
-                                 process_table_set_signal, process_table_signal_status, &
+                                  process_table_mark_signal_feedback, process_table_scroll_delta, &
+                                  process_table_select_at, process_table_select_delta, &
+                                  process_table_set_columns, &
+                                  process_table_set_signal, process_table_signal_status, &
                                  process_table_sort_at, &
                                  process_table_state, &
                                  process_table_status, &
@@ -27,6 +28,9 @@ program test_process_table
   type(screen_style) :: dim_style
   type(screen_style) :: title_style
   type(process_table_state) :: state
+  character(len=8) :: bad_columns(2)
+  character(len=8) :: custom_columns(4)
+  character(len=:), allocatable :: column_error
   logical :: toggled
 
   call test_process_state_updates()
@@ -35,6 +39,8 @@ program test_process_table
   border_style = style_from_rgb(fg=COLOR_UI_BORDER)
   title_style = style_from_rgb(fg=COLOR_UI_ACCENT, bg=COLOR_UI_PANEL, bold=.true.)
   dim_style = style_from_rgb(fg=COLOR_UI_DIM)
+  bad_columns = [character(len=8) :: "pid", "bogus"]
+  custom_columns = [character(len=8) :: "pid", "cpu", "mem", "command"]
 
   call render_process_panel(buffer, widget_rect(1, 1, 80, 10), sample_snapshot(), border_style, title_style, dim_style)
   call require(index(row_text(buffer, 2), "PID") > 0, "process table should render PID header")
@@ -87,6 +93,24 @@ program test_process_table
   call require(process_table_sort_at(state, widget_rect(1, 1, 80, 10), 2, 45), &
                "process table mouse header hit should toggle clicked column")
   call require(state%sort_direction == TABLE_SORT_DESCENDING, "process table mouse header hit should toggle current sort")
+
+  state = process_table_state()
+  call require(process_table_set_columns(state, custom_columns, 4, column_error), &
+               "process table should accept configured columns")
+  buffer = allocate_screen(80, 10)
+  call render_process_panel(buffer, widget_rect(1, 1, 80, 10), sample_snapshot(), border_style, title_style, dim_style, &
+                            state)
+  call require(index(row_text(buffer, 2), "CPU%") > 0, "configured process columns should render visible columns")
+  call require(index(row_text(buffer, 2), "USER") == 0, "configured process columns should hide omitted columns")
+  state%sort_key = PROCESS_SORT_COMMAND
+  state%sort_direction = TABLE_SORT_DESCENDING
+  call require(process_table_sort_at(state, widget_rect(1, 1, 80, 10), 2, 10), &
+               "configured process columns should sort clicked visible header")
+  call require(state%sort_key == PROCESS_SORT_CPU, "configured process columns should map mouse hit to visible sort")
+  call require(.not. process_table_set_columns(state, bad_columns, 2, column_error), &
+               "process table should reject unknown configured columns")
+  call require(index(column_error, "unknown process column") > 0, &
+               "process table should explain unknown configured columns")
 
   buffer = allocate_screen(80, 10)
   state = process_table_state(tree_view=.false., selected_row=1)

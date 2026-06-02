@@ -133,7 +133,7 @@ contains
     filter_match = wait_for_string(filter_session, "focus process", 2500)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not focus process before filter"
 
-    if (.not. send_text(filter_session, achar(27) // "[<0;47;12M")) error stop "failed to click process CPU header"
+    if (.not. send_text(filter_session, achar(27) // "[<0;18;12M")) error stop "failed to click process CPU header"
     filter_match = wait_for_string(filter_session, "sort cpu asc", 2500)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not sort process table from mouse header"
 

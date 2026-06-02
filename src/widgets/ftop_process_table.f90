@@ -31,6 +31,7 @@ module ftop_process_table
     TABLE_SEPARATOR_SPACE, &
     TABLE_WIDTH_FIXED, &
     TABLE_WIDTH_WEIGHT, &
+    calculate_column_widths, &
     make_table_cell, &
     render_table, &
     table_cell, &
@@ -42,7 +43,32 @@ module ftop_process_table
   private
 
   integer, parameter :: PROCESS_TABLE_COLUMNS = 12
-  integer, parameter :: PROCESS_SORT_KEY_COUNT = 12
+  integer, parameter :: PROCESS_COLUMN_PID = 1
+  integer, parameter :: PROCESS_COLUMN_USER = 2
+  integer, parameter :: PROCESS_COLUMN_PRIORITY = 3
+  integer, parameter :: PROCESS_COLUMN_NICE = 4
+  integer, parameter :: PROCESS_COLUMN_VIRT = 5
+  integer, parameter :: PROCESS_COLUMN_RSS = 6
+  integer, parameter :: PROCESS_COLUMN_SHARED = 7
+  integer, parameter :: PROCESS_COLUMN_STATE = 8
+  integer, parameter :: PROCESS_COLUMN_CPU = 9
+  integer, parameter :: PROCESS_COLUMN_MEMORY = 10
+  integer, parameter :: PROCESS_COLUMN_TIME = 11
+  integer, parameter :: PROCESS_COLUMN_COMMAND = 12
+  integer, parameter :: DEFAULT_PROCESS_COLUMN_IDS(PROCESS_TABLE_COLUMNS) = [ &
+    PROCESS_COLUMN_PID, &
+    PROCESS_COLUMN_USER, &
+    PROCESS_COLUMN_PRIORITY, &
+    PROCESS_COLUMN_NICE, &
+    PROCESS_COLUMN_VIRT, &
+    PROCESS_COLUMN_RSS, &
+    PROCESS_COLUMN_SHARED, &
+    PROCESS_COLUMN_STATE, &
+    PROCESS_COLUMN_CPU, &
+    PROCESS_COLUMN_MEMORY, &
+    PROCESS_COLUMN_TIME, &
+    PROCESS_COLUMN_COMMAND &
+  ]
   integer, parameter :: PROCESS_COLLAPSED_CAPACITY = 256
   integer, parameter :: PROCESS_SIGNAL_FEEDBACK_FRAMES = 6
   integer, parameter :: PROCESS_METRIC_SPARKLINE_WIDTH = 6
@@ -81,6 +107,8 @@ module ftop_process_table
     logical :: filter_active = .false.
     logical :: metric_sparklines = .true.
     logical :: tree_view = .true.
+    integer :: column_count = PROCESS_TABLE_COLUMNS
+    integer :: column_ids(PROCESS_TABLE_COLUMNS) = DEFAULT_PROCESS_COLUMN_IDS
   end type process_table_state
 
   public :: process_panel_min_size
@@ -100,6 +128,7 @@ module ftop_process_table
   public :: process_table_select_at
   public :: process_table_select_delta
   public :: process_table_set_signal
+  public :: process_table_set_columns
   public :: process_table_signal_status
   public :: process_table_sort_at
   public :: process_table_append_signal_digit
@@ -142,6 +171,7 @@ contains
     active_state = process_table_state()
     if (present(state)) active_state = state
     call normalize_filter_state(active_state)
+    call normalize_process_columns(active_state)
     call draw_box(buffer, panel, BOX_STYLE_ROUNDED, border_style, "Processes", title_style)
     content = box_content_rect(panel)
     if (content%height <= 0 .or. content%width <= 0) return
@@ -217,55 +247,81 @@ contains
   function process_columns(state) result(columns)
     type(process_table_state), intent(in) :: state
     type(table_column), allocatable :: columns(:)
+    integer :: column_index
+    integer :: column_count
 
-    allocate(columns(PROCESS_TABLE_COLUMNS))
-    columns(1)%name = "PID"
-    columns(1)%width_mode = TABLE_WIDTH_FIXED
-    columns(1)%width = 5
-    columns(1)%alignment = TEXT_ALIGN_RIGHT
-    columns(2)%name = "USER"
-    columns(2)%width_mode = TABLE_WIDTH_FIXED
-    columns(2)%width = 6
-    columns(3)%name = "PRI"
-    columns(3)%width_mode = TABLE_WIDTH_FIXED
-    columns(3)%width = 3
-    columns(3)%alignment = TEXT_ALIGN_RIGHT
-    columns(4)%name = "NI"
-    columns(4)%width_mode = TABLE_WIDTH_FIXED
-    columns(4)%width = 3
-    columns(4)%alignment = TEXT_ALIGN_RIGHT
-    columns(5)%name = "VIRT"
-    columns(5)%width_mode = TABLE_WIDTH_FIXED
-    columns(5)%width = 5
-    columns(5)%alignment = TEXT_ALIGN_RIGHT
-    columns(6)%name = "RES"
-    columns(6)%width_mode = TABLE_WIDTH_FIXED
-    columns(6)%width = 5
-    columns(6)%alignment = TEXT_ALIGN_RIGHT
-    columns(7)%name = "SHR"
-    columns(7)%width_mode = TABLE_WIDTH_FIXED
-    columns(7)%width = 5
-    columns(7)%alignment = TEXT_ALIGN_RIGHT
-    columns(8)%name = "S"
-    columns(8)%width_mode = TABLE_WIDTH_FIXED
-    columns(8)%width = 1
-    columns(9)%name = "CPU%"
-    columns(9)%width_mode = TABLE_WIDTH_FIXED
-    columns(9)%width = 6
-    columns(9)%alignment = TEXT_ALIGN_RIGHT
-    columns(10)%name = "MEM%"
-    columns(10)%width_mode = TABLE_WIDTH_FIXED
-    columns(10)%width = 6
-    columns(10)%alignment = TEXT_ALIGN_RIGHT
-    columns(11)%name = "TIME+"
-    columns(11)%width_mode = TABLE_WIDTH_FIXED
-    columns(11)%width = 7
-    columns(11)%alignment = TEXT_ALIGN_RIGHT
-    columns(12)%name = "COMMAND"
-    columns(12)%width_mode = TABLE_WIDTH_WEIGHT
-    columns(12)%weight = 1
+    column_count = process_table_column_count(state)
+    allocate(columns(column_count))
+    do column_index = 1, column_count
+      call process_column_definition(process_table_column_id(state, column_index), columns(column_index))
+    end do
     call mark_sort_column(columns, state)
   end function process_columns
+
+  subroutine process_column_definition(column_id, column)
+    integer, intent(in) :: column_id
+    type(table_column), intent(out) :: column
+
+    select case (column_id)
+    case (PROCESS_COLUMN_USER)
+      column%name = "USER"
+      column%width_mode = TABLE_WIDTH_FIXED
+      column%width = 6
+    case (PROCESS_COLUMN_PRIORITY)
+      column%name = "PRI"
+      column%width_mode = TABLE_WIDTH_FIXED
+      column%width = 3
+      column%alignment = TEXT_ALIGN_RIGHT
+    case (PROCESS_COLUMN_NICE)
+      column%name = "NI"
+      column%width_mode = TABLE_WIDTH_FIXED
+      column%width = 3
+      column%alignment = TEXT_ALIGN_RIGHT
+    case (PROCESS_COLUMN_VIRT)
+      column%name = "VIRT"
+      column%width_mode = TABLE_WIDTH_FIXED
+      column%width = 5
+      column%alignment = TEXT_ALIGN_RIGHT
+    case (PROCESS_COLUMN_RSS)
+      column%name = "RES"
+      column%width_mode = TABLE_WIDTH_FIXED
+      column%width = 5
+      column%alignment = TEXT_ALIGN_RIGHT
+    case (PROCESS_COLUMN_SHARED)
+      column%name = "SHR"
+      column%width_mode = TABLE_WIDTH_FIXED
+      column%width = 5
+      column%alignment = TEXT_ALIGN_RIGHT
+    case (PROCESS_COLUMN_STATE)
+      column%name = "S"
+      column%width_mode = TABLE_WIDTH_FIXED
+      column%width = 1
+    case (PROCESS_COLUMN_CPU)
+      column%name = "CPU%"
+      column%width_mode = TABLE_WIDTH_FIXED
+      column%width = 6
+      column%alignment = TEXT_ALIGN_RIGHT
+    case (PROCESS_COLUMN_MEMORY)
+      column%name = "MEM%"
+      column%width_mode = TABLE_WIDTH_FIXED
+      column%width = 6
+      column%alignment = TEXT_ALIGN_RIGHT
+    case (PROCESS_COLUMN_TIME)
+      column%name = "TIME+"
+      column%width_mode = TABLE_WIDTH_FIXED
+      column%width = 7
+      column%alignment = TEXT_ALIGN_RIGHT
+    case (PROCESS_COLUMN_COMMAND)
+      column%name = "COMMAND"
+      column%width_mode = TABLE_WIDTH_WEIGHT
+      column%weight = 1
+    case default
+      column%name = "PID"
+      column%width_mode = TABLE_WIDTH_FIXED
+      column%width = 5
+      column%alignment = TEXT_ALIGN_RIGHT
+    end select
+  end subroutine process_column_definition
 
   subroutine mark_sort_column(columns, state)
     type(table_column), intent(inout) :: columns(:)
@@ -273,39 +329,22 @@ contains
     integer :: sort_column
 
     columns%sort_direction = TABLE_SORT_NONE
-    sort_column = process_sort_column(state%sort_key)
+    sort_column = process_sort_column(state%sort_key, state)
     if (sort_column >= 1 .and. sort_column <= size(columns)) columns(sort_column)%sort_direction = state%sort_direction
   end subroutine mark_sort_column
 
-  integer function process_sort_column(sort_key) result(column)
+  integer function process_sort_column(sort_key, state) result(column)
     integer, intent(in) :: sort_key
+    type(process_table_state), intent(in) :: state
+    integer :: column_index
 
-    select case (sort_key)
-    case (PROCESS_SORT_USER)
-      column = 2
-    case (PROCESS_SORT_PRIORITY)
-      column = 3
-    case (PROCESS_SORT_NICE)
-      column = 4
-    case (PROCESS_SORT_VIRT)
-      column = 5
-    case (PROCESS_SORT_RSS)
-      column = 6
-    case (PROCESS_SORT_SHARED)
-      column = 7
-    case (PROCESS_SORT_STATE)
-      column = 8
-    case (PROCESS_SORT_CPU)
-      column = 9
-    case (PROCESS_SORT_MEMORY)
-      column = 10
-    case (PROCESS_SORT_TIME)
-      column = 11
-    case (PROCESS_SORT_COMMAND)
-      column = 12
-    case default
-      column = 1
-    end select
+    column = 0
+    do column_index = 1, process_table_column_count(state)
+      if (process_column_sort_key(process_table_column_id(state, column_index)) == sort_key) then
+        column = column_index
+        return
+      end if
+    end do
   end function process_sort_column
 
   function process_cells(table, state, feedback_style) result(cells)
@@ -313,6 +352,7 @@ contains
     type(process_table_state), intent(in) :: state
     type(screen_style), intent(in) :: feedback_style
     type(table_cell), allocatable :: cells(:, :)
+    integer :: column_count
     integer :: process_index
     integer :: row
     integer :: valid_count
@@ -322,15 +362,16 @@ contains
       if (table%items(process_index)%valid) valid_count = valid_count + 1
     end do
 
-    allocate(cells(valid_count, PROCESS_TABLE_COLUMNS))
+    column_count = process_table_column_count(state)
+    allocate(cells(valid_count, column_count))
     row = 0
     do process_index = 1, size(table%items)
       if (.not. table%items(process_index)%valid) cycle
       row = row + 1
       if (process_signal_feedback_matches(state, table%items(process_index))) then
-        call fill_process_row(cells, row, table%items(process_index), state%metric_sparklines, feedback_style)
+        call fill_process_row(cells, row, table%items(process_index), state, feedback_style)
       else
-        call fill_process_row(cells, row, table%items(process_index), state%metric_sparklines)
+        call fill_process_row(cells, row, table%items(process_index), state)
       end if
     end do
   end function process_cells
@@ -603,30 +644,56 @@ contains
     style%inverse = .true.
   end function signal_feedback_style
 
-  subroutine fill_process_row(cells, row_index, process, show_sparklines, row_style)
+  subroutine fill_process_row(cells, row_index, process, state, row_style)
     type(table_cell), intent(inout) :: cells(:, :)
     integer, intent(in) :: row_index
     type(process_info), intent(in) :: process
-    logical, intent(in) :: show_sparklines
+    type(process_table_state), intent(in) :: state
     type(screen_style), intent(in), optional :: row_style
+    integer :: column_index
 
-    if (size(cells, 2) < PROCESS_TABLE_COLUMNS) return
     if (row_index < 1 .or. row_index > size(cells, 1)) return
-    cells(row_index, 1) = process_cell(integer_text(process%pid), row_style)
-    cells(row_index, 2) = process_cell(process_user_label(process), row_style)
-    cells(row_index, 3) = process_cell(integer_text(process%priority), row_style)
-    cells(row_index, 4) = process_cell(integer_text(process%nice), row_style)
-    cells(row_index, 5) = process_cell(process_size_text(process%mem_virt_bytes), row_style)
-    cells(row_index, 6) = process_cell(process_size_text(process%mem_rss_bytes), row_style)
-    cells(row_index, 7) = process_cell(process_size_text(process%mem_shared_bytes), row_style)
-    cells(row_index, 8) = process_cell(process_state_label(process), row_style)
-    cells(row_index, 9) = process_cell(process_metric_text(process%cpu_percent, process%cpu_history, &
-                                                          process%history_count, show_sparklines), row_style)
-    cells(row_index, 10) = process_cell(process_metric_text(process%mem_percent, process%mem_history, &
-                                                          process%history_count, show_sparklines), row_style)
-    cells(row_index, 11) = process_cell(process_time_text(process%cpu_time), row_style)
-    cells(row_index, 12) = process_cell(process_tree_display_command(process), row_style)
+    do column_index = 1, size(cells, 2)
+      cells(row_index, column_index) = process_column_cell(process, state, column_index, row_style)
+    end do
   end subroutine fill_process_row
+
+  function process_column_cell(process, state, column_index, row_style) result(cell)
+    type(process_info), intent(in) :: process
+    type(process_table_state), intent(in) :: state
+    integer, intent(in) :: column_index
+    type(screen_style), intent(in), optional :: row_style
+    type(table_cell) :: cell
+
+    select case (process_table_column_id(state, column_index))
+    case (PROCESS_COLUMN_USER)
+      cell = process_cell(process_user_label(process), row_style)
+    case (PROCESS_COLUMN_PRIORITY)
+      cell = process_cell(integer_text(process%priority), row_style)
+    case (PROCESS_COLUMN_NICE)
+      cell = process_cell(integer_text(process%nice), row_style)
+    case (PROCESS_COLUMN_VIRT)
+      cell = process_cell(process_size_text(process%mem_virt_bytes), row_style)
+    case (PROCESS_COLUMN_RSS)
+      cell = process_cell(process_size_text(process%mem_rss_bytes), row_style)
+    case (PROCESS_COLUMN_SHARED)
+      cell = process_cell(process_size_text(process%mem_shared_bytes), row_style)
+    case (PROCESS_COLUMN_STATE)
+      cell = process_cell(process_state_label(process), row_style)
+    case (PROCESS_COLUMN_CPU)
+      cell = process_cell(process_metric_text(process%cpu_percent, process%cpu_history, &
+                                              process%history_count, state%metric_sparklines), row_style)
+    case (PROCESS_COLUMN_MEMORY)
+      cell = process_cell(process_metric_text(process%mem_percent, process%mem_history, &
+                                              process%history_count, state%metric_sparklines), row_style)
+    case (PROCESS_COLUMN_TIME)
+      cell = process_cell(process_time_text(process%cpu_time), row_style)
+    case (PROCESS_COLUMN_COMMAND)
+      cell = process_cell(process_tree_display_command(process), row_style)
+    case default
+      cell = process_cell(integer_text(process%pid), row_style)
+    end select
+  end function process_column_cell
 
   function process_cell(text, row_style) result(cell)
     character(len=*), intent(in) :: text
@@ -730,6 +797,98 @@ contains
       text = process_display_command(process)
     end if
   end function process_tree_display_command
+
+  logical function process_table_set_columns(state, names, count, error_message) result(applied)
+    type(process_table_state), intent(inout) :: state
+    character(len=*), intent(in) :: names(:)
+    integer, intent(in) :: count
+    character(len=:), allocatable, intent(out) :: error_message
+    integer :: column_index
+    integer :: column_id
+    integer :: ids(PROCESS_TABLE_COLUMNS)
+
+    applied = .false.
+    error_message = ""
+    ids = 0
+
+    if (count <= 0) then
+      error_message = "process columns must contain at least one column"
+      return
+    end if
+    if (count > size(names) .or. count > PROCESS_TABLE_COLUMNS) then
+      error_message = "process columns cannot contain more than " // integer_text(PROCESS_TABLE_COLUMNS) // " columns"
+      return
+    end if
+
+    do column_index = 1, count
+      column_id = process_column_id_for_name(names(column_index))
+      if (column_id == 0) then
+        error_message = "unknown process column " // trim(names(column_index))
+        return
+      end if
+      if (column_id_exists(ids, column_index - 1, column_id)) then
+        error_message = "duplicate process column " // trim(names(column_index))
+        return
+      end if
+      ids(column_index) = column_id
+    end do
+
+    state%column_count = count
+    state%column_ids = 0
+    state%column_ids(:count) = ids(:count)
+    call normalize_process_columns(state)
+    applied = .true.
+  end function process_table_set_columns
+
+  integer function process_column_id_for_name(name) result(column_id)
+    character(len=*), intent(in) :: name
+    character(len=:), allocatable :: normalized
+
+    normalized = ascii_lower(trim(name))
+    select case (normalized)
+    case ("pid")
+      column_id = PROCESS_COLUMN_PID
+    case ("user")
+      column_id = PROCESS_COLUMN_USER
+    case ("pri", "priority")
+      column_id = PROCESS_COLUMN_PRIORITY
+    case ("ni", "nice")
+      column_id = PROCESS_COLUMN_NICE
+    case ("virt", "virtual", "vsz")
+      column_id = PROCESS_COLUMN_VIRT
+    case ("res", "rss")
+      column_id = PROCESS_COLUMN_RSS
+    case ("shr", "shared")
+      column_id = PROCESS_COLUMN_SHARED
+    case ("s", "state")
+      column_id = PROCESS_COLUMN_STATE
+    case ("cpu", "cpu%")
+      column_id = PROCESS_COLUMN_CPU
+    case ("mem", "mem%", "memory")
+      column_id = PROCESS_COLUMN_MEMORY
+    case ("time", "time+")
+      column_id = PROCESS_COLUMN_TIME
+    case ("cmd", "command")
+      column_id = PROCESS_COLUMN_COMMAND
+    case default
+      column_id = 0
+    end select
+  end function process_column_id_for_name
+
+  logical function column_id_exists(ids, count, column_id) result(exists)
+    integer, intent(in) :: ids(:)
+    integer, intent(in) :: count
+    integer, intent(in) :: column_id
+    integer :: index_value
+
+    exists = .false.
+    do index_value = 1, max(0, min(count, size(ids)))
+      if (ids(index_value) == column_id) then
+        exists = .true.
+        return
+      end if
+    end do
+  end function column_id_exists
 
   subroutine process_table_begin_filter(state)
     type(process_table_state), intent(inout) :: state
@@ -970,13 +1129,14 @@ contains
     integer :: sort_key
 
     sorted = .false.
+    call normalize_process_columns(state)
     content = box_content_rect(panel)
     table_content = process_table_content_rect(content, process_table_filter_visible(state))
     if (.not. point_in_rect(table_content, row, col)) return
     if (row /= table_content%row) return
 
-    column = process_table_column_at(table_content, col)
-    sort_key = process_sort_key_for_column(column)
+    column = process_table_column_at(state, table_content, col)
+    sort_key = process_sort_key_for_column(state, column)
     if (sort_key == 0) return
 
     if (state%sort_key == sort_key) then
@@ -991,11 +1151,13 @@ contains
   subroutine process_table_cycle_sort_key(state, direction)
     type(process_table_state), intent(inout) :: state
     integer, intent(in) :: direction
-    integer :: key_index
+    integer :: column_index
 
-    key_index = process_sort_key_index(state%sort_key)
-    key_index = modulo(key_index - 1 + direction, PROCESS_SORT_KEY_COUNT) + 1
-    state%sort_key = process_sort_key_at(key_index)
+    call normalize_process_columns(state)
+    column_index = process_sort_column(state%sort_key, state)
+    if (column_index <= 0) column_index = 1
+    column_index = modulo(column_index - 1 + direction, state%column_count) + 1
+    state%sort_key = process_column_sort_key(state%column_ids(column_index))
   end subroutine process_table_cycle_sort_key
 
   subroutine process_table_toggle_sort_direction(state)
@@ -1182,6 +1344,96 @@ contains
     is_digit = code >= iachar("0") .and. code <= iachar("9")
   end function ascii_digit
 
+  integer function process_table_column_count(state) result(count)
+    type(process_table_state), intent(in) :: state
+
+    count = state%column_count
+    if (count < 1 .or. count > PROCESS_TABLE_COLUMNS) count = PROCESS_TABLE_COLUMNS
+  end function process_table_column_count
+
+  integer function process_table_column_id(state, column_index) result(column_id)
+    type(process_table_state), intent(in) :: state
+    integer, intent(in) :: column_index
+    integer :: count
+
+    column_id = 0
+    count = process_table_column_count(state)
+    if (column_index < 1 .or. column_index > count) return
+
+    if (state%column_count >= 1 .and. state%column_count <= PROCESS_TABLE_COLUMNS) then
+      column_id = state%column_ids(column_index)
+      if (valid_process_column_id(column_id)) return
+    end if
+    column_id = DEFAULT_PROCESS_COLUMN_IDS(column_index)
+  end function process_table_column_id
+
+  integer function process_column_sort_key(column_id) result(sort_key)
+    integer, intent(in) :: column_id
+
+    select case (column_id)
+    case (PROCESS_COLUMN_USER)
+      sort_key = PROCESS_SORT_USER
+    case (PROCESS_COLUMN_PRIORITY)
+      sort_key = PROCESS_SORT_PRIORITY
+    case (PROCESS_COLUMN_NICE)
+      sort_key = PROCESS_SORT_NICE
+    case (PROCESS_COLUMN_VIRT)
+      sort_key = PROCESS_SORT_VIRT
+    case (PROCESS_COLUMN_RSS)
+      sort_key = PROCESS_SORT_RSS
+    case (PROCESS_COLUMN_SHARED)
+      sort_key = PROCESS_SORT_SHARED
+    case (PROCESS_COLUMN_STATE)
+      sort_key = PROCESS_SORT_STATE
+    case (PROCESS_COLUMN_CPU)
+      sort_key = PROCESS_SORT_CPU
+    case (PROCESS_COLUMN_MEMORY)
+      sort_key = PROCESS_SORT_MEMORY
+    case (PROCESS_COLUMN_TIME)
+      sort_key = PROCESS_SORT_TIME
+    case (PROCESS_COLUMN_COMMAND)
+      sort_key = PROCESS_SORT_COMMAND
+    case default
+      sort_key = PROCESS_SORT_PID
+    end select
+  end function process_column_sort_key
+
+  logical function valid_process_column_id(column_id) result(valid)
+    integer, intent(in) :: column_id
+
+    valid = column_id >= PROCESS_COLUMN_PID .and. column_id <= PROCESS_COLUMN_COMMAND
+  end function valid_process_column_id
+
+  subroutine normalize_process_columns(state)
+    type(process_table_state), intent(inout) :: state
+    integer :: column_index
+    integer :: column_id
+    integer :: count
+    integer :: ids(PROCESS_TABLE_COLUMNS)
+
+    ids = 0
+    count = 0
+    do column_index = 1, max(0, min(PROCESS_TABLE_COLUMNS, state%column_count))
+      column_id = state%column_ids(column_index)
+      if (.not. valid_process_column_id(column_id)) cycle
+      if (column_id_exists(ids, count, column_id)) cycle
+      count = count + 1
+      ids(count) = column_id
+    end do
+
+    if (count <= 0) then
+      count = PROCESS_TABLE_COLUMNS
+      ids = DEFAULT_PROCESS_COLUMN_IDS
+    end if
+
+    state%column_count = count
+    state%column_ids = 0
+    state%column_ids(:count) = ids(:count)
+    if (process_sort_column(state%sort_key, state) == 0) then
+      state%sort_key = process_column_sort_key(state%column_ids(1))
+    end if
+  end subroutine normalize_process_columns
+
   subroutine normalize_process_table_state(state, row_count, viewport_rows)
     type(process_table_state), intent(inout) :: state
     integer, intent(in) :: row_count
@@ -1191,6 +1443,7 @@ contains
     state%row_count = max(0, row_count)
     state%total_row_count = max(state%row_count, state%total_row_count)
     state%viewport_rows = max(0, viewport_rows)
+    call normalize_process_columns(state)
     call normalize_filter_state(state)
     call normalize_collapsed_state(state)
     if (state%sort_direction /= TABLE_SORT_DESCENDING) state%sort_direction = TABLE_SORT_ASCENDING
@@ -1215,84 +1468,19 @@ contains
     state%scroll_row = max(1, min(max_scroll_row, state%scroll_row))
   end subroutine normalize_process_table_state
 
-  integer function process_sort_key_index(sort_key) result(key_index)
-    integer, intent(in) :: sort_key
-    integer :: i
-
-    key_index = 1
-    do i = 1, PROCESS_SORT_KEY_COUNT
-      if (process_sort_key_at(i) == sort_key) then
-        key_index = i
-        return
-      end if
-    end do
-  end function process_sort_key_index
-
-  integer function process_sort_key_at(key_index) result(sort_key)
-    integer, intent(in) :: key_index
-
-    select case (key_index)
-    case (2)
-      sort_key = PROCESS_SORT_USER
-    case (3)
-      sort_key = PROCESS_SORT_PRIORITY
-    case (4)
-      sort_key = PROCESS_SORT_NICE
-    case (5)
-      sort_key = PROCESS_SORT_VIRT
-    case (6)
-      sort_key = PROCESS_SORT_RSS
-    case (7)
-      sort_key = PROCESS_SORT_SHARED
-    case (8)
-      sort_key = PROCESS_SORT_STATE
-    case (9)
-      sort_key = PROCESS_SORT_CPU
-    case (10)
-      sort_key = PROCESS_SORT_MEMORY
-    case (11)
-      sort_key = PROCESS_SORT_TIME
-    case (12)
-      sort_key = PROCESS_SORT_COMMAND
-    case default
-      sort_key = PROCESS_SORT_PID
-    end select
-  end function process_sort_key_at
-
-  integer function process_sort_key_for_column(column) result(sort_key)
+  integer function process_sort_key_for_column(state, column) result(sort_key)
+    type(process_table_state), intent(in) :: state
     integer, intent(in) :: column
 
-    select case (column)
-    case (1)
-      sort_key = PROCESS_SORT_PID
-    case (2)
-      sort_key = PROCESS_SORT_USER
-    case (3)
-      sort_key = PROCESS_SORT_PRIORITY
-    case (4)
-      sort_key = PROCESS_SORT_NICE
-    case (5)
-      sort_key = PROCESS_SORT_VIRT
-    case (6)
-      sort_key = PROCESS_SORT_RSS
-    case (7)
-      sort_key = PROCESS_SORT_SHARED
-    case (8)
-      sort_key = PROCESS_SORT_STATE
-    case (9)
-      sort_key = PROCESS_SORT_CPU
-    case (10)
-      sort_key = PROCESS_SORT_MEMORY
-    case (11)
-      sort_key = PROCESS_SORT_TIME
-    case (12)
-      sort_key = PROCESS_SORT_COMMAND
-    case default
+    if (column < 1 .or. column > process_table_column_count(state)) then
       sort_key = 0
-    end select
+    else
+      sort_key = process_column_sort_key(process_table_column_id(state, column))
+    end if
   end function process_sort_key_for_column
 
-  integer function process_table_column_at(rect, target_col) result(column)
+  integer function process_table_column_at(state, rect, target_col) result(column)
+    type(process_table_state), intent(in) :: state
     type(widget_rect), intent(in) :: rect
     integer, intent(in) :: target_col
     integer, allocatable :: widths(:)
@@ -1302,7 +1490,7 @@ contains
     column = 0
     if (target_col < rect%col .or. target_col >= rect%col + rect%width) return
 
-    call process_table_column_widths(rect%width, widths)
+    call process_table_column_widths(state, rect%width, widths)
     draw_col = rect%col
     do item = 1, size(widths)
       if (target_col >= draw_col .and. target_col < draw_col + widths(item)) then
@@ -1317,35 +1505,22 @@ contains
     end do
   end function process_table_column_at
 
-  subroutine process_table_column_widths(available_width, widths)
+  subroutine process_table_column_widths(state, available_width, widths)
+    type(process_table_state), intent(in) :: state
     integer, intent(in) :: available_width
     integer, allocatable, intent(out) :: widths(:)
-    integer :: content_width
-    integer :: remaining
-    integer :: separator_cells
+    type(table_cell), allocatable :: empty_cells(:, :)
+    type(table_column), allocatable :: columns(:)
+    integer :: column
 
-    allocate(widths(PROCESS_TABLE_COLUMNS))
-    widths = 0
-    if (available_width <= 0) return
-
-    separator_cells = max(0, PROCESS_TABLE_COLUMNS - 1)
-    content_width = max(0, available_width - separator_cells)
-    widths(1:11) = [5, 6, 3, 3, 5, 5, 5, 1, 6, 6, 7]
-    remaining = max(0, content_width - sum(widths))
-    widths(12) = remaining
-    call shrink_process_widths_to_fit(widths, content_width)
-  end subroutine process_table_column_widths
-
-  subroutine shrink_process_widths_to_fit(widths, available_width)
-    integer, intent(inout) :: widths(:)
-    integer, intent(in) :: available_width
-    integer :: largest
-
-    do while (sum(widths) > available_width .and. any(widths > 0))
-      largest = maxloc(widths, dim=1)
-      widths(largest) = widths(largest) - 1
+    allocate(columns(process_table_column_count(state)))
+    do column = 1, size(columns)
+      call process_column_definition(process_table_column_id(state, column), columns(column))
     end do
-  end subroutine shrink_process_widths_to_fit
+    call mark_sort_column(columns, state)
+    allocate(empty_cells(0, size(columns)))
+    call calculate_column_widths(columns, empty_cells, available_width, TABLE_SEPARATOR_SPACE, widths)
+  end subroutine process_table_column_widths
 
   logical function point_in_rect(rect, row, col) result(inside)
     type(widget_rect), intent(in) :: rect

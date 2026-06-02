@@ -59,6 +59,7 @@ module ftop_app
     process_table_scroll_delta, &
     process_table_select_at, &
     process_table_select_delta, &
+    process_table_set_columns, &
     process_table_set_signal, &
     process_table_signal_status, &
     process_table_sort_at, &
@@ -304,12 +305,15 @@ contains
     type(terminal_session), intent(inout) :: session
     type(layout_error) :: error
     character(len=:), allocatable :: path
+    character(len=:), allocatable :: process_error
 
     if (allocated(session%config_path)) then
       path = session%config_path
       call parse_layout_file(path, session%layout, error)
       if (error%failed) then
         call set_status(session, "layout config failed: " // error%message)
+      else if (.not. apply_layout_process_config(session, process_error)) then
+        call set_status(session, "layout config failed: " // process_error)
       else
         session%layout_loaded = .true.
         call set_status(session, "layout config " // path)
@@ -322,11 +326,26 @@ contains
     call parse_layout_file(path, session%layout, error)
     if (error%failed) then
       call set_status(session, "layout config failed: " // error%message)
+    else if (.not. apply_layout_process_config(session, process_error)) then
+      call set_status(session, "layout config failed: " // process_error)
     else
       session%layout_loaded = .true.
       call set_status(session, "layout config " // path)
     end if
   end subroutine initialize_layout
+
+  logical function apply_layout_process_config(session, error_message) result(applied)
+    type(terminal_session), intent(inout) :: session
+    character(len=:), allocatable, intent(out) :: error_message
+
+    applied = .true.
+    error_message = ""
+    if (session%layout%process%column_count <= 0) return
+
+    applied = process_table_set_columns(session%process_state, &
+                                        session%layout%process%columns(:session%layout%process%column_count), &
+                                        session%layout%process%column_count, error_message)
+  end function apply_layout_process_config
 
   function discover_layout_config_path() result(path)
     character(len=:), allocatable :: path

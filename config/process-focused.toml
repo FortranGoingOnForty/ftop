@@ -1,5 +1,8 @@
 # Process-focused layout.
 
+[process]
+columns = ["pid", "user", "cpu", "mem", "time", "command"]
+
 [[row]]
 weight = 1
 

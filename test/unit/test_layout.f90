@@ -55,6 +55,8 @@ contains
 
     nl = new_line('a')
     call parse_layout_toml(&
+      "[process]" // nl // &
+      "columns = [""pid"", ""cpu"", ""command""]" // nl // &
       "[[row]]" // nl // &
       "weight = 2" // nl // &
       "[[row.column]]" // nl // &
@@ -71,6 +73,8 @@ contains
     call require(size(grid%rows) == 1, "layout TOML should produce one row")
     call require(grid%rows(1)%weight == 2, "layout TOML should parse row weight")
     call require(size(grid%rows(1)%columns) == 2, "layout TOML should produce columns")
+    call require(grid%process%column_count == 3, "layout TOML should parse process columns")
+    call require(trim(grid%process%columns(2)) == "cpu", "layout TOML should preserve process column names")
     call require(grid%rows(1)%columns(1)%widget == LAYOUT_WIDGET_CPU, "first column should be cpu")
     call require(grid%rows(1)%columns(1)%min_size%width == 28, "column min_width should parse")
     call require(grid%rows(1)%columns(1)%min_size%height == 8, "column min_height should parse")
@@ -86,12 +90,12 @@ contains
     nl = new_line('a')
     call parse_layout_toml(&
       "[[row]]" // nl // &
+      "weight = 1" // nl // &
       "[[row.column]]" // nl // &
-      "weight = 1" // nl, &
+      "widget = 1" // nl, &
       grid, error)
 
-    call require(error%failed, "layout TOML should reject missing widget")
-    call require(index(error%message, "missing widget") > 0, "layout error should explain missing widget")
+    call require(error%failed, "layout TOML should reject malformed widget")
 
     call parse_layout_toml(&
       "[[row]]" // nl // &
@@ -100,6 +104,17 @@ contains
       grid, error)
     call require(error%failed, "layout TOML should reject unknown widget")
     call require(index(error%message, "unknown widget") > 0, "layout error should explain unknown widget")
+
+    call parse_layout_toml(&
+      "[process]" // nl // &
+      "columns = ""pid""" // nl // &
+      "[[row]]" // nl // &
+      "[[row.column]]" // nl // &
+      "widget = ""process""" // nl, &
+      grid, error)
+    call require(error%failed, "layout TOML should reject scalar process columns")
+    call require(index(error%message, "process columns") > 0, &
+                 "layout error should explain invalid process columns")
   end subroutine test_reject_invalid_layout_toml
 
   subroutine test_grid_resolution()
