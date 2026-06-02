@@ -35,7 +35,8 @@ module ftop_collector
     append_process_histories, &
     assign_process_cpu_percent, &
     process_info, &
-    process_table
+    process_table, &
+    rebuild_process_index
   use ftop_pthread, only : &
     ftop_mutex_destroy, &
     ftop_mutex_handle, &
@@ -728,6 +729,7 @@ contains
       snapshot%processes%items(process_index)%jid = int(state%process_jid(process_index))
     end do
 
+    call rebuild_process_index(snapshot%processes)
     success = .true.
   end function copy_processes
 

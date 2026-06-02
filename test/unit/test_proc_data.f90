@@ -1,20 +1,23 @@
 program test_proc_data
   use, intrinsic :: iso_fortran_env, only : int64, real64
   use ftop_proc_data, only : PROCESS_HISTORY_CAPACITY, PROCESS_SORT_CPU, PROCESS_SORT_NICE, PROCESS_SORT_PID, &
-                             PROCESS_SORT_PRIORITY, PROCESS_SORT_SHARED, PROCESS_SORT_TIME, PROCESS_SORT_VIRT, &
-                             append_process_histories, assign_process_cpu_percent, build_process_tree, &
-                             process_count, process_display_command, process_info, process_state_label, &
-                             process_table, process_user_label, sort_process_table
+                              PROCESS_SORT_PRIORITY, PROCESS_SORT_SHARED, PROCESS_SORT_TIME, PROCESS_SORT_VIRT, &
+                              append_process_histories, assign_process_cpu_percent, build_process_tree, &
+                              process_count, process_display_command, process_info, process_lookup_index, &
+                              process_state_label, process_table, process_user_label, rebuild_process_index, &
+                              sort_process_table
   implicit none
 
   type(process_info) :: process
   type(process_table) :: table
 
   call test_process_labels()
+  call test_process_lookup_index()
   call test_process_cpu_percent()
   call test_process_history()
   call test_process_sorting()
   call test_process_tree()
+  call test_process_lookup_stress()
 
 contains
 
@@ -38,6 +41,40 @@ contains
     process%command = "ftop --test"
     call require(process_display_command(process) == "ftop --test", "process command should be display text")
   end subroutine test_process_labels
+
+  subroutine test_process_lookup_index()
+    type(process_table) :: indexed
+    type(process_table) :: unindexed
+
+    allocate(indexed%items(5))
+    call set_lookup_process(indexed%items(1), 10, 100_int64)
+    call set_lookup_process(indexed%items(2), 18, 180_int64)
+    indexed%items(3)%valid = .false.
+    indexed%items(3)%pid = 26
+    call set_lookup_process(indexed%items(4), 10, 200_int64)
+    call set_lookup_process(indexed%items(5), 34, 340_int64)
+    call rebuild_process_index(indexed)
+
+    call require(process_lookup_index(indexed, 10, 100_int64) == 1, &
+                 "process lookup should match pid and start time")
+    call require(process_lookup_index(indexed, 10, 200_int64) == 4, &
+                 "process lookup should handle duplicate pids by start time")
+    call require(process_lookup_index(indexed, 18) == 2, &
+                 "process lookup should find pid without start time")
+    call require(process_lookup_index(indexed, 26) == 0, &
+                 "process lookup should ignore invalid entries")
+    call require(process_lookup_index(indexed, 10, 300_int64) == 0, &
+                 "process lookup should reject stale pid identity")
+
+    call sort_process_table(indexed, PROCESS_SORT_PID)
+    call require(process_lookup_index(indexed, 34, 340_int64) == 5, &
+                 "process sort should rebuild lookup indexes")
+
+    allocate(unindexed%items(1))
+    call set_lookup_process(unindexed%items(1), 42, 420_int64)
+    call require(process_lookup_index(unindexed, 42, 420_int64) == 1, &
+                 "process lookup should fall back before explicit indexing")
+  end subroutine test_process_lookup_index
 
   subroutine test_process_cpu_percent()
     type(process_table) :: current
@@ -243,6 +280,41 @@ contains
     call require(trim(tree%items(4)%tree_prefix) == "└─", "process tree should mark last child")
     call require(trim(tree%items(8)%tree_prefix) == "└─", "process tree should break cycles safely")
   end subroutine test_process_tree
+
+  subroutine test_process_lookup_stress()
+    integer, parameter :: STRESS_PROCESS_COUNT = 10000
+    type(process_table) :: indexed
+    integer :: item_index
+    integer :: pid
+
+    allocate(indexed%items(STRESS_PROCESS_COUNT))
+    do item_index = 1, STRESS_PROCESS_COUNT
+      pid = 100000 + item_index * 37
+      call set_lookup_process(indexed%items(item_index), pid, int(item_index, int64))
+    end do
+    call rebuild_process_index(indexed)
+
+    call require(process_lookup_index(indexed, 100000 + 1 * 37, 1_int64) == 1, &
+                 "process lookup stress should find first process")
+    call require(process_lookup_index(indexed, 100000 + 5000 * 37, 5000_int64) == 5000, &
+                 "process lookup stress should find middle process")
+    call require(process_lookup_index(indexed, 100000 + STRESS_PROCESS_COUNT * 37, &
+                                      int(STRESS_PROCESS_COUNT, int64)) == STRESS_PROCESS_COUNT, &
+                 "process lookup stress should find last process")
+    call require(process_lookup_index(indexed, 99999999, 1_int64) == 0, &
+                 "process lookup stress should reject missing process")
+  end subroutine test_process_lookup_stress
+
+  subroutine set_lookup_process(process, pid, start_time)
+    type(process_info), intent(out) :: process
+    integer, intent(in) :: pid
+    integer(int64), intent(in) :: start_time
+
+    process = process_info()
+    process%valid = .true.
+    process%pid = pid
+    process%start_time = start_time
+  end subroutine set_lookup_process
 
   subroutine set_tree_process(process, pid, ppid)
     type(process_info), intent(out) :: process

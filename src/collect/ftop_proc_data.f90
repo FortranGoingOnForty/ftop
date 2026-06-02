@@ -59,15 +59,19 @@ module ftop_proc_data
   type, public :: process_table
     logical :: valid = .false.
     type(process_info), allocatable :: items(:)
+    integer, allocatable :: pid_index_pid(:)
+    integer, allocatable :: pid_index_item(:)
   end type process_table
 
   public :: process_count
   public :: process_display_command
+  public :: process_lookup_index
   public :: process_state_label
   public :: process_user_label
   public :: append_process_histories
   public :: assign_process_cpu_percent
   public :: build_process_tree
+  public :: rebuild_process_index
   public :: sort_process_table
 
 contains
@@ -78,6 +82,138 @@ contains
     count = 0
     if (allocated(table%items)) count = size(table%items)
   end function process_count
+
+  subroutine rebuild_process_index(table)
+    type(process_table), intent(inout) :: table
+    integer :: bucket_count
+    integer :: item_index
+
+    if (allocated(table%pid_index_pid)) deallocate(table%pid_index_pid)
+    if (allocated(table%pid_index_item)) deallocate(table%pid_index_item)
+    if (.not. allocated(table%items)) return
+    if (size(table%items) <= 0) return
+
+    bucket_count = process_index_bucket_count(size(table%items))
+    allocate(table%pid_index_pid(bucket_count))
+    allocate(table%pid_index_item(bucket_count))
+    table%pid_index_pid = 0
+    table%pid_index_item = 0
+
+    do item_index = 1, size(table%items)
+      if (.not. table%items(item_index)%valid) cycle
+      if (table%items(item_index)%pid <= 0) cycle
+      call insert_process_index(table, table%items(item_index)%pid, item_index)
+    end do
+  end subroutine rebuild_process_index
+
+  integer function process_lookup_index(table, pid, start_time) result(item_index)
+    type(process_table), intent(in) :: table
+    integer, intent(in) :: pid
+    integer(int64), intent(in), optional :: start_time
+    integer :: bucket
+    integer :: bucket_count
+    integer :: probe_count
+    integer :: candidate_index
+
+    item_index = 0
+    if (pid <= 0) return
+    if (.not. allocated(table%items)) return
+
+    if (.not. process_index_ready(table)) then
+      item_index = process_lookup_index_linear(table, pid, start_time)
+      return
+    end if
+
+    bucket_count = size(table%pid_index_pid)
+    bucket = process_hash_bucket(pid, bucket_count)
+    do probe_count = 1, bucket_count
+      candidate_index = table%pid_index_item(bucket)
+      if (candidate_index == 0) return
+      if (table%pid_index_pid(bucket) == pid) then
+        if (process_lookup_candidate_matches(table, candidate_index, pid, start_time)) then
+          item_index = candidate_index
+          return
+        end if
+      end if
+      bucket = modulo(bucket, bucket_count) + 1
+    end do
+  end function process_lookup_index
+
+  integer function process_lookup_index_linear(table, pid, start_time) result(item_index)
+    type(process_table), intent(in) :: table
+    integer, intent(in) :: pid
+    integer(int64), intent(in), optional :: start_time
+    integer :: candidate_index
+
+    item_index = 0
+    do candidate_index = 1, size(table%items)
+      if (process_lookup_candidate_matches(table, candidate_index, pid, start_time)) then
+        item_index = candidate_index
+        return
+      end if
+    end do
+  end function process_lookup_index_linear
+
+  logical function process_lookup_candidate_matches(table, candidate_index, pid, start_time) result(matches)
+    type(process_table), intent(in) :: table
+    integer, intent(in) :: candidate_index
+    integer, intent(in) :: pid
+    integer(int64), intent(in), optional :: start_time
+
+    matches = .false.
+    if (candidate_index < 1 .or. candidate_index > size(table%items)) return
+    if (.not. table%items(candidate_index)%valid) return
+    if (table%items(candidate_index)%pid /= pid) return
+    if (present(start_time)) then
+      if (start_time > 0_int64 .and. table%items(candidate_index)%start_time /= start_time) return
+    end if
+    matches = .true.
+  end function process_lookup_candidate_matches
+
+  logical function process_index_ready(table) result(ready)
+    type(process_table), intent(in) :: table
+
+    ready = allocated(table%pid_index_pid) .and. allocated(table%pid_index_item)
+    if (.not. ready) return
+    ready = size(table%pid_index_pid) == size(table%pid_index_item) .and. size(table%pid_index_pid) > 0
+  end function process_index_ready
+
+  integer function process_index_bucket_count(item_count) result(bucket_count)
+    integer, intent(in) :: item_count
+
+    bucket_count = 8
+    do while (bucket_count < max(1, item_count) * 2)
+      bucket_count = bucket_count * 2
+    end do
+  end function process_index_bucket_count
+
+  subroutine insert_process_index(table, pid, item_index)
+    type(process_table), intent(inout) :: table
+    integer, intent(in) :: pid
+    integer, intent(in) :: item_index
+    integer :: bucket
+    integer :: bucket_count
+    integer :: probe_count
+
+    if (.not. process_index_ready(table)) return
+    bucket_count = size(table%pid_index_pid)
+    bucket = process_hash_bucket(pid, bucket_count)
+    do probe_count = 1, bucket_count
+      if (table%pid_index_item(bucket) == 0) then
+        table%pid_index_pid(bucket) = pid
+        table%pid_index_item(bucket) = item_index
+        return
+      end if
+      bucket = modulo(bucket, bucket_count) + 1
+    end do
+  end subroutine insert_process_index
+
+  integer function process_hash_bucket(pid, bucket_count) result(bucket)
+    integer, intent(in) :: pid
+    integer, intent(in) :: bucket_count
+
+    bucket = modulo(pid, bucket_count) + 1
+  end function process_hash_bucket
 
   function process_display_command(process) result(text)
     type(process_info), intent(in) :: process
@@ -124,6 +260,7 @@ contains
 
     if (.not. allocated(current%items)) return
     current%items%cpu_percent = 0.0_real64
+    call rebuild_process_index(current)
     if (.not. current%valid .or. .not. previous%valid) return
     if (.not. allocated(previous%items)) return
     if (elapsed_ms <= 0_int64) return
@@ -160,6 +297,7 @@ contains
       call append_process_history_sample(current%items(current_index), current%items(current_index)%cpu_percent, &
                                          current%items(current_index)%mem_percent)
     end do
+    call rebuild_process_index(current)
   end subroutine append_process_histories
 
   subroutine copy_process_history(current, previous)
@@ -212,6 +350,7 @@ contains
     if (.not. allocated(table%items)) return
     item_count = size(table%items)
     if (item_count <= 0) return
+    call rebuild_process_index(table)
 
     table%items%tree_depth = 0
     table%items%tree_prefix = ""
@@ -242,6 +381,7 @@ contains
     end do
 
     table%items = ordered
+    call rebuild_process_index(table)
   end subroutine build_process_tree
 
   recursive subroutine append_tree_process(table, item_index, depth, ancestor_prefix, is_last, emitted, ordered, &
@@ -306,14 +446,8 @@ contains
 
     found = .false.
     parent_pid = table%items(item_index)%ppid
-    do candidate_index = 1, size(table%items)
-      if (candidate_index == item_index) cycle
-      if (.not. table%items(candidate_index)%valid) cycle
-      if (table%items(candidate_index)%pid == parent_pid) then
-        found = .true.
-        return
-      end if
-    end do
+    candidate_index = process_lookup_index(table, parent_pid)
+    found = candidate_index > 0 .and. candidate_index /= item_index
   end function process_parent_exists
 
   logical function process_is_child_of(table, child_index, parent_index, emitted) result(is_child)
@@ -395,14 +529,8 @@ contains
     match_index = 0
     if (.not. current%valid) return
     if (current%pid <= 0 .or. current%start_time <= 0_int64) return
-
-    do previous_index = 1, size(previous%items)
-      if (.not. previous%items(previous_index)%valid) cycle
-      if (previous%items(previous_index)%pid /= current%pid) cycle
-      if (previous%items(previous_index)%start_time /= current%start_time) cycle
-      match_index = previous_index
-      return
-    end do
+    previous_index = process_lookup_index(previous, current%pid, current%start_time)
+    if (previous_index > 0) match_index = previous_index
   end function matching_previous_process
 
   subroutine sort_process_table(table, sort_key, descending)
@@ -415,7 +543,10 @@ contains
     logical :: use_descending
 
     if (.not. allocated(table%items)) return
-    if (size(table%items) <= 1) return
+    if (size(table%items) <= 1) then
+      call rebuild_process_index(table)
+      return
+    end if
     use_descending = .false.
     if (present(descending)) use_descending = descending
 
@@ -429,6 +560,7 @@ contains
       end do
       table%items(scan_index + 1) = current
     end do
+    call rebuild_process_index(table)
   end subroutine sort_process_table
 
   logical function process_out_of_order(left, right, sort_key, descending) result(out_of_order)

@@ -19,9 +19,11 @@ module ftop_process_table
     build_process_tree, &
     process_display_command, &
     process_info, &
+    process_lookup_index, &
     process_state_label, &
     process_table, &
     process_user_label, &
+    rebuild_process_index, &
     sort_process_table
   use ftop_sparkline, only : sparkline_glyph
   use ftop_table, only : &
@@ -409,6 +411,7 @@ contains
       filtered(row) = table%items(process_index)
     end do
     call move_alloc(filtered, table%items)
+    call rebuild_process_index(table)
     state%row_count = match_count
   end subroutine filter_process_table
 
@@ -509,6 +512,7 @@ contains
     allocate(compact(max(0, item_count)))
     if (item_count > 0) compact = items(:item_count)
     call move_alloc(compact, table%items)
+    call rebuild_process_index(table)
   end subroutine replace_process_items
 
   subroutine update_selected_process_state(state, visible_table, full_tree_table)
@@ -581,18 +585,8 @@ contains
     type(process_table), intent(in) :: table
     integer, intent(in) :: pid
     integer(int64), intent(in) :: start_time
-    integer :: process_index
 
-    exists = .false.
-    if (.not. allocated(table%items)) return
-    do process_index = 1, size(table%items)
-      if (.not. table%items(process_index)%valid) cycle
-      if (process_identity_matches(table%items(process_index)%pid, table%items(process_index)%start_time, &
-                                   pid, start_time)) then
-        exists = .true.
-        return
-      end if
-    end do
+    exists = process_lookup_index(table, pid, start_time) > 0
   end function process_identity_exists
 
   subroutine prune_signal_feedback_state(state, table)
