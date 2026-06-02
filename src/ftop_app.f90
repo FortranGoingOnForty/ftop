@@ -13,6 +13,7 @@ module ftop_app
     FGOF_KEY_ENTER, &
     FGOF_KEY_ESCAPE, &
     FGOF_KEY_END, &
+    FGOF_KEY_F1, &
     FGOF_KEY_HOME, &
     FGOF_KEY_LEFT, &
     FGOF_KEY_PAGEDOWN, &
@@ -31,6 +32,7 @@ module ftop_app
   use fgof_termios_types, only : FGOF_TERMIOS_ERR_NONE, terminal_size, termios_guard
   use ftop_collector, only : collector, collector_snapshot
   use ftop_dashboard, only : render_dashboard
+  use ftop_help, only : render_help_overlay
   use ftop_layout, only : &
     dashboard_layout, &
     dashboard_layout_from_grid, &
@@ -149,6 +151,7 @@ module ftop_app
     integer :: refresh_ms = DEFAULT_REFRESH_MS
     integer :: frame_count = 0
     integer :: focus_index = 1
+    integer :: last_focus_index = 0
     integer :: layout_preset_index = 1
     integer :: last_render_count = 0
     integer :: last_refresh_count = 0
@@ -161,6 +164,7 @@ module ftop_app
     logical :: collector_started = .false.
     logical :: layout_loaded = .false.
     logical :: zoomed = .false.
+    logical :: help_visible = .false.
     logical :: running = .true.
     logical :: needs_full_render = .true.
     logical :: dirty = .true.
@@ -337,6 +341,7 @@ contains
                               process_state=session%process_state, &
                               network_state=session%network_state)
     end if
+    if (session%help_visible) call render_help_overlay(session%current, focus)
   end subroutine draw_frame
 
   subroutine initialize_layout(session)
@@ -446,6 +451,7 @@ contains
     integer, intent(in) :: preset_index
     character(len=:), allocatable :: error_message
     character(len=:), allocatable :: old_focus
+    logical :: ignored_focus
     logical :: old_zoomed
 
     old_focus = focused_widget_name(session)
@@ -456,9 +462,10 @@ contains
     end if
 
     session%focus_index = 1
+    session%last_focus_index = 0
     if (old_zoomed .and. layout_contains_widget(session%layout, old_focus)) then
       session%zoomed = .false.
-      call focus_widget_named(session, old_focus)
+      ignored_focus = focus_widget_named(session, old_focus)
       session%zoomed = .true.
     else
       session%zoomed = .false.
@@ -660,7 +667,7 @@ contains
     rect = layout%process_panel
   end function current_process_panel_rect
 
-  subroutine focus_widget_named(session, name)
+  logical function focus_widget_named(session, name) result(focused)
     type(terminal_session), intent(inout) :: session
     character(len=*), intent(in) :: name
     type(layout_grid) :: fallback_grid
@@ -668,6 +675,7 @@ contains
     integer :: count
     integer :: index
 
+    focused = .false.
     if (session%zoomed) return
     count = current_focus_count(session)
     do index = 1, count
@@ -678,11 +686,25 @@ contains
         widget = layout_focus_widget(fallback_grid, index)
       end if
       if (widget == name) then
-        session%focus_index = index
+        call set_focus_index(session, index)
+        focused = .true.
         return
       end if
     end do
-  end subroutine focus_widget_named
+  end function focus_widget_named
+
+  subroutine set_focus_index(session, index)
+    type(terminal_session), intent(inout) :: session
+    integer, intent(in) :: index
+    integer :: count
+    integer :: bounded
+
+    count = current_focus_count(session)
+    if (count <= 0) return
+    bounded = max(1, min(count, index))
+    if (bounded /= session%focus_index) session%last_focus_index = session%focus_index
+    session%focus_index = bounded
+  end subroutine set_focus_index
 
   subroutine cycle_focus(session, direction)
     type(terminal_session), intent(inout) :: session
@@ -700,9 +722,27 @@ contains
       return
     end if
 
-    session%focus_index = modulo(session%focus_index - 1 + direction, count) + 1
+    call set_focus_index(session, modulo(session%focus_index - 1 + direction, count) + 1)
     call set_status(session, "focus " // focused_widget_name(session))
   end subroutine cycle_focus
+
+  subroutine focus_last_widget(session)
+    type(terminal_session), intent(inout) :: session
+    integer :: count
+
+    count = current_focus_count(session)
+    if (count <= 0) then
+      call set_status(session, "no focusable widgets")
+      return
+    end if
+    if (session%last_focus_index >= 1 .and. session%last_focus_index <= count .and. &
+        session%last_focus_index /= session%focus_index) then
+      call set_focus_index(session, session%last_focus_index)
+      call set_status(session, "focus " // focused_widget_name(session))
+    else
+      call cycle_focus(session, -1)
+    end if
+  end subroutine focus_last_widget
 
   subroutine toggle_zoom(session)
     type(terminal_session), intent(inout) :: session
@@ -740,6 +780,17 @@ contains
     end do
     if (len(input_bytes) == 0) return
 
+    if (session%help_visible .and. (input_bytes == achar(27) .or. input_bytes == "?")) then
+      session%help_visible = .false.
+      call set_status(session, "help closed")
+      return
+    end if
+
+    if (input_bytes == achar(27) // "[Z") then
+      call focus_last_widget(session)
+      return
+    end if
+
     call buffer_input(session%decoder, input_bytes)
     do while (has_pending_input(session%decoder))
       event = decode_next_event(session%decoder)
@@ -763,6 +814,7 @@ contains
     type(sgr_mouse_event), intent(in) :: mouse
     type(widget_rect) :: panel
     logical :: double_clicked
+    logical :: ignored_focus
     logical :: node_toggled
     logical :: selected
     integer :: scroll_step
@@ -775,16 +827,16 @@ contains
     if (mouse_scroll_up(mouse)) then
       scroll_step = -max(1, session%process_state%viewport_rows / 3)
       call clear_process_click(session)
-      call focus_widget_named(session, "process")
+      ignored_focus = focus_widget_named(session, "process")
       call process_table_scroll_delta(session%process_state, scroll_step)
     else if (mouse_scroll_down(mouse)) then
       scroll_step = max(1, session%process_state%viewport_rows / 3)
       call clear_process_click(session)
-      call focus_widget_named(session, "process")
+      ignored_focus = focus_widget_named(session, "process")
       call process_table_scroll_delta(session%process_state, scroll_step)
     else if (mouse_left_press(mouse)) then
       double_clicked = process_mouse_double_click(session, mouse)
-      call focus_widget_named(session, "process")
+      ignored_focus = focus_widget_named(session, "process")
       if (.not. process_table_sort_at(session%process_state, panel, mouse%row, mouse%col)) then
         selected = process_table_select_at(session%process_state, panel, mouse%row, mouse%col)
         if (.not. selected) then
@@ -855,13 +907,24 @@ contains
         session%running = .false.
       else if (event%modifiers%ctrl .and. text == "z") then
         call suspend_session(session)
+      else if (event%modifiers%ctrl .and. text == "l") then
+        session%needs_full_render = .true.
+        call set_status(session, "redraw")
+      else if (event%modifiers%ctrl .and. text == "r") then
+        call force_refresh(session)
       else if (event%modifiers%ctrl) then
         if (len(text) > 0) call set_status(session, "key: " // text)
+      else if (handle_help_printable_key(session, text)) then
+        continue
+      else if (session%help_visible) then
+        continue
+      else if (handle_global_printable_key(session, text)) then
+        continue
       else if (handle_process_printable_key(session, text)) then
         continue
       else if (handle_network_printable_key(session, text)) then
         continue
-      else if (text == "p") then
+      else if (text == "P") then
         call cycle_layout_preset(session)
       else if (handle_layout_preset_key(session, text)) then
         continue
@@ -877,6 +940,8 @@ contains
     end if
 
     if (.not. allocated(event%key_name)) return
+    if (handle_help_named_key(session, event%key_name)) return
+    if (session%help_visible) return
     if (handle_process_named_key(session, event%key_name)) return
     if (handle_network_named_key(session, event%key_name)) return
     select case (event%key_name)
@@ -886,7 +951,7 @@ contains
       call toggle_zoom(session)
     case (FGOF_KEY_TAB)
       if (event%modifiers%shift) then
-        call cycle_focus(session, -1)
+        call focus_last_widget(session)
       else
         call cycle_focus(session, 1)
       end if
@@ -896,6 +961,101 @@ contains
       call set_status(session, "key: " // event%key_name)
     end select
   end subroutine handle_key_event
+
+  logical function handle_global_printable_key(session, text) result(handled)
+    type(terminal_session), intent(inout) :: session
+    character(len=*), intent(in) :: text
+
+    handled = .false.
+    if (text_input_active(session)) return
+    select case (text)
+    case ("c")
+      call jump_to_widget(session, "cpu", "CPU")
+    case ("m")
+      call jump_to_widget(session, "memory", "Memory")
+    case ("n")
+      call jump_to_widget(session, "network", "Network")
+    case ("p")
+      call jump_to_widget(session, "process", "Process")
+    case ("d")
+      call set_status(session, "Disk panel not yet available")
+    case ("g")
+      call set_status(session, "GPU panel not yet available")
+    case default
+      return
+    end select
+    handled = .true.
+  end function handle_global_printable_key
+
+  subroutine jump_to_widget(session, widget, label)
+    type(terminal_session), intent(inout) :: session
+    character(len=*), intent(in) :: widget
+    character(len=*), intent(in) :: label
+    logical :: focused
+
+    if (session%zoomed) session%zoomed = .false.
+    focused = focus_widget_named(session, widget)
+    if (focused) then
+      call set_status(session, "focus " // trim(label))
+    else
+      call set_status(session, "Switch to full layout first")
+    end if
+  end subroutine jump_to_widget
+
+  logical function text_input_active(session) result(active)
+    type(terminal_session), intent(in) :: session
+
+    active = session%process_state%filter_active .or. session%process_state%signal_pending
+  end function text_input_active
+
+  logical function handle_help_printable_key(session, text) result(handled)
+    type(terminal_session), intent(inout) :: session
+    character(len=*), intent(in) :: text
+
+    handled = .false.
+    if (text /= "?") return
+    session%help_visible = .not. session%help_visible
+    if (session%help_visible) then
+      call set_status(session, "help")
+    else
+      call set_status(session, "help closed")
+    end if
+    handled = .true.
+  end function handle_help_printable_key
+
+  logical function handle_help_named_key(session, key_name) result(handled)
+    type(terminal_session), intent(inout) :: session
+    character(len=*), intent(in) :: key_name
+
+    handled = .false.
+    select case (key_name)
+    case (FGOF_KEY_F1)
+      session%help_visible = .not. session%help_visible
+      if (session%help_visible) then
+        call set_status(session, "help")
+      else
+        call set_status(session, "help closed")
+      end if
+      handled = .true.
+    case (FGOF_KEY_ESCAPE)
+      if (.not. session%help_visible) return
+      session%help_visible = .false.
+      call set_status(session, "help closed")
+      handled = .true.
+    end select
+  end function handle_help_named_key
+
+  subroutine force_refresh(session)
+    type(terminal_session), intent(inout) :: session
+    type(collector_snapshot) :: snapshot
+
+    if (allocated(session%metrics)) then
+      if (session%metrics%initialized()) snapshot = session%metrics%snapshot()
+    end if
+    session%frame_count = session%frame_count + 1
+    call system_clock(session%last_refresh_count)
+    call set_status(session, "refresh")
+  end subroutine force_refresh
 
   logical function handle_layout_preset_key(session, text) result(handled)
     type(terminal_session), intent(inout) :: session

@@ -77,6 +77,11 @@ target_link_libraries(ftop_dashboard_test PRIVATE ftop_core)
 
 add_test(NAME ftop_dashboard COMMAND ftop_dashboard_test)
 
+add_executable(ftop_help_test unit/test_help.f90)
+target_link_libraries(ftop_help_test PRIVATE ftop_core)
+
+add_test(NAME ftop_help COMMAND ftop_help_test)
+
 add_executable(ftop_dashboard_snapshots_test unit/test_dashboard_snapshots.f90)
 target_link_libraries(ftop_dashboard_snapshots_test PRIVATE ftop_core)
 add_test(

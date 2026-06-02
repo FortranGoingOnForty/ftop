@@ -241,7 +241,7 @@ contains
     fps = real_text(footer_fps(refresh_ms, render_fps))
     text = "refresh " // integer_text(refresh_ms) // "ms frame " // integer_text(frame_count) // &
             " fps " // fps // " samples " // integer_text(snapshot%sample_count) // "  " // running_text // &
-           focus_text // layout_text // "  Tab focus p layout 1-4 presets z zoom q quit Ctrl+Z suspend"
+           focus_text // layout_text // "  Tab focus P layout 1-4 presets z zoom q quit Ctrl+Z suspend"
   end function footer_text
 
   real function footer_fps(refresh_ms, render_fps) result(fps)

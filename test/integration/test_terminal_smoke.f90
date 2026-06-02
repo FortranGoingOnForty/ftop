@@ -60,13 +60,35 @@ program test_terminal_smoke
   match = wait_for_string(session, "layout full", 2500)
   if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not show full layout preset"
 
-  if (.not. send_text(session, "p")) error stop "failed to send layout cycle key"
+  if (.not. send_text(session, "P")) error stop "failed to send layout cycle key"
   match = wait_for_string(session, "layout compact", 2500)
   if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not cycle layout preset"
 
   if (.not. send_text(session, "3")) error stop "failed to send direct layout key"
   match = wait_for_string(session, "layout process", 2500)
   if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not jump to layout preset"
+
+  if (.not. send_text(session, "c")) error stop "failed to send CPU focus key"
+  match = wait_for_string(session, "focus CPU", 2500)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not focus CPU from global key"
+
+  if (.not. send_text(session, "p")) error stop "failed to send process focus key"
+  match = wait_for_string(session, "focus Process", 2500)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not focus process from global key"
+
+  if (.not. send_text(session, achar(27) // "[Z")) error stop "failed to send Shift+Tab"
+  match = wait_for_string(session, "focus cpu", 2500)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not jump to last focus"
+
+  if (.not. send_text(session, "d")) error stop "failed to send disk focus key"
+  match = wait_for_string(session, "Disk panel not yet available", 2500)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not show disk placeholder"
+
+  if (.not. send_text(session, "?")) error stop "failed to send help key"
+  match = wait_for_string(session, "ftop help", 2500)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not show help overlay"
+
+  if (.not. send_text(session, "?")) error stop "failed to close help"
 
   if (.not. send_text(session, achar(9))) error stop "failed to send Tab"
   match = wait_for_string(session, "focus memory", 2500)
@@ -167,6 +189,10 @@ contains
     if (.not. send_text(filter_session, "/ftop")) error stop "failed to send process filter"
     filter_match = wait_for_string(filter_session, "filter ftop", 2500)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not enter process filter"
+
+    if (.not. send_text(filter_session, "c")) error stop "failed to send filter character c"
+    filter_match = wait_for_string(filter_session, "filter ftopc", 2500)
+    if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "global focus key captured filter text"
 
     if (.not. send_text(filter_session, achar(27) // achar(27))) error stop "failed to clear process filter"
     filter_match = wait_for_string(filter_session, "sort cpu asc", 2500)

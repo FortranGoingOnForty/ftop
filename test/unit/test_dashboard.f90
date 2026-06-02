@@ -79,7 +79,7 @@ contains
     call require(index(text, "8080(web)") > 0, "dashboard should render service names")
     call require(index(text, "refresh 1000ms frame 7 fps 1.0 samples 3") > 0, &
                  "dashboard should render footer")
-    call require(index(text, "p layout 1-4 presets") > 0, "dashboard should render layout key hints")
+    call require(index(text, "P layout 1-4 presets") > 0, "dashboard should render layout key hints")
     call require(index(text, "ready") > 0, "dashboard should render status")
 
     call render_dashboard(buffer, snapshot, 1000, 7, "ready", layout_name="network")

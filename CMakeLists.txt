@@ -99,6 +99,7 @@ add_library(
   src/ftop_widgets.f90
   src/ftop_layout.f90
   src/ftop_dashboard.f90
+  src/ftop_help.f90
   src/ftop_app.f90
   src/widgets/ftop_text.f90
   src/widgets/ftop_box.f90
