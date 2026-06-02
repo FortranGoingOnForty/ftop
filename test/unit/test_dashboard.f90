@@ -121,22 +121,39 @@ contains
 
     snapshot = network_table_snapshot()
     if (allocated(snapshot%network%processes)) deallocate(snapshot%network%processes)
-    allocate(snapshot%network%processes(1))
+    allocate(snapshot%network%processes(3))
     snapshot%network%processes(1)%valid = .true.
     snapshot%network%processes(1)%pid = 1234
     snapshot%network%processes(1)%start_time = 42_int64
     snapshot%network%processes(1)%process_name = "curl"
     snapshot%network%processes(1)%rx_bytes_per_sec = 2048.0_real64
     snapshot%network%processes(1)%tx_bytes_per_sec = 512.0_real64
+    snapshot%network%processes(2)%valid = .true.
+    snapshot%network%processes(2)%pid = 2222
+    snapshot%network%processes(2)%start_time = 43_int64
+    snapshot%network%processes(2)%process_name = "wget"
+    snapshot%network%processes(2)%rx_bytes_per_sec = 4096.0_real64
+    snapshot%network%processes(2)%tx_bytes_per_sec = 1024.0_real64
+    snapshot%network%processes(3)%valid = .true.
+    snapshot%network%processes(3)%pid = 22
+    snapshot%network%processes(3)%start_time = 44_int64
+    snapshot%network%processes(3)%process_name = "sshd"
+    snapshot%network%processes(3)%rx_bytes_per_sec = 128.0_real64
+    snapshot%network%processes(3)%tx_bytes_per_sec = 128.0_real64
 
     buffer = allocate_screen(100, 28)
     call render_dashboard(buffer, snapshot, 1000, 7, "network-test", focused_widget="network", zoomed=.true., &
                           network_state=network_state)
     text = buffer_text(buffer)
 
-    call require(index(text, "Process curl") > 0, "zoomed network should render process bandwidth owner")
+    call require(index(text, "Process wget") > 0, "zoomed network should render top bandwidth process")
+    call require(index(text, "Process curl") > 0, "zoomed network should render additional process bandwidth")
+    call require(index(text, "Process sshd") > 0, "zoomed network should render lower bandwidth process")
+    call require(index(text, "Process wget") < index(text, "Process curl"), &
+                 "zoomed network should sort process bandwidth by total rate")
     call require(index(text, "rx 2.0 KB/s") > 0, "zoomed network should render process rx bandwidth")
     call require(index(text, "tx 512 B/s") > 0, "zoomed network should render process tx bandwidth")
+    call require(index(text, "PROTO") > 0, "zoomed network should keep connection table below process bandwidth")
   end subroutine test_dashboard_renders_network_process_bandwidth
 
   subroutine test_tiny_dashboard()

@@ -8,7 +8,7 @@ module ftop_network
     color_gradient, &
     gradient_blue_cyan, &
     style_from_rgb
-  use ftop_net_data, only : NET_STATE_LEN, format_byte_rate, net_connection
+  use ftop_net_data, only : NET_STATE_LEN, format_byte_rate, net_connection, process_bandwidth
   use ftop_sparkline, only : render_sparkline
   use ftop_table, only : &
     TABLE_SORT_ASCENDING, &
@@ -35,6 +35,7 @@ module ftop_network
   integer, parameter, public :: NETWORK_SORT_PROCESS = 6
   integer, parameter :: NETWORK_TABLE_COLUMNS = 6
   integer, parameter :: NETWORK_FILTER_COUNT = 6
+  integer, parameter :: NETWORK_PROCESS_BANDWIDTH_MAX_ROWS = 5
   character(len=NET_STATE_LEN), parameter :: NETWORK_FILTERS(NETWORK_FILTER_COUNT) = [ &
     character(len=NET_STATE_LEN) :: "", "ESTABLISHED", "LISTEN", "OPEN", "TIME_WAIT", "CLOSE_WAIT" &
   ]
@@ -172,6 +173,7 @@ contains
     type(table_cell), allocatable :: cells(:, :)
     type(table_column) :: columns(NETWORK_TABLE_COLUMNS)
     type(widget_rect) :: table_rect
+    integer :: process_row_count
     integer :: table_start_line
 
     active_state = network_table_state()
@@ -184,11 +186,9 @@ contains
       return
     end if
 
-    table_start_line = 2
-    if (valid_bandwidth_process_count(snapshot) > 0 .and. content%height >= 2) then
-      call render_text(buffer, content_line_rect(content, 2), network_process_bandwidth_text(snapshot), dim_style)
-      table_start_line = 3
-    end if
+    process_row_count = network_process_bandwidth_row_count(snapshot, content%height)
+    if (process_row_count > 0) call render_process_bandwidth_rows(buffer, content, snapshot, dim_style, process_row_count)
+    table_start_line = 2 + process_row_count
     if (content%height < table_start_line) then
       if (present(state)) state = active_state
       return
@@ -205,9 +205,11 @@ contains
     connections = visible_connections(snapshot, active_state)
     if (size(connections) <= 0) then
       if (active_state%total_row_count > 0 .and. len_trim(active_state%state_filter) > 0) then
-        call render_text(buffer, content_line_rect(content, 2), "no matching connections", dim_style, TEXT_ALIGN_CENTER)
+        call render_text(buffer, content_line_rect(content, table_start_line), &
+                         "no matching connections", dim_style, TEXT_ALIGN_CENTER)
       else
-        call render_text(buffer, content_line_rect(content, 2), "no network connections", dim_style, TEXT_ALIGN_CENTER)
+        call render_text(buffer, content_line_rect(content, table_start_line), &
+                         "no network connections", dim_style, TEXT_ALIGN_CENTER)
       end if
       call normalize_network_table_state(active_state, 0, table_viewport_row_count(table_rect, .true.))
       if (present(state)) state = active_state
@@ -489,47 +491,93 @@ contains
     end do
   end function valid_bandwidth_process_count
 
-  function network_process_bandwidth_text(snapshot) result(text)
+  integer function network_process_bandwidth_row_count(snapshot, content_height) result(row_count)
     type(collector_snapshot), intent(in) :: snapshot
-    character(len=:), allocatable :: text
-    character(len=:), allocatable :: label
-    integer :: process_index
+    integer, intent(in) :: content_height
 
-    process_index = top_bandwidth_process_index(snapshot)
-    if (process_index <= 0) then
-      text = ""
+    row_count = min(valid_bandwidth_process_count(snapshot), NETWORK_PROCESS_BANDWIDTH_MAX_ROWS)
+    row_count = min(row_count, max(0, content_height - 4))
+  end function network_process_bandwidth_row_count
+
+  subroutine render_process_bandwidth_rows(buffer, content, snapshot, dim_style, row_count)
+    type(screen_buffer), intent(inout) :: buffer
+    type(widget_rect), intent(in) :: content
+    type(collector_snapshot), intent(in) :: snapshot
+    type(screen_style), intent(in) :: dim_style
+    integer, intent(in) :: row_count
+    type(process_bandwidth), allocatable :: processes(:)
+    integer :: row
+
+    call collect_sorted_process_bandwidth(snapshot, processes)
+    do row = 1, min(row_count, size(processes))
+      call render_text(buffer, content_line_rect(content, row + 1), network_process_bandwidth_text(processes(row)), dim_style)
+    end do
+  end subroutine render_process_bandwidth_rows
+
+  subroutine collect_sorted_process_bandwidth(snapshot, processes)
+    type(collector_snapshot), intent(in) :: snapshot
+    type(process_bandwidth), allocatable, intent(out) :: processes(:)
+    integer :: match_count
+    integer :: process_index
+    integer :: row
+
+    match_count = 0
+    if (.not. allocated(snapshot%network%processes)) then
+      allocate(processes(0))
       return
     end if
 
-    if (len_trim(snapshot%network%processes(process_index)%process_name) > 0) then
-      label = trim(snapshot%network%processes(process_index)%process_name)
+    do process_index = 1, size(snapshot%network%processes)
+      if (snapshot%network%processes(process_index)%valid) match_count = match_count + 1
+    end do
+
+    allocate(processes(match_count))
+    row = 0
+    do process_index = 1, size(snapshot%network%processes)
+      if (.not. snapshot%network%processes(process_index)%valid) cycle
+      row = row + 1
+      processes(row) = snapshot%network%processes(process_index)
+    end do
+    call sort_process_bandwidth(processes)
+  end subroutine collect_sorted_process_bandwidth
+
+  subroutine sort_process_bandwidth(processes)
+    type(process_bandwidth), intent(inout) :: processes(:)
+    type(process_bandwidth) :: temp
+    integer :: i
+    integer :: j
+
+    do i = 1, size(processes) - 1
+      do j = i + 1, size(processes)
+        if (process_bandwidth_rate(processes(i)) < process_bandwidth_rate(processes(j))) then
+          temp = processes(i)
+          processes(i) = processes(j)
+          processes(j) = temp
+        end if
+      end do
+    end do
+  end subroutine sort_process_bandwidth
+
+  function network_process_bandwidth_text(process) result(text)
+    type(process_bandwidth), intent(in) :: process
+    character(len=:), allocatable :: text
+    character(len=:), allocatable :: label
+
+    if (len_trim(process%process_name) > 0) then
+      label = trim(process%process_name)
     else
-      label = "pid " // integer_text(max(0, snapshot%network%processes(process_index)%pid))
+      label = "pid " // integer_text(max(0, process%pid))
     end if
     text = "Process " // label // &
-           "  rx " // format_byte_rate(snapshot%network%processes(process_index)%rx_bytes_per_sec) // &
-           "  tx " // format_byte_rate(snapshot%network%processes(process_index)%tx_bytes_per_sec)
+           "  rx " // format_byte_rate(process%rx_bytes_per_sec) // &
+           "  tx " // format_byte_rate(process%tx_bytes_per_sec)
   end function network_process_bandwidth_text
 
-  integer function top_bandwidth_process_index(snapshot) result(process_index)
-    type(collector_snapshot), intent(in) :: snapshot
-    real(real64) :: best_rate
-    real(real64) :: rate
-    integer :: candidate
+  real(real64) function process_bandwidth_rate(process) result(rate)
+    type(process_bandwidth), intent(in) :: process
 
-    process_index = 0
-    best_rate = -1.0_real64
-    if (.not. allocated(snapshot%network%processes)) return
-    do candidate = 1, size(snapshot%network%processes)
-      if (.not. snapshot%network%processes(candidate)%valid) cycle
-      rate = max(0.0_real64, snapshot%network%processes(candidate)%rx_bytes_per_sec) + &
-             max(0.0_real64, snapshot%network%processes(candidate)%tx_bytes_per_sec)
-      if (rate > best_rate) then
-        best_rate = rate
-        process_index = candidate
-      end if
-    end do
-  end function top_bandwidth_process_index
+    rate = max(0.0_real64, process%rx_bytes_per_sec) + max(0.0_real64, process%tx_bytes_per_sec)
+  end function process_bandwidth_rate
 
   function connection_text(snapshot, connection_index) result(text)
     type(collector_snapshot), intent(in) :: snapshot
