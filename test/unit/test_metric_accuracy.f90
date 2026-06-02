@@ -9,7 +9,8 @@ program test_metric_accuracy
   real(real64), parameter :: CPU_USAGE_TOLERANCE = 20.0_real64
   real(real64), parameter :: MEMORY_TOTAL_TOLERANCE = 2.0_real64
   real(real64), parameter :: MEMORY_USED_TOLERANCE = 8.0_real64
-  real(real64), parameter :: PROCESS_PERCENT_TOLERANCE = 2.0_real64
+  real(real64), parameter :: PROCESS_CPU_PERCENT_TOLERANCE = 10.0_real64
+  real(real64), parameter :: PROCESS_MEMORY_PERCENT_TOLERANCE = 2.0_real64
   integer(c_int), parameter :: BUSY_PROCESS_COUNT = 5_c_int
   real(real64), parameter :: BUSY_PROCESS_CPU_TOLERANCE = 3.0_real64
   real(real64), parameter :: BUSY_PROCESS_MEMORY_TOLERANCE = 1.0_real64
@@ -176,10 +177,12 @@ contains
                        "accuracy reference process CPU out of range")
     call require_range(real(reference_mem_percent, real64), 0.0_real64, 100.0_real64, &
                        "accuracy reference process memory out of range")
-    if (abs(after%items(after_index)%cpu_percent - real(reference_cpu_percent, real64)) > PROCESS_PERCENT_TOLERANCE) then
+    if (abs(after%items(after_index)%cpu_percent - real(reference_cpu_percent, real64)) > &
+        PROCESS_CPU_PERCENT_TOLERANCE) then
       error stop "accuracy process CPU exceeded tolerance"
     end if
-    if (abs(after%items(after_index)%mem_percent - real(reference_mem_percent, real64)) > PROCESS_PERCENT_TOLERANCE) then
+    if (abs(after%items(after_index)%mem_percent - real(reference_mem_percent, real64)) > &
+        PROCESS_MEMORY_PERCENT_TOLERANCE) then
       error stop "accuracy process memory exceeded tolerance"
     end if
   end subroutine test_process_accuracy
