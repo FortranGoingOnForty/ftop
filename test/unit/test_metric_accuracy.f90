@@ -2,11 +2,14 @@ program test_metric_accuracy
   use, intrinsic :: iso_c_binding, only : c_double, c_int, c_long_long
   use, intrinsic :: iso_fortran_env, only : int64, real64
   use ftop_platform, only : cpu_tick_sample, cpu_usage_percent, create_platform, memory_info, platform_backend
+  use ftop_proc_data, only : assign_process_cpu_percent, process_lookup_index, process_table
+  use ftop_signal, only : ftop_current_pid
   implicit none
 
   real(real64), parameter :: CPU_USAGE_TOLERANCE = 20.0_real64
   real(real64), parameter :: MEMORY_TOTAL_TOLERANCE = 2.0_real64
   real(real64), parameter :: MEMORY_USED_TOLERANCE = 8.0_real64
+  real(real64), parameter :: PROCESS_PERCENT_TOLERANCE = 2.0_real64
 
   interface
     integer(c_int) function c_ftop_accuracy_reference_cpu(usage_percent, sys_errno) &
@@ -23,6 +26,15 @@ program test_metric_accuracy
       integer(c_long_long), intent(out) :: used_bytes
       integer(c_int), intent(out) :: sys_errno
     end function c_ftop_accuracy_reference_memory
+
+    integer(c_int) function c_ftop_accuracy_reference_process(pid, cpu_percent, mem_percent, sys_errno) &
+        bind(C, name="ftop_accuracy_reference_process")
+      import :: c_double, c_int
+      integer(c_int), value :: pid
+      real(c_double), intent(out) :: cpu_percent
+      real(c_double), intent(out) :: mem_percent
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_accuracy_reference_process
   end interface
 
   class(platform_backend), allocatable :: backend
@@ -32,6 +44,7 @@ program test_metric_accuracy
 
   call test_cpu_accuracy(backend)
   call test_memory_accuracy(backend)
+  call test_process_accuracy(backend)
 
 contains
 
@@ -89,6 +102,71 @@ contains
       error stop "accuracy memory used exceeded tolerance"
     end if
   end subroutine test_memory_accuracy
+
+  subroutine test_process_accuracy(backend)
+    class(platform_backend), intent(in) :: backend
+    type(process_table) :: before
+    type(process_table) :: after
+    integer :: target_pid
+    integer :: before_index
+    integer :: after_index
+    integer(int64) :: target_start_time
+    integer(int64) :: elapsed_ms
+    real(c_double) :: reference_cpu_percent
+    real(c_double) :: reference_mem_percent
+    integer(c_int) :: sys_errno
+    integer(c_int) :: rc
+
+    target_pid = ftop_current_pid()
+    before = backend%get_process_table()
+    if (.not. before%valid) error stop "accuracy process first table invalid"
+    before_index = process_lookup_index(before, target_pid)
+    if (before_index <= 0) error stop "accuracy process first sample missing target"
+    target_start_time = before%items(before_index)%start_time
+
+    call time_reference_process(target_pid, reference_cpu_percent, reference_mem_percent, elapsed_ms, rc, sys_errno)
+    if (rc /= 0_c_int) error stop "accuracy reference process command failed"
+
+    after = backend%get_process_table()
+    if (.not. after%valid) error stop "accuracy process second table invalid"
+    call assign_process_cpu_percent(after, before, elapsed_ms)
+    after_index = process_lookup_index(after, target_pid, target_start_time)
+    if (after_index <= 0) error stop "accuracy process second sample missing target"
+
+    call require_range(real(reference_cpu_percent, real64), 0.0_real64, 10000.0_real64, &
+                       "accuracy reference process CPU out of range")
+    call require_range(real(reference_mem_percent, real64), 0.0_real64, 100.0_real64, &
+                       "accuracy reference process memory out of range")
+    if (abs(after%items(after_index)%cpu_percent - real(reference_cpu_percent, real64)) > PROCESS_PERCENT_TOLERANCE) then
+      error stop "accuracy process CPU exceeded tolerance"
+    end if
+    if (abs(after%items(after_index)%mem_percent - real(reference_mem_percent, real64)) > PROCESS_PERCENT_TOLERANCE) then
+      error stop "accuracy process memory exceeded tolerance"
+    end if
+  end subroutine test_process_accuracy
+
+  subroutine time_reference_process(pid, cpu_percent, mem_percent, elapsed_ms, rc, sys_errno)
+    integer, intent(in) :: pid
+    real(c_double), intent(out) :: cpu_percent
+    real(c_double), intent(out) :: mem_percent
+    integer(int64), intent(out) :: elapsed_ms
+    integer(c_int), intent(out) :: rc
+    integer(c_int), intent(out) :: sys_errno
+    integer(int64) :: count_rate
+    integer(int64) :: end_count
+    integer(int64) :: start_count
+
+    call system_clock(start_count, count_rate)
+    rc = c_ftop_accuracy_reference_process(int(pid, c_int), cpu_percent, mem_percent, sys_errno)
+    call system_clock(end_count)
+    if (count_rate <= 0_int64) then
+      elapsed_ms = 0_int64
+    else
+      elapsed_ms = int(1000.0_real64 * real(max(0_int64, end_count - start_count), real64) / &
+                       real(count_rate, real64), int64)
+    end if
+    if (elapsed_ms <= 0_int64) elapsed_ms = 1_int64
+  end subroutine time_reference_process
 
   real(real64) function percent_difference(left, right) result(percent)
     real(real64), intent(in) :: left

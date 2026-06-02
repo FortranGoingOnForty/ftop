@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <ctype.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -58,6 +59,39 @@ static int copy_line(const char *line_start, char *line, size_t capacity) {
   return len > 0U ? 0 : -1;
 }
 
+static int line_first_pid_matches(const char *line_start, const char *line_end, int pid) {
+  char *parse_end;
+  long value;
+
+  if (line_start == NULL || line_end == NULL || pid <= 0) return 0;
+  while (line_start < line_end && isspace((unsigned char)*line_start)) ++line_start;
+  errno = 0;
+  value = strtol(line_start, &parse_end, 10);
+  if (parse_end == line_start || errno != 0 || value != (long)pid) return 0;
+  return parse_end < line_end && isspace((unsigned char)*parse_end);
+}
+
+static int last_process_line(const char *text, int pid, char *line, size_t capacity) {
+  const char *cursor;
+  const char *line_start;
+  int found;
+
+  if (text == NULL || line == NULL || capacity == 0U || pid <= 0) return -1;
+  line[0] = '\0';
+  cursor = text;
+  found = 0;
+  while (*cursor != '\0') {
+    line_start = cursor;
+    while (*cursor != '\0' && *cursor != '\n') ++cursor;
+    if (line_first_pid_matches(line_start, cursor, pid)) {
+      if (copy_line(line_start, line, capacity) != 0) return -1;
+      found = 1;
+    }
+    if (*cursor == '\n') ++cursor;
+  }
+  return found ? 0 : -1;
+}
+
 static int scaled_bytes(const char *text, const char **end, long long *bytes) {
   char *parse_end;
   double value;
@@ -110,6 +144,24 @@ static int parse_linux_free(const char *output, long long *total_bytes, long lon
   line = last_matching_line(output, "Mem:");
   if (line == NULL) return -1;
   return sscanf(line, "Mem: %lld %lld", total_bytes, used_bytes) == 2 ? 0 : -1;
+}
+
+static int parse_linux_process_line(const char *line, double *cpu_percent, double *mem_percent) {
+  char priority[16];
+  char nice[16];
+  char res[32];
+  char shared[32];
+  char state[16];
+  char user[64];
+  char virt[32];
+  int pid;
+
+  if (line == NULL || cpu_percent == NULL || mem_percent == NULL) return -1;
+  if (sscanf(line, " %d %63s %15s %15s %31s %31s %31s %15s %lf %lf", &pid, user, priority, nice, virt, res,
+             shared, state, cpu_percent, mem_percent) != 10) {
+    return -1;
+  }
+  return 0;
 }
 #endif
 
@@ -171,6 +223,31 @@ static int parse_freebsd_memory(const char *output, long long *total_bytes, long
   *used_bytes = active + wired;
   return 0;
 }
+
+static int parse_freebsd_process_line(const char *line, double *cpu_percent, double *mem_percent) {
+  char res[32];
+  char size[32];
+  char state[16];
+  char time[32];
+  char user[64];
+  int cpu_core;
+  int nice;
+  int pid;
+  int priority;
+  int threads;
+  long long res_bytes;
+  long long total_bytes;
+
+  if (line == NULL || cpu_percent == NULL || mem_percent == NULL) return -1;
+  if (sscanf(line, " %d %63s %d %d %d %31s %31s %15s %d %31s %lf", &pid, user, &threads, &priority, &nice,
+             size, res, state, &cpu_core, time, cpu_percent) != 11) {
+    return -1;
+  }
+  if (scaled_bytes(res, NULL, &res_bytes) != 0) return -1;
+  if (freebsd_total_memory(&total_bytes) != 0 || total_bytes <= 0) return -1;
+  *mem_percent = 100.0 * (double)res_bytes / (double)total_bytes;
+  return 0;
+}
 #endif
 
 #if defined(FTOP_PLATFORM_macos)
@@ -209,6 +286,21 @@ static int parse_macos_memory(const char *output, long long *total_bytes, long l
   while (*cursor == ' ') ++cursor;
   if (scaled_bytes(cursor, NULL, used_bytes) != 0) return -1;
   return macos_total_memory(total_bytes);
+}
+
+static int parse_macos_process_line(const char *line, double *cpu_percent, double *mem_percent) {
+  char command[256];
+  char mem[32];
+  int pid;
+  long long mem_bytes;
+  long long total_bytes;
+
+  if (line == NULL || cpu_percent == NULL || mem_percent == NULL) return -1;
+  if (sscanf(line, " %d %255s %lf %31s", &pid, command, cpu_percent, mem) != 4) return -1;
+  if (scaled_bytes(mem, NULL, &mem_bytes) != 0) return -1;
+  if (macos_total_memory(&total_bytes) != 0 || total_bytes <= 0) return -1;
+  *mem_percent = 100.0 * (double)mem_bytes / (double)total_bytes;
+  return 0;
 }
 #endif
 
@@ -252,6 +344,45 @@ int ftop_accuracy_reference_memory(long long *total_bytes, long long *used_bytes
 #elif defined(FTOP_PLATFORM_macos)
   rc = read_command_output("top -l 1 -n 0", output, sizeof(output));
   if (rc == 0) rc = parse_macos_memory(output, total_bytes, used_bytes);
+#else
+  rc = -1;
+#endif
+  if (rc != 0) *sys_errno = errno != 0 ? errno : EINVAL;
+  return rc;
+}
+
+int ftop_accuracy_reference_process(int pid, double *cpu_percent, double *mem_percent, int *sys_errno) {
+  char command[128];
+  char line[512];
+  char output[65536];
+  int rc;
+
+  if (pid <= 0 || cpu_percent == NULL || mem_percent == NULL || sys_errno == NULL) return -1;
+  *cpu_percent = 0.0;
+  *mem_percent = 0.0;
+  *sys_errno = 0;
+#if defined(FTOP_PLATFORM_linux)
+  rc = snprintf(command, sizeof(command), "top -bn2 -d 1 -p %d", pid);
+#elif defined(FTOP_PLATFORM_freebsd)
+  rc = snprintf(command, sizeof(command), "top -b -d 2 -s 1 -p %d", pid);
+#elif defined(FTOP_PLATFORM_macos)
+  rc = snprintf(command, sizeof(command), "top -l 2 -s 1 -pid %d -stats pid,command,cpu,mem", pid);
+#else
+  rc = -1;
+#endif
+  if (rc <= 0 || (size_t)rc >= sizeof(command)) {
+    *sys_errno = EINVAL;
+    return -1;
+  }
+
+  rc = read_command_output(command, output, sizeof(output));
+  if (rc == 0) rc = last_process_line(output, pid, line, sizeof(line));
+#if defined(FTOP_PLATFORM_linux)
+  if (rc == 0) rc = parse_linux_process_line(line, cpu_percent, mem_percent);
+#elif defined(FTOP_PLATFORM_freebsd)
+  if (rc == 0) rc = parse_freebsd_process_line(line, cpu_percent, mem_percent);
+#elif defined(FTOP_PLATFORM_macos)
+  if (rc == 0) rc = parse_macos_process_line(line, cpu_percent, mem_percent);
 #else
   rc = -1;
 #endif
