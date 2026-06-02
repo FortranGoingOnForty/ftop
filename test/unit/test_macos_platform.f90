@@ -6,7 +6,9 @@ program test_macos_platform
     macos_iokit_disk_count, &
     macos_iokit_gpu_count, &
     macos_net_connection_info, &
+    macos_net_interface_info, &
     macos_network_connections, &
+    macos_network_interfaces, &
     macos_network_snapshot, &
     macos_processor_tick_samples, &
     macos_processor_ticks, &
@@ -19,6 +21,7 @@ program test_macos_platform
 
   class(platform_backend), allocatable :: backend
   type(macos_net_connection_info), allocatable :: connections(:)
+  type(macos_net_interface_info), allocatable :: interfaces(:)
   type(network_table) :: network
   type(macos_processor_ticks), allocatable :: ticks(:)
   type(cpu_core_info), allocatable :: cpu_metadata(:)
@@ -26,6 +29,8 @@ program test_macos_platform
   character(len=64) :: os_type
   integer :: disk_count
   integer :: gpu_count
+  integer :: interface_count
+  integer :: interface_index
   integer :: logical_cpu_count
   integer :: os_type_len
   integer :: processor_count
@@ -52,6 +57,17 @@ program test_macos_platform
   if (.not. macos_iokit_disk_count(disk_count)) error stop "IOKit disk stub failed"
   if (gpu_count < 0 .or. disk_count < 0) error stop "IOKit stub counts must not be negative"
 
+  allocate(interfaces(256))
+  if (.not. macos_network_interfaces(interfaces, interface_count)) error stop "macOS interface snapshot failed"
+  if (interface_count <= 0 .or. interface_count > size(interfaces)) error stop "macOS interface count out of range"
+  do interface_index = 1, interface_count
+    if (interfaces(interface_index)%valid == 0) error stop "macOS network interface must be valid"
+    if (c_string_len(interfaces(interface_index)%name) <= 0) error stop "macOS interface name must not be empty"
+    if (c_string_len(interfaces(interface_index)%state) <= 0) error stop "macOS interface state must not be empty"
+    if (interfaces(interface_index)%mtu <= 0) error stop "macOS interface MTU must be positive"
+    if (interfaces(interface_index)%speed_mbps < 0) error stop "macOS interface speed must not be negative"
+  end do
+
   allocate(connections(256))
   if (.not. macos_network_connections(connections, connection_count)) error stop "macOS connection snapshot failed"
   if (connection_count < 0 .or. connection_count > size(connections)) error stop "macOS connection count out of range"
@@ -60,6 +76,7 @@ program test_macos_platform
   end if
 
   if (.not. macos_network_snapshot(network)) error stop "macOS network snapshot failed"
+  if (.not. allocated(network%interfaces)) error stop "macOS network interfaces must be allocated"
   if (.not. allocated(network%connections)) error stop "macOS network connections must be allocated"
 
   backend = create_platform()
@@ -67,4 +84,18 @@ program test_macos_platform
   if (.not. backend%get_cpu_metadata(cpu_metadata)) error stop "macOS CPU metadata failed"
   if (any(cpu_metadata%temp_valid .and. cpu_metadata%temp_c < -100.0_real64)) error stop "macOS CPU temperature too low"
   if (any(cpu_metadata%temp_valid .and. cpu_metadata%temp_c > 150.0_real64)) error stop "macOS CPU temperature too high"
+
+contains
+
+  integer function c_string_len(buffer) result(length)
+    use, intrinsic :: iso_c_binding, only : c_char, c_null_char
+    character(kind=c_char), intent(in) :: buffer(:)
+    integer :: index_value
+
+    length = 0
+    do index_value = 1, size(buffer)
+      if (buffer(index_value) == c_null_char) return
+      length = length + 1
+    end do
+  end function c_string_len
 end program test_macos_platform

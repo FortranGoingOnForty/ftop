@@ -1,12 +1,29 @@
 program test_freebsd_network
   use ftop_platform, only : &
     freebsd_net_connection_info, &
-    freebsd_network_connections
+    freebsd_net_interface_info, &
+    freebsd_network_connections, &
+    freebsd_network_interfaces
   implicit none
 
   type(freebsd_net_connection_info), allocatable :: connections(:)
+  type(freebsd_net_interface_info), allocatable :: interfaces(:)
   integer :: connection_count
   integer :: connection_index
+  integer :: interface_count
+  integer :: interface_index
+
+  allocate(interfaces(128))
+  if (.not. freebsd_network_interfaces(interfaces, interface_count)) error stop "FreeBSD network interfaces failed"
+  if (interface_count <= 0) error stop "FreeBSD network interfaces must not be empty"
+  if (interface_count > size(interfaces)) error stop "FreeBSD network interface count exceeded capacity"
+  do interface_index = 1, interface_count
+    if (interfaces(interface_index)%valid == 0) error stop "FreeBSD network interface must be valid"
+    if (c_string_len(interfaces(interface_index)%name) <= 0) error stop "FreeBSD interface name must not be empty"
+    if (c_string_len(interfaces(interface_index)%state) <= 0) error stop "FreeBSD interface state must not be empty"
+    if (interfaces(interface_index)%mtu <= 0) error stop "FreeBSD interface MTU must be positive"
+    if (interfaces(interface_index)%speed_mbps < 0) error stop "FreeBSD interface speed must not be negative"
+  end do
 
   allocate(connections(2048))
   if (.not. freebsd_network_connections(connections, connection_count)) error stop "FreeBSD network connections failed"
