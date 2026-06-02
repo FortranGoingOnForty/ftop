@@ -17,6 +17,18 @@ module ftop_net_data
     integer(int64) :: tx_bytes = 0_int64
     integer(int64) :: rx_packets = 0_int64
     integer(int64) :: tx_packets = 0_int64
+    integer(int64) :: rx_errs = 0_int64
+    integer(int64) :: rx_drop = 0_int64
+    integer(int64) :: rx_fifo = 0_int64
+    integer(int64) :: rx_frame = 0_int64
+    integer(int64) :: rx_compressed = 0_int64
+    integer(int64) :: rx_multicast = 0_int64
+    integer(int64) :: tx_errs = 0_int64
+    integer(int64) :: tx_drop = 0_int64
+    integer(int64) :: tx_fifo = 0_int64
+    integer(int64) :: tx_colls = 0_int64
+    integer(int64) :: tx_carrier = 0_int64
+    integer(int64) :: tx_compressed = 0_int64
     character(len=NET_STATE_LEN) :: state = ""
     integer :: speed_mbps = 0
     integer :: mtu = 0
@@ -279,8 +291,20 @@ contains
     interfaces(count)%name = bounded_text(interface_name, len(interfaces(count)%name))
     interfaces(count)%rx_bytes = max(0_int64, fields(1))
     interfaces(count)%rx_packets = max(0_int64, fields(2))
+    interfaces(count)%rx_errs = max(0_int64, fields(3))
+    interfaces(count)%rx_drop = max(0_int64, fields(4))
+    interfaces(count)%rx_fifo = max(0_int64, fields(5))
+    interfaces(count)%rx_frame = max(0_int64, fields(6))
+    interfaces(count)%rx_compressed = max(0_int64, fields(7))
+    interfaces(count)%rx_multicast = max(0_int64, fields(8))
     interfaces(count)%tx_bytes = max(0_int64, fields(9))
     interfaces(count)%tx_packets = max(0_int64, fields(10))
+    interfaces(count)%tx_errs = max(0_int64, fields(11))
+    interfaces(count)%tx_drop = max(0_int64, fields(12))
+    interfaces(count)%tx_fifo = max(0_int64, fields(13))
+    interfaces(count)%tx_colls = max(0_int64, fields(14))
+    interfaces(count)%tx_carrier = max(0_int64, fields(15))
+    interfaces(count)%tx_compressed = max(0_int64, fields(16))
     parsed = .true.
   end function parse_linux_net_dev_line
 
