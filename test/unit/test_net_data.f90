@@ -1,13 +1,14 @@
 program test_net_data
   use, intrinsic :: iso_fortran_env, only : int64, real64
-  use ftop_net_data, only : append_interface_histories, assign_interface_rates, decode_linux_ipv4_endpoint, &
-                            decode_linux_ipv6_endpoint, format_byte_rate, net_connection, network_table, &
-                            parse_linux_proc_net_connections, parse_linux_proc_net_dev
+  use ftop_net_data, only : append_interface_histories, assign_interface_rates, assign_process_bandwidth_rates, &
+                            decode_linux_ipv4_endpoint, decode_linux_ipv6_endpoint, format_byte_rate, &
+                            net_connection, network_table, parse_linux_proc_net_connections, parse_linux_proc_net_dev
   implicit none
 
   call test_linux_proc_net_dev_parser()
   call test_linux_proc_net_connection_parser()
   call test_interface_rates()
+  call test_process_bandwidth_rates()
   call test_interface_histories()
   call test_byte_rate_formatting()
   call test_linux_ipv4_endpoint_decoder()
@@ -107,6 +108,34 @@ contains
     call require(all(current%interfaces%tx_bytes_per_sec == 0.0_real64), "network invalid elapsed should reset tx rates")
   end subroutine test_interface_rates
 
+  subroutine test_process_bandwidth_rates()
+    type(network_table) :: previous
+    type(network_table) :: current
+
+    previous = sample_process_bandwidth_table([101, 202], [11_int64, 22_int64], &
+                                              [1000_int64, 5000_int64], [2000_int64, 7000_int64])
+    current = sample_process_bandwidth_table([101, 202], [11_int64, 33_int64], &
+                                             [2500_int64, 9000_int64], [5000_int64, 12000_int64])
+    call assign_process_bandwidth_rates(current, previous, 500_int64)
+
+    call require(near(current%processes(1)%rx_bytes_per_sec, 3000.0_real64), &
+                 "process bandwidth rx rate should use pid and start time")
+    call require(near(current%processes(1)%tx_bytes_per_sec, 6000.0_real64), &
+                 "process bandwidth tx rate should use pid and start time")
+    call require(near(current%processes(2)%rx_bytes_per_sec, 0.0_real64), &
+                 "process bandwidth should ignore reused pid start time mismatch")
+    call require(near(current%processes(2)%tx_bytes_per_sec, 0.0_real64), &
+                 "process bandwidth should leave unmatched tx rate at zero")
+
+    current%processes%rx_bytes_per_sec = 99.0_real64
+    current%processes%tx_bytes_per_sec = 99.0_real64
+    call assign_process_bandwidth_rates(current, previous, 0_int64)
+    call require(all(current%processes%rx_bytes_per_sec == 0.0_real64), &
+                 "process bandwidth invalid elapsed should reset rx rates")
+    call require(all(current%processes%tx_bytes_per_sec == 0.0_real64), &
+                 "process bandwidth invalid elapsed should reset tx rates")
+  end subroutine test_process_bandwidth_rates
+
   subroutine test_interface_histories()
     type(network_table) :: previous
     type(network_table) :: current
@@ -192,6 +221,28 @@ contains
       table%interfaces(index_value)%tx_bytes = tx_bytes(index_value)
     end do
   end function sample_table
+
+  function sample_process_bandwidth_table(pids, start_times, rx_bytes, tx_bytes) result(table)
+    integer, intent(in) :: pids(:)
+    integer(int64), intent(in) :: start_times(:)
+    integer(int64), intent(in) :: rx_bytes(:)
+    integer(int64), intent(in) :: tx_bytes(:)
+    type(network_table) :: table
+    integer :: index_value
+
+    table%valid = .true.
+    allocate(table%interfaces(0))
+    allocate(table%connections(0))
+    allocate(table%processes(size(pids)))
+    do index_value = 1, size(pids)
+      table%processes(index_value)%valid = .true.
+      table%processes(index_value)%pid = pids(index_value)
+      table%processes(index_value)%start_time = start_times(index_value)
+      table%processes(index_value)%rx_bytes = rx_bytes(index_value)
+      table%processes(index_value)%tx_bytes = tx_bytes(index_value)
+      write(table%processes(index_value)%process_name, '(A, I0)') "proc", index_value
+    end do
+  end function sample_process_bandwidth_table
 
   logical function near(left, right) result(matches)
     real(real64), intent(in) :: left

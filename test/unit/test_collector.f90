@@ -233,11 +233,13 @@ contains
   subroutine validate_network_snapshot(snapshot)
     type(collector_snapshot), intent(in) :: snapshot
     integer :: interface_index
+    integer :: process_index
     logical :: have_valid_interface
 
     call require(snapshot%network%valid, "collector network table must be valid")
     call require(allocated(snapshot%network%interfaces), "collector network interfaces must be allocated")
     call require(allocated(snapshot%network%connections), "collector network connections must be allocated")
+    call require(allocated(snapshot%network%processes), "collector network processes must be allocated")
     call require(size(snapshot%network%interfaces) > 0, "collector network table must include interfaces")
 
     have_valid_interface = .false.
@@ -260,6 +262,21 @@ contains
                    "collector network history counts must stay capped")
     end do
     call require(have_valid_interface, "collector network table must include valid interfaces")
+
+    do process_index = 1, size(snapshot%network%processes)
+      if (.not. snapshot%network%processes(process_index)%valid) cycle
+      call require(snapshot%network%processes(process_index)%pid > 0, "network process pid must be positive")
+      call require(snapshot%network%processes(process_index)%start_time > 0, &
+                   "network process start time must be positive")
+      call require(snapshot%network%processes(process_index)%rx_bytes >= 0, &
+                   "network process rx bytes must not be negative")
+      call require(snapshot%network%processes(process_index)%tx_bytes >= 0, &
+                   "network process tx bytes must not be negative")
+      call require(snapshot%network%processes(process_index)%rx_bytes_per_sec >= 0.0_real64, &
+                   "network process rx rate must not be negative")
+      call require(snapshot%network%processes(process_index)%tx_bytes_per_sec >= 0.0_real64, &
+                   "network process tx rate must not be negative")
+    end do
   end subroutine validate_network_snapshot
 
   function wait_for_later_snapshot(metrics, previous_sample_count) result(snapshot)

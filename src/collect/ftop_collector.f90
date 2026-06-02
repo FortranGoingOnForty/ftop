@@ -27,6 +27,7 @@ module ftop_collector
     NET_STATE_LEN, &
     append_interface_histories, &
     assign_interface_rates, &
+    assign_process_bandwidth_rates, &
     network_table
   use ftop_platform, only : &
     create_platform, &
@@ -67,6 +68,7 @@ module ftop_collector
   integer, parameter, public :: FTOP_COLLECTOR_MAX_PROCESSES = 256
   integer, parameter, public :: FTOP_COLLECTOR_MAX_INTERFACES = 64
   integer, parameter, public :: FTOP_COLLECTOR_MAX_CONNECTIONS = 512
+  integer, parameter, public :: FTOP_COLLECTOR_MAX_NETWORK_PROCESSES = 256
 
   type, bind(C) :: collector_shared_state
     integer(c_int) :: stop_requested
@@ -159,6 +161,15 @@ module ftop_collector
     character(kind=c_char) :: network_connection_state(NET_STATE_LEN, FTOP_COLLECTOR_MAX_CONNECTIONS)
     integer(c_int) :: network_connection_pid(FTOP_COLLECTOR_MAX_CONNECTIONS)
     character(kind=c_char) :: network_connection_process_name(NET_PROCESS_NAME_LEN, FTOP_COLLECTOR_MAX_CONNECTIONS)
+    integer(c_int) :: network_process_count
+    integer(c_int) :: network_process_valid(FTOP_COLLECTOR_MAX_NETWORK_PROCESSES)
+    integer(c_int) :: network_process_pid(FTOP_COLLECTOR_MAX_NETWORK_PROCESSES)
+    integer(c_long_long) :: network_process_start_time(FTOP_COLLECTOR_MAX_NETWORK_PROCESSES)
+    character(kind=c_char) :: network_process_name(NET_PROCESS_NAME_LEN, FTOP_COLLECTOR_MAX_NETWORK_PROCESSES)
+    integer(c_long_long) :: network_process_rx_bytes(FTOP_COLLECTOR_MAX_NETWORK_PROCESSES)
+    integer(c_long_long) :: network_process_tx_bytes(FTOP_COLLECTOR_MAX_NETWORK_PROCESSES)
+    real(c_double) :: network_process_rx_bytes_per_sec(FTOP_COLLECTOR_MAX_NETWORK_PROCESSES)
+    real(c_double) :: network_process_tx_bytes_per_sec(FTOP_COLLECTOR_MAX_NETWORK_PROCESSES)
     integer(c_int) :: history_start
     integer(c_int) :: history_count
     real(c_double) :: cpu_usage_history(FTOP_COLLECTOR_HISTORY_CAPACITY)
@@ -473,6 +484,8 @@ contains
       network = backend%get_network_table()
       call assign_interface_rates(network, previous_network, &
                                   int(max(0_c_long_long, deadline_ms - previous_network_sample_ms), int64))
+      call assign_process_bandwidth_rates(network, previous_network, &
+                                          int(max(0_c_long_long, deadline_ms - previous_network_sample_ms), int64))
       call append_interface_histories(network, previous_network)
       previous_network = network
       previous_network_sample_ms = deadline_ms
@@ -620,6 +633,15 @@ contains
     state%network_connection_state = c_null_char
     state%network_connection_pid = 0_c_int
     state%network_connection_process_name = c_null_char
+    state%network_process_count = 0_c_int
+    state%network_process_valid = 0_c_int
+    state%network_process_pid = 0_c_int
+    state%network_process_start_time = 0_c_long_long
+    state%network_process_name = c_null_char
+    state%network_process_rx_bytes = 0_c_long_long
+    state%network_process_tx_bytes = 0_c_long_long
+    state%network_process_rx_bytes_per_sec = 0.0_c_double
+    state%network_process_tx_bytes_per_sec = 0.0_c_double
     state%history_start = 1_c_int
     state%history_count = 0_c_int
     state%cpu_usage_history = 0.0_c_double
@@ -719,6 +741,15 @@ contains
     state%network_connection_state = c_null_char
     state%network_connection_pid = 0_c_int
     state%network_connection_process_name = c_null_char
+    state%network_process_count = 0_c_int
+    state%network_process_valid = 0_c_int
+    state%network_process_pid = 0_c_int
+    state%network_process_start_time = 0_c_long_long
+    state%network_process_name = c_null_char
+    state%network_process_rx_bytes = 0_c_long_long
+    state%network_process_tx_bytes = 0_c_long_long
+    state%network_process_rx_bytes_per_sec = 0.0_c_double
+    state%network_process_tx_bytes_per_sec = 0.0_c_double
     state%history_start = 1_c_int
     state%history_count = 0_c_int
     state%cpu_usage_history = 0.0_c_double
@@ -855,17 +886,20 @@ contains
     integer :: history_index
     integer :: interface_count
     integer :: interface_index
+    integer :: process_count
+    integer :: process_index
     logical :: string_valid
 
     success = .false.
     interface_count = bounded_interface_count(int(state%network_interface_count))
     connection_count = bounded_connection_count(int(state%network_connection_count))
+    process_count = bounded_network_process_count(int(state%network_process_count))
     snapshot%network%valid = state%network_table_valid /= 0_c_int
     allocate(snapshot%network%interfaces(interface_count), stat=allocation_status)
     if (allocation_status /= 0) return
     allocate(snapshot%network%connections(connection_count), stat=allocation_status)
     if (allocation_status /= 0) return
-    allocate(snapshot%network%processes(0), stat=allocation_status)
+    allocate(snapshot%network%processes(process_count), stat=allocation_status)
     if (allocation_status /= 0) return
 
     do interface_index = 1, interface_count
@@ -921,6 +955,21 @@ contains
       call copy_c_chars_to_fortran(state%network_connection_process_name(:, connection_index), &
                                    state%network_connection_valid(connection_index), &
                                    snapshot%network%connections(connection_index)%process_name, string_valid)
+    end do
+
+    do process_index = 1, process_count
+      snapshot%network%processes(process_index)%valid = state%network_process_valid(process_index) /= 0_c_int
+      snapshot%network%processes(process_index)%pid = int(state%network_process_pid(process_index))
+      snapshot%network%processes(process_index)%start_time = int(state%network_process_start_time(process_index), int64)
+      call copy_c_chars_to_fortran(state%network_process_name(:, process_index), &
+                                   state%network_process_valid(process_index), &
+                                   snapshot%network%processes(process_index)%process_name, string_valid)
+      snapshot%network%processes(process_index)%rx_bytes = int(state%network_process_rx_bytes(process_index), int64)
+      snapshot%network%processes(process_index)%tx_bytes = int(state%network_process_tx_bytes(process_index), int64)
+      snapshot%network%processes(process_index)%rx_bytes_per_sec = &
+        real(state%network_process_rx_bytes_per_sec(process_index), real64)
+      snapshot%network%processes(process_index)%tx_bytes_per_sec = &
+        real(state%network_process_tx_bytes_per_sec(process_index), real64)
     end do
 
     success = .true.
@@ -989,6 +1038,12 @@ contains
 
     bounded = max(0, min(FTOP_COLLECTOR_MAX_CONNECTIONS, connection_count))
   end function bounded_connection_count
+
+  integer function bounded_network_process_count(process_count) result(bounded)
+    integer, intent(in) :: process_count
+
+    bounded = max(0, min(FTOP_COLLECTOR_MAX_NETWORK_PROCESSES, process_count))
+  end function bounded_network_process_count
 
   integer function bounded_process_history_count(history_count) result(bounded)
     integer, intent(in) :: history_count
@@ -1230,6 +1285,8 @@ contains
     integer :: connection_index
     integer :: interface_count
     integer :: interface_index
+    integer :: process_count
+    integer :: process_index
     integer(c_int) :: string_valid
 
     state%network_table_valid = merge(1_c_int, 0_c_int, network%valid)
@@ -1258,6 +1315,15 @@ contains
     state%network_connection_state = c_null_char
     state%network_connection_pid = 0_c_int
     state%network_connection_process_name = c_null_char
+    state%network_process_count = 0_c_int
+    state%network_process_valid = 0_c_int
+    state%network_process_pid = 0_c_int
+    state%network_process_start_time = 0_c_long_long
+    state%network_process_name = c_null_char
+    state%network_process_rx_bytes = 0_c_long_long
+    state%network_process_tx_bytes = 0_c_long_long
+    state%network_process_rx_bytes_per_sec = 0.0_c_double
+    state%network_process_tx_bytes_per_sec = 0.0_c_double
     if (.not. network%valid) return
 
     if (allocated(network%interfaces)) then
@@ -1293,32 +1359,54 @@ contains
       end do
     end if
 
-    if (.not. allocated(network%connections)) return
-    connection_count = bounded_connection_count(size(network%connections))
-    state%network_connection_count = int(connection_count, c_int)
-    do connection_index = 1, connection_count
-      state%network_connection_valid(connection_index) = &
-        merge(1_c_int, 0_c_int, network%connections(connection_index)%valid)
-      call copy_fortran_string_to_c_chars(network%connections(connection_index)%protocol, &
-                                          len_trim(network%connections(connection_index)%protocol) > 0, &
-                                          state%network_connection_protocol(:, connection_index), string_valid)
-      call copy_fortran_string_to_c_chars(network%connections(connection_index)%local_addr, &
-                                          len_trim(network%connections(connection_index)%local_addr) > 0, &
-                                          state%network_connection_local_addr(:, connection_index), string_valid)
-      state%network_connection_local_port(connection_index) = &
-        int(max(0, network%connections(connection_index)%local_port), c_int)
-      call copy_fortran_string_to_c_chars(network%connections(connection_index)%remote_addr, &
-                                          len_trim(network%connections(connection_index)%remote_addr) > 0, &
-                                          state%network_connection_remote_addr(:, connection_index), string_valid)
-      state%network_connection_remote_port(connection_index) = &
-        int(max(0, network%connections(connection_index)%remote_port), c_int)
-      call copy_fortran_string_to_c_chars(network%connections(connection_index)%state, &
-                                          len_trim(network%connections(connection_index)%state) > 0, &
-                                          state%network_connection_state(:, connection_index), string_valid)
-      state%network_connection_pid(connection_index) = int(max(0, network%connections(connection_index)%pid), c_int)
-      call copy_fortran_string_to_c_chars(network%connections(connection_index)%process_name, &
-                                          len_trim(network%connections(connection_index)%process_name) > 0, &
-                                          state%network_connection_process_name(:, connection_index), string_valid)
+    if (allocated(network%connections)) then
+      connection_count = bounded_connection_count(size(network%connections))
+      state%network_connection_count = int(connection_count, c_int)
+      do connection_index = 1, connection_count
+        state%network_connection_valid(connection_index) = &
+          merge(1_c_int, 0_c_int, network%connections(connection_index)%valid)
+        call copy_fortran_string_to_c_chars(network%connections(connection_index)%protocol, &
+                                            len_trim(network%connections(connection_index)%protocol) > 0, &
+                                            state%network_connection_protocol(:, connection_index), string_valid)
+        call copy_fortran_string_to_c_chars(network%connections(connection_index)%local_addr, &
+                                            len_trim(network%connections(connection_index)%local_addr) > 0, &
+                                            state%network_connection_local_addr(:, connection_index), string_valid)
+        state%network_connection_local_port(connection_index) = &
+          int(max(0, network%connections(connection_index)%local_port), c_int)
+        call copy_fortran_string_to_c_chars(network%connections(connection_index)%remote_addr, &
+                                            len_trim(network%connections(connection_index)%remote_addr) > 0, &
+                                            state%network_connection_remote_addr(:, connection_index), string_valid)
+        state%network_connection_remote_port(connection_index) = &
+          int(max(0, network%connections(connection_index)%remote_port), c_int)
+        call copy_fortran_string_to_c_chars(network%connections(connection_index)%state, &
+                                            len_trim(network%connections(connection_index)%state) > 0, &
+                                            state%network_connection_state(:, connection_index), string_valid)
+        state%network_connection_pid(connection_index) = int(max(0, network%connections(connection_index)%pid), c_int)
+        call copy_fortran_string_to_c_chars(network%connections(connection_index)%process_name, &
+                                            len_trim(network%connections(connection_index)%process_name) > 0, &
+                                            state%network_connection_process_name(:, connection_index), string_valid)
+      end do
+    end if
+
+    if (.not. allocated(network%processes)) return
+    process_count = bounded_network_process_count(size(network%processes))
+    state%network_process_count = int(process_count, c_int)
+    do process_index = 1, process_count
+      state%network_process_valid(process_index) = merge(1_c_int, 0_c_int, network%processes(process_index)%valid)
+      state%network_process_pid(process_index) = int(max(0, network%processes(process_index)%pid), c_int)
+      state%network_process_start_time(process_index) = &
+        int(max(0_int64, network%processes(process_index)%start_time), c_long_long)
+      call copy_fortran_string_to_c_chars(network%processes(process_index)%process_name, &
+                                          len_trim(network%processes(process_index)%process_name) > 0, &
+                                          state%network_process_name(:, process_index), string_valid)
+      state%network_process_rx_bytes(process_index) = &
+        int(max(0_int64, network%processes(process_index)%rx_bytes), c_long_long)
+      state%network_process_tx_bytes(process_index) = &
+        int(max(0_int64, network%processes(process_index)%tx_bytes), c_long_long)
+      state%network_process_rx_bytes_per_sec(process_index) = &
+        real(max(0.0_real64, network%processes(process_index)%rx_bytes_per_sec), c_double)
+      state%network_process_tx_bytes_per_sec(process_index) = &
+        real(max(0.0_real64, network%processes(process_index)%tx_bytes_per_sec), c_double)
     end do
   end subroutine publish_network
 

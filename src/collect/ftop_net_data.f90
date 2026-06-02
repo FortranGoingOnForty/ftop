@@ -43,7 +43,10 @@ module ftop_net_data
   type, public :: process_bandwidth
     logical :: valid = .false.
     integer :: pid = 0
+    integer(int64) :: start_time = 0_int64
     character(len=NET_PROCESS_NAME_LEN) :: process_name = ""
+    integer(int64) :: rx_bytes = 0_int64
+    integer(int64) :: tx_bytes = 0_int64
     real(real64) :: rx_bytes_per_sec = 0.0_real64
     real(real64) :: tx_bytes_per_sec = 0.0_real64
   end type process_bandwidth
@@ -57,6 +60,7 @@ module ftop_net_data
 
   public :: append_interface_histories
   public :: assign_interface_rates
+  public :: assign_process_bandwidth_rates
   public :: decode_linux_ipv4_endpoint
   public :: decode_linux_ipv6_endpoint
   public :: format_byte_rate
@@ -302,6 +306,29 @@ contains
     end do
   end subroutine assign_interface_rates
 
+  subroutine assign_process_bandwidth_rates(current, previous, elapsed_ms)
+    type(network_table), intent(inout) :: current
+    type(network_table), intent(in) :: previous
+    integer(int64), intent(in) :: elapsed_ms
+    integer :: current_index
+    integer :: previous_index
+
+    if (.not. allocated(current%processes)) return
+    current%processes%rx_bytes_per_sec = 0.0_real64
+    current%processes%tx_bytes_per_sec = 0.0_real64
+    if (.not. current%valid .or. .not. previous%valid) return
+    if (.not. allocated(previous%processes)) return
+    if (elapsed_ms <= 0_int64) return
+
+    do current_index = 1, size(current%processes)
+      if (.not. current%processes(current_index)%valid) cycle
+      previous_index = matching_previous_process_bandwidth(previous, current%processes(current_index)%pid, &
+                                                           current%processes(current_index)%start_time)
+      if (previous_index <= 0) cycle
+      call assign_process_bandwidth_rate(current%processes(current_index), previous%processes(previous_index), elapsed_ms)
+    end do
+  end subroutine assign_process_bandwidth_rates
+
   subroutine append_interface_histories(current, previous)
     type(network_table), intent(inout) :: current
     type(network_table), intent(in) :: previous
@@ -340,6 +367,22 @@ contains
     if (tx_delta > 0_int64) current%tx_bytes_per_sec = bytes_per_second(tx_delta, elapsed_ms)
   end subroutine assign_interface_rate
 
+  subroutine assign_process_bandwidth_rate(current, previous, elapsed_ms)
+    type(process_bandwidth), intent(inout) :: current
+    type(process_bandwidth), intent(in) :: previous
+    integer(int64), intent(in) :: elapsed_ms
+    integer(int64) :: rx_delta
+    integer(int64) :: tx_delta
+
+    if (.not. current%valid .or. .not. previous%valid) return
+    if (current%pid <= 0 .or. current%start_time <= 0_int64) return
+    if (current%pid /= previous%pid .or. current%start_time /= previous%start_time) return
+    rx_delta = current%rx_bytes - previous%rx_bytes
+    tx_delta = current%tx_bytes - previous%tx_bytes
+    if (rx_delta > 0_int64) current%rx_bytes_per_sec = bytes_per_second(rx_delta, elapsed_ms)
+    if (tx_delta > 0_int64) current%tx_bytes_per_sec = bytes_per_second(tx_delta, elapsed_ms)
+  end subroutine assign_process_bandwidth_rate
+
   real(real64) function bytes_per_second(byte_delta, elapsed_ms) result(rate)
     integer(int64), intent(in) :: byte_delta
     integer(int64), intent(in) :: elapsed_ms
@@ -364,6 +407,24 @@ contains
       end if
     end do
   end function matching_previous_interface
+
+  integer function matching_previous_process_bandwidth(table, pid, start_time) result(item_index)
+    type(network_table), intent(in) :: table
+    integer, intent(in) :: pid
+    integer(int64), intent(in) :: start_time
+    integer :: candidate
+
+    item_index = 0
+    if (pid <= 0 .or. start_time <= 0_int64) return
+    if (.not. allocated(table%processes)) return
+    do candidate = 1, size(table%processes)
+      if (.not. table%processes(candidate)%valid) cycle
+      if (table%processes(candidate)%pid == pid .and. table%processes(candidate)%start_time == start_time) then
+        item_index = candidate
+        return
+      end if
+    end do
+  end function matching_previous_process_bandwidth
 
   subroutine copy_interface_history(current, previous)
     type(interface_info), intent(inout) :: current
