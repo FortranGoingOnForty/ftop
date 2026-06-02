@@ -107,6 +107,14 @@ int ftop_linux_read_proc_net_udp(char *buffer, size_t buffer_len, size_t *value_
   return ftop_read_file_into_buffer("/proc/net/udp", buffer, buffer_len, value_len, sys_errno);
 }
 
+int ftop_linux_read_proc_net_tcp6(char *buffer, size_t buffer_len, size_t *value_len, int *sys_errno) {
+  return ftop_read_file_into_buffer("/proc/net/tcp6", buffer, buffer_len, value_len, sys_errno);
+}
+
+int ftop_linux_read_proc_net_udp6(char *buffer, size_t buffer_len, size_t *value_len, int *sys_errno) {
+  return ftop_read_file_into_buffer("/proc/net/udp6", buffer, buffer_len, value_len, sys_errno);
+}
+
 static int ftop_linux_safe_net_name(const char *name) {
   size_t i;
 

@@ -12,7 +12,9 @@ program test_linux_platform
     load_average_info, &
     linux_load_average_snapshot, &
     linux_memory_snapshot, &
+    linux_network_snapshot, &
     linux_process_snapshot, &
+    network_table, &
     process_table
   use ftop_signal, only : ftop_current_pid
   implicit none
@@ -22,6 +24,7 @@ program test_linux_platform
   type(cpu_state_ticks), allocatable :: cores(:)
   type(load_average_info) :: load_average
   type(metric_memory_info) :: memory
+  type(network_table) :: network
   type(process_table) :: processes
   character(len=128) :: processor_id
   integer :: current_pid
@@ -68,6 +71,11 @@ program test_linux_platform
   if (.not. linux_load_average_snapshot(load_average)) error stop "Linux load average snapshot failed"
   if (.not. load_average%valid) error stop "Linux load average snapshot must be valid"
   if (any(load_average%values < 0.0_real64)) error stop "Linux load averages must not be negative"
+
+  if (.not. linux_network_snapshot(network)) error stop "Linux network snapshot failed"
+  if (.not. network%valid) error stop "Linux network snapshot must be valid"
+  if (.not. allocated(network%interfaces)) error stop "Linux network interfaces must be allocated"
+  if (.not. allocated(network%connections)) error stop "Linux network connections must be allocated"
 
   if (.not. linux_process_snapshot(processes, memory%total_bytes)) error stop "Linux process snapshot failed"
   if (.not. processes%valid) error stop "Linux process snapshot must be valid"

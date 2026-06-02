@@ -58,6 +58,7 @@ module ftop_net_data
   public :: append_interface_histories
   public :: assign_interface_rates
   public :: decode_linux_ipv4_endpoint
+  public :: decode_linux_ipv6_endpoint
   public :: format_byte_rate
   public :: parse_linux_proc_net_connections
   public :: parse_linux_proc_net_dev
@@ -103,23 +104,30 @@ contains
     allocate(table%processes(0))
   end function parse_linux_proc_net_dev
 
-  function parse_linux_proc_net_connections(tcp_text, udp_text) result(connections)
+  function parse_linux_proc_net_connections(tcp_text, udp_text, tcp6_text, udp6_text) result(connections)
     character(len=*), intent(in) :: tcp_text
     character(len=*), intent(in) :: udp_text
+    character(len=*), intent(in) :: tcp6_text
+    character(len=*), intent(in) :: udp6_text
     type(net_connection), allocatable :: connections(:)
     integer :: connection_count
 
-    connection_count = count_linux_proc_net_connections(tcp_text, "tcp") + &
-                       count_linux_proc_net_connections(udp_text, "udp")
+    connection_count = count_linux_proc_net_connections(tcp_text, "tcp", .false.) + &
+                       count_linux_proc_net_connections(udp_text, "udp", .false.) + &
+                       count_linux_proc_net_connections(tcp6_text, "tcp", .true.) + &
+                       count_linux_proc_net_connections(udp6_text, "udp", .true.)
     allocate(connections(connection_count))
     connection_count = 0
-    call append_linux_proc_net_connections(tcp_text, "tcp", connections, connection_count)
-    call append_linux_proc_net_connections(udp_text, "udp", connections, connection_count)
+    call append_linux_proc_net_connections(tcp_text, "tcp", .false., connections, connection_count)
+    call append_linux_proc_net_connections(udp_text, "udp", .false., connections, connection_count)
+    call append_linux_proc_net_connections(tcp6_text, "tcp", .true., connections, connection_count)
+    call append_linux_proc_net_connections(udp6_text, "udp", .true., connections, connection_count)
   end function parse_linux_proc_net_connections
 
-  integer function count_linux_proc_net_connections(text, protocol) result(connection_count)
+  integer function count_linux_proc_net_connections(text, protocol, is_ipv6) result(connection_count)
     character(len=*), intent(in) :: text
     character(len=*), intent(in) :: protocol
+    logical, intent(in) :: is_ipv6
     integer :: cursor
     integer :: line_end
     integer :: line_start
@@ -130,16 +138,17 @@ contains
     do while (cursor <= len(text))
       line_start = cursor
       line_end = next_line_end(text, line_start)
-      if (parse_linux_proc_net_connection_line(text(line_start:line_end), protocol, connection)) then
+      if (parse_linux_proc_net_connection_line(text(line_start:line_end), protocol, is_ipv6, connection)) then
         connection_count = connection_count + 1
       end if
       cursor = line_end + 2
     end do
   end function count_linux_proc_net_connections
 
-  subroutine append_linux_proc_net_connections(text, protocol, connections, connection_count)
+  subroutine append_linux_proc_net_connections(text, protocol, is_ipv6, connections, connection_count)
     character(len=*), intent(in) :: text
     character(len=*), intent(in) :: protocol
+    logical, intent(in) :: is_ipv6
     type(net_connection), intent(inout) :: connections(:)
     integer, intent(inout) :: connection_count
     integer :: cursor
@@ -151,7 +160,7 @@ contains
     do while (cursor <= len(text))
       line_start = cursor
       line_end = next_line_end(text, line_start)
-      if (parse_linux_proc_net_connection_line(text(line_start:line_end), protocol, connection)) then
+      if (parse_linux_proc_net_connection_line(text(line_start:line_end), protocol, is_ipv6, connection)) then
         if (connection_count < size(connections)) then
           connection_count = connection_count + 1
           connections(connection_count) = connection
@@ -161,9 +170,10 @@ contains
     end do
   end subroutine append_linux_proc_net_connections
 
-  logical function parse_linux_proc_net_connection_line(line, protocol, connection) result(parsed)
+  logical function parse_linux_proc_net_connection_line(line, protocol, is_ipv6, connection) result(parsed)
     character(len=*), intent(in) :: line
     character(len=*), intent(in) :: protocol
+    logical, intent(in) :: is_ipv6
     type(net_connection), intent(out) :: connection
     character(len=64) :: local_endpoint
     character(len=64) :: remote_endpoint
@@ -191,12 +201,21 @@ contains
     local_separator = index(local_endpoint, ":")
     remote_separator = index(remote_endpoint, ":")
     if (local_separator <= 1 .or. remote_separator <= 1) return
-    if (.not. decode_linux_ipv4_endpoint(local_endpoint(:local_separator - 1), &
-                                         local_endpoint(local_separator + 1:), &
-                                         connection%local_addr, connection%local_port)) return
-    if (.not. decode_linux_ipv4_endpoint(remote_endpoint(:remote_separator - 1), &
-                                         remote_endpoint(remote_separator + 1:), &
-                                         connection%remote_addr, connection%remote_port)) return
+    if (is_ipv6) then
+      if (.not. decode_linux_ipv6_endpoint(local_endpoint(:local_separator - 1), &
+                                           local_endpoint(local_separator + 1:), &
+                                           connection%local_addr, connection%local_port)) return
+      if (.not. decode_linux_ipv6_endpoint(remote_endpoint(:remote_separator - 1), &
+                                           remote_endpoint(remote_separator + 1:), &
+                                           connection%remote_addr, connection%remote_port)) return
+    else
+      if (.not. decode_linux_ipv4_endpoint(local_endpoint(:local_separator - 1), &
+                                           local_endpoint(local_separator + 1:), &
+                                           connection%local_addr, connection%local_port)) return
+      if (.not. decode_linux_ipv4_endpoint(remote_endpoint(:remote_separator - 1), &
+                                           remote_endpoint(remote_separator + 1:), &
+                                           connection%remote_addr, connection%remote_port)) return
+    end if
 
     connection%valid = .true.
     connection%protocol = bounded_text(protocol, len(connection%protocol))
@@ -426,6 +445,145 @@ contains
     port = parsed_port
     success = .true.
   end function decode_linux_ipv4_endpoint
+
+  logical function decode_linux_ipv6_endpoint(hex_addr, hex_port, address, port) result(success)
+    character(len=*), intent(in) :: hex_addr
+    character(len=*), intent(in) :: hex_port
+    character(len=*), intent(out) :: address
+    integer, intent(out) :: port
+    integer :: bytes(16)
+    integer :: byte_index
+    integer :: byte_offset
+    integer :: parsed_port
+    integer :: position
+    integer :: word_index
+
+    success = .false.
+    address = ""
+    port = 0
+    if (len_trim(hex_addr) /= 32 .or. len_trim(hex_port) /= 4) return
+
+    do word_index = 0, 3
+      do byte_offset = 0, 3
+        byte_index = word_index * 4 + byte_offset + 1
+        position = word_index * 8 + (3 - byte_offset) * 2 + 1
+        if (.not. parse_hex_byte(hex_addr(position:position + 1), bytes(byte_index))) return
+      end do
+    end do
+    if (.not. parse_hex_int(hex_port(:4), parsed_port)) return
+
+    address = bounded_text(format_ipv6_address(bytes), len(address))
+    port = parsed_port
+    success = .true.
+  end function decode_linux_ipv6_endpoint
+
+  function format_ipv6_address(bytes) result(text)
+    integer, intent(in) :: bytes(16)
+    character(len=:), allocatable :: text
+    integer :: groups(8)
+    integer :: index_value
+
+    do index_value = 1, 8
+      groups(index_value) = bytes(index_value * 2 - 1) * 256 + bytes(index_value * 2)
+    end do
+    text = compressed_ipv6_groups(groups)
+  end function format_ipv6_address
+
+  function compressed_ipv6_groups(groups) result(text)
+    integer, intent(in) :: groups(8)
+    character(len=:), allocatable :: text
+    integer :: best_len
+    integer :: best_start
+    integer :: group_index
+
+    call longest_zero_group_run(groups, best_start, best_len)
+    text = ""
+    group_index = 1
+    do while (group_index <= 8)
+      if (best_start > 0 .and. group_index == best_start) then
+        if (len(text) == 0) then
+          text = "::"
+        else
+          text = text // "::"
+        end if
+        group_index = group_index + best_len
+        cycle
+      end if
+      if (len(text) > 0 .and. text(len(text):len(text)) /= ":") text = text // ":"
+      text = text // ipv6_group_text(groups(group_index))
+      group_index = group_index + 1
+    end do
+    if (len(text) == 0) text = "::"
+  end function compressed_ipv6_groups
+
+  subroutine longest_zero_group_run(groups, best_start, best_len)
+    integer, intent(in) :: groups(8)
+    integer, intent(out) :: best_start
+    integer, intent(out) :: best_len
+    integer :: current_len
+    integer :: current_start
+    integer :: group_index
+
+    best_start = 0
+    best_len = 0
+    current_start = 0
+    current_len = 0
+    do group_index = 1, 8
+      if (groups(group_index) == 0) then
+        if (current_len == 0) current_start = group_index
+        current_len = current_len + 1
+      else
+        call record_zero_group_run(current_start, current_len, best_start, best_len)
+        current_start = 0
+        current_len = 0
+      end if
+    end do
+    call record_zero_group_run(current_start, current_len, best_start, best_len)
+    if (best_len < 2) then
+      best_start = 0
+      best_len = 0
+    end if
+  end subroutine longest_zero_group_run
+
+  subroutine record_zero_group_run(current_start, current_len, best_start, best_len)
+    integer, intent(in) :: current_start
+    integer, intent(in) :: current_len
+    integer, intent(inout) :: best_start
+    integer, intent(inout) :: best_len
+
+    if (current_len > best_len) then
+      best_start = current_start
+      best_len = current_len
+    end if
+  end subroutine record_zero_group_run
+
+  function ipv6_group_text(group) result(text)
+    integer, intent(in) :: group
+    character(len=:), allocatable :: text
+    character(len=4) :: buffer
+    integer :: first_digit
+
+    write(buffer, '(Z4.4)') max(0, min(65535, group))
+    call lowercase_ascii(buffer)
+    first_digit = 1
+    do while (first_digit < len(buffer) .and. buffer(first_digit:first_digit) == "0")
+      first_digit = first_digit + 1
+    end do
+    text = buffer(first_digit:)
+  end function ipv6_group_text
+
+  subroutine lowercase_ascii(text)
+    character(len=*), intent(inout) :: text
+    integer :: char_code
+    integer :: index_value
+
+    do index_value = 1, len(text)
+      char_code = iachar(text(index_value:index_value))
+      if (char_code >= iachar("A") .and. char_code <= iachar("Z")) then
+        text(index_value:index_value) = achar(char_code - iachar("A") + iachar("a"))
+      end if
+    end do
+  end subroutine lowercase_ascii
 
   function linux_connection_state_label(protocol, state_hex) result(label)
     character(len=*), intent(in) :: protocol

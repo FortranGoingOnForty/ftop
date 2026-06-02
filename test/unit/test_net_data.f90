@@ -1,8 +1,8 @@
 program test_net_data
   use, intrinsic :: iso_fortran_env, only : int64, real64
   use ftop_net_data, only : append_interface_histories, assign_interface_rates, decode_linux_ipv4_endpoint, &
-                            format_byte_rate, net_connection, network_table, parse_linux_proc_net_connections, &
-                            parse_linux_proc_net_dev
+                            decode_linux_ipv6_endpoint, format_byte_rate, net_connection, network_table, &
+                            parse_linux_proc_net_connections, parse_linux_proc_net_dev
   implicit none
 
   call test_linux_proc_net_dev_parser()
@@ -11,6 +11,7 @@ program test_net_data
   call test_interface_histories()
   call test_byte_rate_formatting()
   call test_linux_ipv4_endpoint_decoder()
+  call test_linux_ipv6_endpoint_decoder()
 
 contains
 
@@ -52,9 +53,17 @@ contains
       "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode" // &
       new_line("a") // &
       "   0: 00000000:0035 00000000:0000 07 00000000:00000000 00:00000000 00000000 0 0 67890"
+    character(len=*), parameter :: tcp6_text = &
+      "  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode" // &
+      new_line("a") // &
+      "   0: B80D0120000000000000000001000000:1F90 00000000000000000000000001000000:01BB 01 00000000:00000000 00:00000000 00000000 1000 0 98765"
+    character(len=*), parameter :: udp6_text = &
+      "  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode" // &
+      new_line("a") // &
+      "   0: 00000000000000000000000000000000:0035 00000000000000000000000000000000:0000 07 00000000:00000000 00:00000000 00000000 0 0 87654"
 
-    connections = parse_linux_proc_net_connections(tcp_text, udp_text)
-    call require(size(connections) == 3, "network connection parser should parse tcp and udp rows")
+    connections = parse_linux_proc_net_connections(tcp_text, udp_text, tcp6_text, udp6_text)
+    call require(size(connections) == 5, "network connection parser should parse tcp, udp, tcp6, and udp6 rows")
     call require(connections(1)%valid, "network connection parser should mark tcp row valid")
     call require(trim(connections(1)%protocol) == "tcp", "network connection parser should set tcp protocol")
     call require(trim(connections(1)%local_addr) == "127.0.0.1", "network connection parser local address mismatch")
@@ -67,6 +76,11 @@ contains
     call require(trim(connections(3)%protocol) == "udp", "network connection parser should set udp protocol")
     call require(trim(connections(3)%state) == "OPEN", "network connection parser should label udp state")
     call require(connections(3)%local_port == 53, "network connection parser udp port mismatch")
+    call require(trim(connections(4)%local_addr) == "2001:db8::1", "network connection parser tcp6 local address mismatch")
+    call require(trim(connections(4)%remote_addr) == "::1", "network connection parser tcp6 remote address mismatch")
+    call require(connections(4)%inode == 98765_int64, "network connection parser tcp6 inode mismatch")
+    call require(trim(connections(5)%local_addr) == "::", "network connection parser udp6 wildcard address mismatch")
+    call require(trim(connections(5)%state) == "OPEN", "network connection parser should label udp6 state")
   end subroutine test_linux_proc_net_connection_parser
 
   subroutine test_interface_rates()
@@ -140,6 +154,26 @@ contains
     call require(.not. decode_linux_ipv4_endpoint("not-hex!", "0016", address, port), &
                  "linux ipv4 endpoint decoder should reject bad address")
   end subroutine test_linux_ipv4_endpoint_decoder
+
+  subroutine test_linux_ipv6_endpoint_decoder()
+    character(len=64) :: address
+    integer :: port
+
+    call require(decode_linux_ipv6_endpoint("00000000000000000000000001000000", "1F90", address, port), &
+                 "linux ipv6 endpoint decoder should accept loopback endpoint")
+    call require(trim(address) == "::1", "linux ipv6 loopback address mismatch")
+    call require(port == 8080, "linux ipv6 loopback port mismatch")
+    call require(decode_linux_ipv6_endpoint("B80D0120000000000000000001000000", "01BB", address, port), &
+                 "linux ipv6 endpoint decoder should accept global endpoint")
+    call require(trim(address) == "2001:db8::1", "linux ipv6 global address mismatch")
+    call require(port == 443, "linux ipv6 global port mismatch")
+    call require(decode_linux_ipv6_endpoint("00000000000000000000000000000000", "0035", address, port), &
+                 "linux ipv6 endpoint decoder should parse wildcard")
+    call require(trim(address) == "::", "linux ipv6 wildcard address mismatch")
+    call require(port == 53, "linux ipv6 wildcard port mismatch")
+    call require(.not. decode_linux_ipv6_endpoint("not-hex", "0016", address, port), &
+                 "linux ipv6 endpoint decoder should reject bad address")
+  end subroutine test_linux_ipv6_endpoint_decoder
 
   function sample_table(rx_bytes, tx_bytes) result(table)
     integer(int64), intent(in) :: rx_bytes(:)

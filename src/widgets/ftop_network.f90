@@ -184,7 +184,11 @@ contains
     integer, intent(in) :: port
     character(len=:), allocatable :: text
 
-    text = trim(address) // ":" // integer_text(max(0, port))
+    if (index(trim(address), ":") > 0) then
+      text = "[" // trim(address) // "]:" // integer_text(max(0, port))
+    else
+      text = trim(address) // ":" // integer_text(max(0, port))
+    end if
   end function endpoint_text
 
   function connection_owner_text(snapshot, connection_index) result(text)

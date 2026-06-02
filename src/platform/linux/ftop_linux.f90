@@ -179,6 +179,24 @@ module ftop_platform
       integer(c_int), intent(out) :: sys_errno
     end function c_ftop_linux_read_proc_net_udp
 
+    integer(c_int) function c_ftop_linux_read_proc_net_tcp6(buffer, buffer_capacity, value_len, sys_errno) &
+        bind(C, name="ftop_linux_read_proc_net_tcp6")
+      import :: c_char, c_int, c_size_t
+      character(kind=c_char), intent(out) :: buffer(*)
+      integer(c_size_t), value :: buffer_capacity
+      integer(c_size_t), intent(out) :: value_len
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_linux_read_proc_net_tcp6
+
+    integer(c_int) function c_ftop_linux_read_proc_net_udp6(buffer, buffer_capacity, value_len, sys_errno) &
+        bind(C, name="ftop_linux_read_proc_net_udp6")
+      import :: c_char, c_int, c_size_t
+      character(kind=c_char), intent(out) :: buffer(*)
+      integer(c_size_t), value :: buffer_capacity
+      integer(c_size_t), intent(out) :: value_len
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_linux_read_proc_net_udp6
+
     integer(c_int) function c_ftop_linux_socket_owners(owners, capacity, owner_count, sys_errno) &
         bind(C, name="ftop_linux_socket_owners")
       import :: c_int, c_size_t, linux_socket_owner
@@ -498,19 +516,31 @@ contains
   logical function linux_connection_snapshot(connections, error_code) result(success)
     type(net_connection), allocatable, intent(out) :: connections(:)
     integer, intent(out), optional :: error_code
+    character(kind=c_char), allocatable :: c_tcp6_buffer(:)
     character(kind=c_char), allocatable :: c_tcp_buffer(:)
+    character(kind=c_char), allocatable :: c_udp6_buffer(:)
     character(kind=c_char), allocatable :: c_udp_buffer(:)
+    character(len=:), allocatable :: tcp6_buffer
     character(len=:), allocatable :: tcp_buffer
+    character(len=:), allocatable :: udp6_buffer
     character(len=:), allocatable :: udp_buffer
+    integer(c_size_t) :: tcp6_value_len
     integer(c_size_t) :: tcp_value_len
+    integer(c_size_t) :: udp6_value_len
     integer(c_size_t) :: udp_value_len
     integer(c_int) :: sys_errno
+    integer(c_int) :: tcp6_rc
     integer(c_int) :: tcp_rc
+    integer(c_int) :: udp6_rc
     integer(c_int) :: udp_rc
 
     allocate(connections(0))
     allocate(c_tcp_buffer(LINUX_PROC_NET_CONNECTION_BUFFER_LEN))
     allocate(c_udp_buffer(LINUX_PROC_NET_CONNECTION_BUFFER_LEN))
+    allocate(c_tcp6_buffer(LINUX_PROC_NET_CONNECTION_BUFFER_LEN))
+    allocate(c_udp6_buffer(LINUX_PROC_NET_CONNECTION_BUFFER_LEN))
+    tcp6_value_len = 0_c_size_t
+    udp6_value_len = 0_c_size_t
     tcp_rc = c_ftop_linux_read_proc_net_tcp(c_tcp_buffer, int(size(c_tcp_buffer), c_size_t), &
                                            tcp_value_len, sys_errno)
     if (tcp_rc /= 0_c_int) then
@@ -525,10 +555,18 @@ contains
       success = .false.
       return
     end if
+    tcp6_rc = c_ftop_linux_read_proc_net_tcp6(c_tcp6_buffer, int(size(c_tcp6_buffer), c_size_t), &
+                                             tcp6_value_len, sys_errno)
+    if (tcp6_rc /= 0_c_int) tcp6_value_len = 0_c_size_t
+    udp6_rc = c_ftop_linux_read_proc_net_udp6(c_udp6_buffer, int(size(c_udp6_buffer), c_size_t), &
+                                             udp6_value_len, sys_errno)
+    if (udp6_rc /= 0_c_int) udp6_value_len = 0_c_size_t
 
     call c_chars_to_string(c_tcp_buffer, int(tcp_value_len), tcp_buffer)
     call c_chars_to_string(c_udp_buffer, int(udp_value_len), udp_buffer)
-    connections = parse_linux_proc_net_connections(tcp_buffer, udp_buffer)
+    call c_chars_to_string(c_tcp6_buffer, int(tcp6_value_len), tcp6_buffer)
+    call c_chars_to_string(c_udp6_buffer, int(udp6_value_len), udp6_buffer)
+    connections = parse_linux_proc_net_connections(tcp_buffer, udp_buffer, tcp6_buffer, udp6_buffer)
     call assign_linux_connection_owners(connections)
     call assign_error(error_code, 0_c_int)
     success = .true.
