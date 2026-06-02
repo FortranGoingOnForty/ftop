@@ -5,9 +5,12 @@ program test_dashboard
   use ftop_collector, only : collector_snapshot
   use ftop_dashboard, only : dashboard_layout, default_dashboard_layout, render_dashboard
   use ftop_network, only : network_table_state
+  use ftop_services, only : load_service_cache_from_text
   implicit none
 
   integer(int64), parameter :: GIB = 1024_int64 * 1024_int64 * 1024_int64
+
+  call load_service_cache_from_text(test_services_text())
 
   call test_default_layout()
   call test_dashboard_renders_metrics()
@@ -65,6 +68,7 @@ contains
     call require(index(text, "eth0 up") > 0, "dashboard should render network interface")
     call require(index(text, "Connections 1") > 0, "dashboard should render network connection count")
     call require(index(text, "127.0.0.1:8080") > 0, "dashboard should render network endpoint")
+    call require(index(text, "8080(web)") > 0, "dashboard should render service names")
     call require(index(text, "refresh 1000ms frame 7 fps 1.0 samples 3") > 0, &
                  "dashboard should render footer")
     call require(index(text, "ready") > 0, "dashboard should render status")
@@ -106,6 +110,7 @@ contains
     call require(index(text, "PROCESS") > 0, "zoomed network should render process column")
     call require(index(text, "filter ESTABLISHED") > 0, "zoomed network should render active state filter")
     call require(index(text, "curl") > 0, "zoomed network should render matching connection")
+    call require(index(text, "443(https)") > 0, "zoomed network should render remote service names")
     call require(index(text, "sshd") == 0, "zoomed network should hide filtered listen connection")
     call require(index(text, "dnsmasq") == 0, "zoomed network should hide filtered udp connection")
     call require(network_state%row_count == 1, "network table state should track filtered rows")
@@ -164,6 +169,15 @@ contains
     call render_dashboard(buffer, snapshot, 1000, 0, "")
     call require(index(buffer_text(buffer), "ftop") > 0, "tiny dashboard should render app name")
   end subroutine test_tiny_dashboard
+
+  function test_services_text() result(text)
+    character(len=:), allocatable :: text
+
+    text = "web 8080/tcp" // new_line("a") // &
+           "https 443/tcp" // new_line("a") // &
+           "domain 53/udp" // new_line("a") // &
+           "ssh 22/tcp"
+  end function test_services_text
 
   function sample_snapshot() result(snapshot)
     type(collector_snapshot) :: snapshot

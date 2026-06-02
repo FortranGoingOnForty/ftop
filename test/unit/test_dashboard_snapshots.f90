@@ -13,6 +13,7 @@ program test_dashboard_snapshots
   use ftop_dashboard, only : render_dashboard
   use ftop_memory, only : render_memory_panel
   use ftop_network, only : render_network_panel
+  use ftop_services, only : load_service_cache_from_text
   use ftop_widgets, only : widget_rect
   implicit none
 
@@ -32,6 +33,7 @@ program test_dashboard_snapshots
   call get_command_argument(2, command)
   call require(len_trim(golden_root) > 0, "missing dashboard snapshot golden directory")
   print_snapshots = trim(command) == "--print"
+  call load_service_cache_from_text(test_services_text())
 
   call compare_snapshot("cpu_panel", render_cpu_snapshot(), golden_file(golden_root, "dashboard_cpu_panel.txt"), &
                         CPU_PANEL_HEIGHT, print_snapshots)
@@ -96,6 +98,12 @@ contains
     title_style = style_from_rgb(fg=COLOR_UI_ACCENT, bg=COLOR_UI_PANEL, bold=.true.)
     dim_style = style_from_rgb(fg=COLOR_UI_DIM)
   end subroutine dashboard_styles
+
+  function test_services_text() result(text)
+    character(len=:), allocatable :: text
+
+    text = "https 443/tcp"
+  end function test_services_text
 
   function sample_snapshot() result(snapshot)
     type(collector_snapshot) :: snapshot

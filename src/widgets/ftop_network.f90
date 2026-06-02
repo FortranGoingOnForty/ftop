@@ -9,6 +9,7 @@ module ftop_network
     gradient_blue_cyan, &
     style_from_rgb
   use ftop_net_data, only : NET_STATE_LEN, format_byte_rate, net_connection, process_bandwidth
+  use ftop_services, only : cached_service_name
   use ftop_sparkline, only : render_sparkline
   use ftop_table, only : &
     TABLE_SORT_ASCENDING, &
@@ -315,9 +316,11 @@ contains
     case (NETWORK_SORT_PROTOCOL)
       order = compare_text(trim(left%protocol), trim(right%protocol))
     case (NETWORK_SORT_LOCAL)
-      order = compare_text(endpoint_text(left%local_addr, left%local_port), endpoint_text(right%local_addr, right%local_port))
+      order = compare_text(endpoint_text(left%local_addr, left%local_port, left%protocol), &
+                           endpoint_text(right%local_addr, right%local_port, right%protocol))
     case (NETWORK_SORT_REMOTE)
-      order = compare_text(endpoint_text(left%remote_addr, left%remote_port), endpoint_text(right%remote_addr, right%remote_port))
+      order = compare_text(endpoint_text(left%remote_addr, left%remote_port, left%protocol), &
+                           endpoint_text(right%remote_addr, right%remote_port, right%protocol))
     case (NETWORK_SORT_PID)
       order = compare_integer(left%pid, right%pid)
     case (NETWORK_SORT_PROCESS)
@@ -325,8 +328,8 @@ contains
     case default
       order = compare_text(trim(left%state), trim(right%state))
     end select
-    if (order == 0) order = compare_text(endpoint_text(left%local_addr, left%local_port), &
-                                         endpoint_text(right%local_addr, right%local_port))
+    if (order == 0) order = compare_text(endpoint_text(left%local_addr, left%local_port, left%protocol), &
+                                         endpoint_text(right%local_addr, right%local_port, right%protocol))
     if (state%sort_direction == TABLE_SORT_DESCENDING) then
       out_of_order = order < 0
     else
@@ -405,8 +408,10 @@ contains
     allocate(cells(size(connections), NETWORK_TABLE_COLUMNS))
     do row = 1, size(connections)
       cells(row, 1) = make_table_cell(trim(connections(row)%protocol))
-      cells(row, 2) = make_table_cell(endpoint_text(connections(row)%local_addr, connections(row)%local_port))
-      cells(row, 3) = make_table_cell(endpoint_text(connections(row)%remote_addr, connections(row)%remote_port))
+      cells(row, 2) = make_table_cell(endpoint_text(connections(row)%local_addr, connections(row)%local_port, &
+                                                   connections(row)%protocol))
+      cells(row, 3) = make_table_cell(endpoint_text(connections(row)%remote_addr, connections(row)%remote_port, &
+                                                   connections(row)%protocol))
       cells(row, 4) = make_table_cell(trim(connections(row)%state))
       cells(row, 5) = make_table_cell(integer_text(max(0, connections(row)%pid)))
       cells(row, 6) = make_table_cell(trim(connections(row)%process_name))
@@ -588,23 +593,39 @@ contains
     owner = connection_owner_text(snapshot, connection_index)
     text = trim(snapshot%network%connections(connection_index)%protocol) // " " // &
            endpoint_text(snapshot%network%connections(connection_index)%local_addr, &
-                         snapshot%network%connections(connection_index)%local_port) // &
+                         snapshot%network%connections(connection_index)%local_port, &
+                         snapshot%network%connections(connection_index)%protocol) // &
            " -> " // endpoint_text(snapshot%network%connections(connection_index)%remote_addr, &
-                                    snapshot%network%connections(connection_index)%remote_port) // &
+                                    snapshot%network%connections(connection_index)%remote_port, &
+                                    snapshot%network%connections(connection_index)%protocol) // &
            " " // trim(snapshot%network%connections(connection_index)%state) // owner
   end function connection_text
 
-  function endpoint_text(address, port) result(text)
+  function endpoint_text(address, port, protocol) result(text)
     character(len=*), intent(in) :: address
     integer, intent(in) :: port
+    character(len=*), intent(in) :: protocol
     character(len=:), allocatable :: text
+    character(len=:), allocatable :: port_label
 
+    port_label = port_text(port, protocol)
     if (index(trim(address), ":") > 0) then
-      text = "[" // trim(address) // "]:" // integer_text(max(0, port))
+      text = "[" // trim(address) // "]:" // port_label
     else
-      text = trim(address) // ":" // integer_text(max(0, port))
+      text = trim(address) // ":" // port_label
     end if
   end function endpoint_text
+
+  function port_text(port, protocol) result(text)
+    integer, intent(in) :: port
+    character(len=*), intent(in) :: protocol
+    character(len=:), allocatable :: text
+    character(len=:), allocatable :: service_name
+
+    text = integer_text(max(0, port))
+    service_name = cached_service_name(port, protocol)
+    if (len_trim(service_name) > 0) text = text // "(" // service_name // ")"
+  end function port_text
 
   function connection_owner_text(snapshot, connection_index) result(text)
     type(collector_snapshot), intent(in) :: snapshot

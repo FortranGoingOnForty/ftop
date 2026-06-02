@@ -1,8 +1,9 @@
 program test_net_data
   use, intrinsic :: iso_fortran_env, only : int64, real64
   use ftop_net_data, only : append_interface_histories, assign_interface_rates, assign_process_bandwidth_rates, &
-                            decode_linux_ipv4_endpoint, decode_linux_ipv6_endpoint, format_byte_rate, &
-                            net_connection, network_table, parse_linux_proc_net_connections, parse_linux_proc_net_dev
+                             decode_linux_ipv4_endpoint, decode_linux_ipv6_endpoint, format_byte_rate, &
+                             net_connection, network_table, parse_linux_proc_net_connections, parse_linux_proc_net_dev
+  use ftop_services, only : parse_services, service_entry, service_name_for
   implicit none
 
   call test_linux_proc_net_dev_parser()
@@ -10,6 +11,7 @@ program test_net_data
   call test_interface_rates()
   call test_process_bandwidth_rates()
   call test_interface_histories()
+  call test_services_parser()
   call test_byte_rate_formatting()
   call test_linux_ipv4_endpoint_decoder()
   call test_linux_ipv6_endpoint_decoder()
@@ -157,6 +159,30 @@ contains
     call require(near(current%interfaces(1)%rx_history(2), 30.0_real64), "network histories should append rx rate")
     call require(near(current%interfaces(1)%tx_history(2), 40.0_real64), "network histories should append tx rate")
   end subroutine test_interface_histories
+
+  subroutine test_services_parser()
+    type(service_entry), allocatable :: services(:)
+    character(len=*), parameter :: text = &
+      "# service aliases are ignored" // new_line("a") // &
+      "ssh             22/tcp" // new_line("a") // &
+      "domain          53/udp" // new_line("a") // &
+      "https           443/TCP" // new_line("a") // &
+      "bad             nope/tcp" // new_line("a") // &
+      "too-high        70000/tcp" // new_line("a") // &
+      "custom-http     8080/tcp  webcache # comment"
+
+    services = parse_services(text)
+    call require(size(services) == 4, "services parser should keep valid service rows")
+    call require(trim(services(1)%name) == "ssh", "services parser should parse service name")
+    call require(services(1)%port == 22, "services parser should parse service port")
+    call require(trim(services(1)%protocol) == "tcp", "services parser should parse service protocol")
+    call require(service_name_for(services, 443, "tcp") == "https", "service lookup should match tcp port")
+    call require(service_name_for(services, 443, "TCP") == "https", "service lookup should normalize protocol")
+    call require(service_name_for(services, 53, "udp") == "domain", "service lookup should match udp port")
+    call require(service_name_for(services, 53, "tcp") == "", "service lookup should respect protocol")
+    call require(service_name_for(services, 8080, "tcp") == "custom-http", &
+                 "service lookup should keep non-standard services")
+  end subroutine test_services_parser
 
   subroutine test_byte_rate_formatting()
     call require(format_byte_rate(0.0_real64) == "0 B/s", "zero byte rate format mismatch")
