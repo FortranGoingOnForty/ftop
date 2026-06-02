@@ -1,8 +1,10 @@
 program test_net_data
   use, intrinsic :: iso_fortran_env, only : int64, real64
   use ftop_net_data, only : append_interface_histories, assign_interface_rates, assign_process_bandwidth_rates, &
+                             default_network_interface_filters, &
                              decode_linux_ipv4_endpoint, decode_linux_ipv6_endpoint, format_byte_rate, &
-                             net_connection, network_table, parse_linux_proc_net_connections, parse_linux_proc_net_dev
+                             net_connection, network_interface_filters, network_table, &
+                             parse_linux_proc_net_connections, parse_linux_proc_net_dev, set_network_interface_filters
   use ftop_services, only : parse_services, service_entry, service_name_for
   implicit none
 
@@ -20,6 +22,8 @@ contains
 
   subroutine test_linux_proc_net_dev_parser()
     type(network_table) :: table
+    type(network_interface_filters) :: filters
+    type(network_table) :: with_filters
     type(network_table) :: with_loopback
     character(len=*), parameter :: text = &
       "Inter-|   Receive                                                |  Transmit" // new_line("a") // &
@@ -54,6 +58,16 @@ contains
     with_loopback = parse_linux_proc_net_dev(text, include_loopback=.true.)
     call require(size(with_loopback%interfaces) == 3, "network parser should optionally include loopback")
     call require(trim(with_loopback%interfaces(1)%name) == "lo", "network parser should keep loopback when requested")
+
+    filters%include_loopback = .true.
+    filters%exclude_count = 1
+    filters%exclude_patterns(1) = "wlan*"
+    call set_network_interface_filters(filters)
+    with_filters = parse_linux_proc_net_dev(text)
+    call set_network_interface_filters(default_network_interface_filters())
+    call require(size(with_filters%interfaces) == 2, "network parser should apply configured interface filters")
+    call require(trim(with_filters%interfaces(1)%name) == "lo", "network filters should preserve configured loopback")
+    call require(trim(with_filters%interfaces(2)%name) == "eth0", "network filters should exclude matching patterns")
   end subroutine test_linux_proc_net_dev_parser
 
   subroutine test_linux_proc_net_connection_parser()

@@ -2,6 +2,7 @@ module ftop_layout
   use, intrinsic :: iso_fortran_env, only : int64
   use fgof_toml, only : &
     TOML_KIND_ARRAY, &
+    TOML_KIND_BOOLEAN, &
     TOML_KIND_INTEGER, &
     TOML_KIND_STRING, &
     TOML_KIND_TABLE, &
@@ -11,6 +12,10 @@ module ftop_layout
     toml_document, &
     toml_error, &
     toml_value
+  use ftop_net_data, only : &
+    NET_INTERFACE_FILTER_CAPACITY, &
+    NET_INTERFACE_PATTERN_LEN, &
+    network_interface_filters
   use ftop_widgets, only : widget_rect, widget_size
   implicit none
   private
@@ -40,6 +45,7 @@ module ftop_layout
 
   type, public :: layout_grid
     type(layout_row), allocatable :: rows(:)
+    type(network_interface_filters) :: network
     type(layout_process_config) :: process
   end type layout_grid
 
@@ -233,8 +239,62 @@ contains
       if (error%failed) return
     end do
 
+    call parse_network_config(document, grid%network, error)
+    if (error%failed) return
     call parse_process_config(document, grid%process, error)
   end subroutine parse_layout_document
+
+  subroutine parse_network_config(document, config, error)
+    type(toml_document), intent(in) :: document
+    type(network_interface_filters), intent(out) :: config
+    type(layout_error), intent(inout) :: error
+    integer :: exclude_index
+    integer :: network_index
+    integer :: pattern_index
+
+    config = network_interface_filters()
+    network_index = table_entry_index(document%root, "network")
+    if (network_index == 0) return
+    if (document%root%table_values(network_index)%kind /= TOML_KIND_TABLE) then
+      call set_layout_error(error, "network config must be a table")
+      return
+    end if
+
+    associate (network_value => document%root%table_values(network_index))
+      config%include_loopback = boolean_field(network_value, "include_loopback", .false., error)
+      if (error%failed) return
+
+      exclude_index = table_entry_index(network_value, "exclude_interfaces")
+      if (exclude_index == 0) return
+      if (network_value%table_values(exclude_index)%kind /= TOML_KIND_ARRAY) then
+        call set_layout_error(error, "network exclude_interfaces must be an array")
+        return
+      end if
+      if (.not. allocated(network_value%table_values(exclude_index)%array_values)) return
+      if (size(network_value%table_values(exclude_index)%array_values) > NET_INTERFACE_FILTER_CAPACITY) then
+        call set_layout_error(error, "network exclude_interfaces cannot contain more than " // &
+                              integer_text(NET_INTERFACE_FILTER_CAPACITY) // " patterns")
+        return
+      end if
+
+      config%exclude_count = size(network_value%table_values(exclude_index)%array_values)
+      do pattern_index = 1, config%exclude_count
+        if (network_value%table_values(exclude_index)%array_values(pattern_index)%kind /= TOML_KIND_STRING) then
+          call set_layout_error(error, "network exclude_interfaces pattern " // integer_text(pattern_index) // &
+                                " must be a string")
+          return
+        end if
+        config%exclude_patterns(pattern_index) = bounded_text(&
+          network_value%table_values(exclude_index)%array_values(pattern_index)%string_value%text, &
+          NET_INTERFACE_PATTERN_LEN)
+        if (len_trim(config%exclude_patterns(pattern_index)) == 0) then
+          call set_layout_error(error, "network exclude_interfaces pattern " // integer_text(pattern_index) // &
+                                " cannot be empty")
+          return
+        end if
+      end do
+    end associate
+  end subroutine parse_network_config
 
   subroutine parse_process_config(document, config, error)
     type(toml_document), intent(in) :: document
@@ -592,6 +652,34 @@ contains
     value = max(0, int(min(table_value%table_values(index_value)%integer_value, int(huge(value), int64))))
     if (key == "weight") value = max(1, value)
   end function integer_field
+
+  logical function boolean_field(table_value, key, default_value, error) result(value)
+    type(toml_value), intent(in) :: table_value
+    character(len=*), intent(in) :: key
+    logical, intent(in) :: default_value
+    type(layout_error), intent(inout) :: error
+    integer :: index_value
+
+    value = default_value
+    index_value = table_entry_index(table_value, key)
+    if (index_value == 0) return
+    if (table_value%table_values(index_value)%kind /= TOML_KIND_BOOLEAN) then
+      call set_layout_error(error, "layout field " // trim(key) // " must be a boolean")
+      return
+    end if
+    value = table_value%table_values(index_value)%boolean_value
+  end function boolean_field
+
+  function bounded_text(value, capacity) result(text)
+    character(len=*), intent(in) :: value
+    integer, intent(in) :: capacity
+    character(len=capacity) :: text
+    integer :: copy_len
+
+    text = ""
+    copy_len = min(len_trim(value), capacity)
+    if (copy_len > 0) text(:copy_len) = value(:copy_len)
+  end function bounded_text
 
   integer function table_entry_index(table_value, key) result(index_value)
     type(toml_value), intent(in) :: table_value

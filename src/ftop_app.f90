@@ -41,6 +41,7 @@ module ftop_app
     layout_focus_widget, &
     layout_grid, &
     parse_layout_file
+  use ftop_net_data, only : set_network_interface_filters
   use ftop_network, only : &
     network_table_clear_state_filter, &
     network_table_cycle_sort_key, &
@@ -328,7 +329,7 @@ contains
       call parse_layout_file(path, session%layout, error)
       if (error%failed) then
         call set_status(session, "layout config failed: " // error%message)
-      else if (.not. apply_layout_process_config(session, process_error)) then
+      else if (.not. apply_layout_config(session, process_error)) then
         call set_status(session, "layout config failed: " // process_error)
       else
         session%layout_loaded = .true.
@@ -342,7 +343,7 @@ contains
     call parse_layout_file(path, session%layout, error)
     if (error%failed) then
       call set_status(session, "layout config failed: " // error%message)
-    else if (.not. apply_layout_process_config(session, process_error)) then
+    else if (.not. apply_layout_config(session, process_error)) then
       call set_status(session, "layout config failed: " // process_error)
     else
       session%layout_loaded = .true.
@@ -350,18 +351,19 @@ contains
     end if
   end subroutine initialize_layout
 
-  logical function apply_layout_process_config(session, error_message) result(applied)
+  logical function apply_layout_config(session, error_message) result(applied)
     type(terminal_session), intent(inout) :: session
     character(len=:), allocatable, intent(out) :: error_message
 
     applied = .true.
     error_message = ""
+    call set_network_interface_filters(session%layout%network)
     if (session%layout%process%column_count <= 0) return
 
     applied = process_table_set_columns(session%process_state, &
                                         session%layout%process%columns(:session%layout%process%column_count), &
                                         session%layout%process%column_count, error_message)
-  end function apply_layout_process_config
+  end function apply_layout_config
 
   function discover_layout_config_path() result(path)
     character(len=:), allocatable :: path

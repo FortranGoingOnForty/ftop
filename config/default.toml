@@ -1,6 +1,10 @@
 # Default dashboard layout.
 # Future sprints will extend this with process, disk, and GPU widgets.
 
+[network]
+include_loopback = false
+exclude_interfaces = []
+
 [[row]]
 weight = 1
 

@@ -1,5 +1,9 @@
 # Process-focused layout.
 
+[network]
+include_loopback = false
+exclude_interfaces = []
+
 [process]
 columns = ["pid", "user", "cpu", "mem", "time", "command"]
 

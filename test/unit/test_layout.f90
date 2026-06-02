@@ -58,6 +58,9 @@ contains
 
     nl = new_line('a')
     call parse_layout_toml(&
+      "[network]" // nl // &
+      "include_loopback = true" // nl // &
+      "exclude_interfaces = [""docker*"", ""veth*""]" // nl // &
       "[process]" // nl // &
       "columns = [""pid"", ""cpu"", ""command""]" // nl // &
       "[[row]]" // nl // &
@@ -76,6 +79,10 @@ contains
     call require(size(grid%rows) == 1, "layout TOML should produce one row")
     call require(grid%rows(1)%weight == 2, "layout TOML should parse row weight")
     call require(size(grid%rows(1)%columns) == 2, "layout TOML should produce columns")
+    call require(grid%network%include_loopback, "layout TOML should parse network loopback filter")
+    call require(grid%network%exclude_count == 2, "layout TOML should parse network exclude filters")
+    call require(trim(grid%network%exclude_patterns(1)) == "docker*", &
+                 "layout TOML should preserve network exclude patterns")
     call require(grid%process%column_count == 3, "layout TOML should parse process columns")
     call require(trim(grid%process%columns(2)) == "cpu", "layout TOML should preserve process column names")
     call require(grid%rows(1)%columns(1)%widget == LAYOUT_WIDGET_CPU, "first column should be cpu")
@@ -118,6 +125,17 @@ contains
     call require(error%failed, "layout TOML should reject scalar process columns")
     call require(index(error%message, "process columns") > 0, &
                  "layout error should explain invalid process columns")
+
+    call parse_layout_toml(&
+      "[network]" // nl // &
+      "exclude_interfaces = [1]" // nl // &
+      "[[row]]" // nl // &
+      "[[row.column]]" // nl // &
+      "widget = ""network""" // nl, &
+      grid, error)
+    call require(error%failed, "layout TOML should reject invalid network filters")
+    call require(index(error%message, "exclude_interfaces") > 0, &
+                 "layout error should explain invalid network filters")
   end subroutine test_reject_invalid_layout_toml
 
   subroutine test_grid_resolution()

@@ -9,6 +9,14 @@ module ftop_net_data
   integer, parameter, public :: NET_ADDRESS_LEN = 64
   integer, parameter, public :: NET_PROCESS_NAME_LEN = 64
   integer, parameter, public :: NET_HISTORY_CAPACITY = 300
+  integer, parameter, public :: NET_INTERFACE_FILTER_CAPACITY = 16
+  integer, parameter, public :: NET_INTERFACE_PATTERN_LEN = 32
+
+  type, public :: network_interface_filters
+    logical :: include_loopback = .false.
+    integer :: exclude_count = 0
+    character(len=NET_INTERFACE_PATTERN_LEN) :: exclude_patterns(NET_INTERFACE_FILTER_CAPACITY) = ""
+  end type network_interface_filters
 
   type, public :: interface_info
     logical :: valid = .false.
@@ -70,37 +78,43 @@ module ftop_net_data
     type(process_bandwidth), allocatable :: processes(:)
   end type network_table
 
+  type(network_interface_filters), save :: active_interface_filters = network_interface_filters()
+
   public :: append_interface_histories
   public :: assign_interface_rates
   public :: assign_process_bandwidth_rates
+  public :: default_network_interface_filters
   public :: decode_linux_ipv4_endpoint
   public :: decode_linux_ipv6_endpoint
   public :: format_byte_rate
   public :: parse_linux_proc_net_connections
   public :: parse_linux_proc_net_dev
+  public :: set_network_interface_filters
 
 contains
 
-  function parse_linux_proc_net_dev(text, include_loopback) result(table)
+  function parse_linux_proc_net_dev(text, include_loopback, exclude_patterns) result(table)
     character(len=*), intent(in) :: text
     logical, intent(in), optional :: include_loopback
+    character(len=*), intent(in), optional :: exclude_patterns(:)
     type(network_table) :: table
     type(interface_info), allocatable :: parsed(:)
     integer :: cursor
     integer :: line_end
     integer :: line_start
     integer :: match_count
-    logical :: keep_loopback
+    type(network_interface_filters) :: filters
 
-    keep_loopback = .false.
-    if (present(include_loopback)) keep_loopback = include_loopback
+    filters = active_interface_filters
+    if (present(include_loopback)) filters%include_loopback = include_loopback
+    if (present(exclude_patterns)) call assign_interface_exclude_patterns(filters, exclude_patterns)
 
     match_count = 0
     cursor = 1
     do while (cursor <= len(text))
       line_start = cursor
       line_end = next_line_end(text, line_start)
-      if (linux_net_dev_line_matches(text(line_start:line_end), keep_loopback)) match_count = match_count + 1
+      if (linux_net_dev_line_matches(text(line_start:line_end), filters)) match_count = match_count + 1
       cursor = line_end + 2
     end do
 
@@ -111,7 +125,7 @@ contains
     do while (cursor <= len(text))
       line_start = cursor
       line_end = next_line_end(text, line_start)
-      if (parse_linux_net_dev_line(text(line_start:line_end), keep_loopback, parsed, match_count)) table%valid = .true.
+      if (parse_linux_net_dev_line(text(line_start:line_end), filters, parsed, match_count)) table%valid = .true.
       cursor = line_end + 2
     end do
 
@@ -119,6 +133,42 @@ contains
     allocate(table%connections(0))
     allocate(table%processes(0))
   end function parse_linux_proc_net_dev
+
+  function default_network_interface_filters() result(filters)
+    type(network_interface_filters) :: filters
+
+    filters = network_interface_filters()
+  end function default_network_interface_filters
+
+  subroutine set_network_interface_filters(filters)
+    type(network_interface_filters), intent(in) :: filters
+
+    character(len=NET_INTERFACE_PATTERN_LEN) :: patterns(NET_INTERFACE_FILTER_CAPACITY)
+    integer :: pattern_count
+
+    pattern_count = max(0, min(filters%exclude_count, NET_INTERFACE_FILTER_CAPACITY))
+    patterns = ""
+    if (pattern_count > 0) patterns(:pattern_count) = filters%exclude_patterns(:pattern_count)
+    active_interface_filters = network_interface_filters()
+    active_interface_filters%include_loopback = filters%include_loopback
+    active_interface_filters%exclude_count = pattern_count
+    active_interface_filters%exclude_patterns = patterns
+  end subroutine set_network_interface_filters
+
+  subroutine assign_interface_exclude_patterns(filters, exclude_patterns)
+    type(network_interface_filters), intent(inout) :: filters
+    character(len=*), intent(in) :: exclude_patterns(:)
+    integer :: pattern_count
+    integer :: pattern_index
+
+    filters%exclude_patterns = ""
+    pattern_count = min(size(exclude_patterns), NET_INTERFACE_FILTER_CAPACITY)
+    filters%exclude_count = pattern_count
+    do pattern_index = 1, pattern_count
+      filters%exclude_patterns(pattern_index) = bounded_text(exclude_patterns(pattern_index), &
+                                                             NET_INTERFACE_PATTERN_LEN)
+    end do
+  end subroutine assign_interface_exclude_patterns
 
   function parse_linux_proc_net_connections(tcp_text, udp_text, tcp6_text, udp6_text) result(connections)
     character(len=*), intent(in) :: tcp_text
@@ -240,9 +290,9 @@ contains
     parsed = connection%inode > 0_int64
   end function parse_linux_proc_net_connection_line
 
-  logical function linux_net_dev_line_matches(line, include_loopback) result(matches)
+  logical function linux_net_dev_line_matches(line, filters) result(matches)
     character(len=*), intent(in) :: line
-    logical, intent(in) :: include_loopback
+    type(network_interface_filters), intent(in) :: filters
     character(len=:), allocatable :: interface_name
     character(len=:), allocatable :: values
     integer :: colon
@@ -254,7 +304,7 @@ contains
     if (colon <= 1) return
     interface_name = trim(adjustl(line(:colon - 1)))
     if (len(interface_name) <= 0) return
-    if (.not. include_loopback .and. interface_name == "lo") return
+    if (.not. interface_allowed(interface_name, filters)) return
     values = line(colon + 1:)
     fields = 0_int64
     read(values, *, iostat=status) fields
@@ -262,9 +312,9 @@ contains
     matches = .true.
   end function linux_net_dev_line_matches
 
-  logical function parse_linux_net_dev_line(line, include_loopback, interfaces, count) result(parsed)
+  logical function parse_linux_net_dev_line(line, filters, interfaces, count) result(parsed)
     character(len=*), intent(in) :: line
-    logical, intent(in) :: include_loopback
+    type(network_interface_filters), intent(in) :: filters
     type(interface_info), intent(inout) :: interfaces(:)
     integer, intent(inout) :: count
     character(len=:), allocatable :: interface_name
@@ -278,7 +328,7 @@ contains
     if (colon <= 1) return
     interface_name = trim(adjustl(line(:colon - 1)))
     if (len(interface_name) <= 0) return
-    if (.not. include_loopback .and. interface_name == "lo") return
+    if (.not. interface_allowed(interface_name, filters)) return
 
     values = line(colon + 1:)
     fields = 0_int64
@@ -307,6 +357,77 @@ contains
     interfaces(count)%tx_compressed = max(0_int64, fields(16))
     parsed = .true.
   end function parse_linux_net_dev_line
+
+  logical function interface_allowed(interface_name, filters) result(allowed)
+    character(len=*), intent(in) :: interface_name
+    type(network_interface_filters), intent(in) :: filters
+    integer :: pattern_index
+    integer :: pattern_count
+
+    allowed = .false.
+    if (len_trim(interface_name) <= 0) return
+    if (.not. filters%include_loopback .and. trim(interface_name) == "lo") return
+
+    pattern_count = max(0, min(filters%exclude_count, NET_INTERFACE_FILTER_CAPACITY))
+    do pattern_index = 1, pattern_count
+      if (wildcard_match(trim(interface_name), trim(filters%exclude_patterns(pattern_index)))) return
+    end do
+    allowed = .true.
+  end function interface_allowed
+
+  logical function wildcard_match(text, pattern) result(matches)
+    character(len=*), intent(in) :: text
+    character(len=*), intent(in) :: pattern
+    character(len=:), allocatable :: prefix
+    character(len=:), allocatable :: suffix
+    integer :: star
+
+    matches = .false.
+    if (len_trim(pattern) <= 0) return
+    star = index(pattern, "*")
+    if (star <= 0) then
+      matches = trim(text) == trim(pattern)
+      return
+    end if
+    if (trim(pattern) == "*") then
+      matches = .true.
+      return
+    end if
+
+    if (star > 1) then
+      prefix = pattern(:star - 1)
+    else
+      prefix = ""
+    end if
+    if (star < len_trim(pattern)) then
+      suffix = pattern(star + 1:len_trim(pattern))
+    else
+      suffix = ""
+    end if
+    if (len(prefix) > 0 .and. .not. starts_with(text, prefix)) return
+    if (len(suffix) > 0 .and. .not. ends_with(text, suffix)) return
+    matches = .true.
+  end function wildcard_match
+
+  logical function starts_with(text, prefix) result(matches)
+    character(len=*), intent(in) :: text
+    character(len=*), intent(in) :: prefix
+
+    matches = .false.
+    if (len(text) < len(prefix)) return
+    matches = text(:len(prefix)) == prefix
+  end function starts_with
+
+  logical function ends_with(text, suffix) result(matches)
+    character(len=*), intent(in) :: text
+    character(len=*), intent(in) :: suffix
+    integer :: start
+
+    matches = .false.
+    if (len(text) < len(suffix)) return
+    start = len(text) - len(suffix) + 1
+    matches = text(start:) == suffix
+  end function ends_with
 
   subroutine assign_interface_rates(current, previous, elapsed_ms)
     type(network_table), intent(inout) :: current
