@@ -654,17 +654,82 @@ static void ftop_macos_copy_process_command(char *destination, const char *sourc
   destination[i] = '\0';
 }
 
+static void ftop_macos_fill_task_info(pid_t pid, struct ftop_macos_process_info *process) {
+  struct proc_taskinfo task;
+  uint64_t total_time;
+  int rc;
+
+  if (pid <= 0 || process == NULL) return;
+
+  memset(&task, 0, sizeof(task));
+  rc = proc_pidinfo(pid, PROC_PIDTASKINFO, 0, &task, sizeof(task));
+  if (rc != (int)sizeof(task)) return;
+
+  process->mem_rss_bytes = task.pti_resident_size > 0 ? (long long)task.pti_resident_size : 0;
+  process->mem_virt_bytes = task.pti_virtual_size > 0 ? (long long)task.pti_virtual_size : 0;
+  process->threads = task.pti_threadnum > 0 ? (int)task.pti_threadnum : 0;
+  total_time = task.pti_total_user + task.pti_total_system;
+  process->cpu_time = total_time > 0 ? (long long)(total_time / 1000000ULL) : 0;
+}
+
+static int ftop_macos_fill_process_info(pid_t pid, struct ftop_macos_process_info *process) {
+  struct proc_bsdinfo bsd;
+  int rc;
+
+  if (pid <= 0 || process == NULL) return -1;
+
+  memset(&bsd, 0, sizeof(bsd));
+  rc = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bsd, sizeof(bsd));
+  if (rc != (int)sizeof(bsd)) return -1;
+
+  memset(process, 0, sizeof(*process));
+  process->pid = (int)bsd.pbi_pid;
+  process->ppid = (int)bsd.pbi_ppid;
+  process->uid = (int)bsd.pbi_uid;
+  process->state = (int)bsd.pbi_status;
+  process->nice = (int)bsd.pbi_nice;
+  process->start_time = bsd.pbi_start_tvsec > 0 ? (long long)bsd.pbi_start_tvsec : 0;
+  ftop_macos_copy_process_command(process->command, bsd.pbi_comm);
+  ftop_macos_fill_task_info(pid, process);
+  return 0;
+}
+
+static int ftop_macos_fill_process_info_sysctl(pid_t pid, struct ftop_macos_process_info *process) {
+  struct kinfo_proc kinfo;
+  int mib[4];
+  size_t value_len;
+
+  if (pid <= 0 || process == NULL) return -1;
+
+  mib[0] = CTL_KERN;
+  mib[1] = KERN_PROC;
+  mib[2] = KERN_PROC_PID;
+  mib[3] = (int)pid;
+  memset(&kinfo, 0, sizeof(kinfo));
+  value_len = sizeof(kinfo);
+  if (sysctl(mib, 4U, &kinfo, &value_len, NULL, 0U) != 0 || value_len < sizeof(kinfo)) return -1;
+  if (kinfo.kp_proc.p_pid <= 0) return -1;
+
+  memset(process, 0, sizeof(*process));
+  process->pid = (int)kinfo.kp_proc.p_pid;
+  process->ppid = (int)kinfo.kp_eproc.e_ppid;
+  process->uid = (int)kinfo.kp_eproc.e_ucred.cr_uid;
+  process->state = (int)kinfo.kp_proc.p_stat;
+  process->nice = (int)kinfo.kp_proc.p_nice;
+  process->start_time = kinfo.kp_proc.p_starttime.tv_sec > 0 ? (long long)kinfo.kp_proc.p_starttime.tv_sec : 0;
+  ftop_macos_copy_process_command(process->command, kinfo.kp_proc.p_comm);
+  ftop_macos_fill_task_info(pid, process);
+  return 0;
+}
+
 int ftop_macos_process_snapshot(
     struct ftop_macos_process_info *buffer, size_t capacity, size_t *process_count, int *sys_errno) {
-  struct proc_bsdinfo bsd;
-  struct proc_taskinfo task;
   pid_t *pids;
   int byte_count;
   int pid_count;
-  int rc;
   int i;
+  int found_pid_one;
   size_t count;
-  uint64_t total_time;
 
   if (buffer == NULL || process_count == NULL || sys_errno == NULL || capacity == 0) return -1;
 
@@ -691,30 +756,20 @@ int ftop_macos_process_snapshot(
 
   pid_count = byte_count / (int)sizeof(pid_t);
   count = 0U;
+  found_pid_one = 0;
   for (i = 0; i < pid_count && count < capacity; ++i) {
     if (pids[i] <= 0) continue;
-    memset(&bsd, 0, sizeof(bsd));
-    rc = proc_pidinfo(pids[i], PROC_PIDTBSDINFO, 0, &bsd, sizeof(bsd));
-    if (rc != (int)sizeof(bsd)) continue;
-
-    memset(&task, 0, sizeof(task));
-    rc = proc_pidinfo(pids[i], PROC_PIDTASKINFO, 0, &task, sizeof(task));
-    memset(&buffer[count], 0, sizeof(buffer[count]));
-    buffer[count].pid = (int)bsd.pbi_pid;
-    buffer[count].ppid = (int)bsd.pbi_ppid;
-    buffer[count].uid = (int)bsd.pbi_uid;
-    buffer[count].state = (int)bsd.pbi_status;
-    buffer[count].nice = (int)bsd.pbi_nice;
-    buffer[count].start_time = bsd.pbi_start_tvsec > 0 ? (long long)bsd.pbi_start_tvsec : 0;
-    ftop_macos_copy_process_command(buffer[count].command, bsd.pbi_comm);
-    if (rc == (int)sizeof(task)) {
-      buffer[count].mem_rss_bytes = task.pti_resident_size > 0 ? (long long)task.pti_resident_size : 0;
-      buffer[count].mem_virt_bytes = task.pti_virtual_size > 0 ? (long long)task.pti_virtual_size : 0;
-      buffer[count].threads = task.pti_threadnum > 0 ? (int)task.pti_threadnum : 0;
-      total_time = task.pti_total_user + task.pti_total_system;
-      buffer[count].cpu_time = total_time > 0 ? (long long)(total_time / 1000000ULL) : 0;
-    }
+    if (ftop_macos_fill_process_info(pids[i], &buffer[count]) != 0 &&
+        ftop_macos_fill_process_info_sysctl(pids[i], &buffer[count]) != 0)
+      continue;
+    if (buffer[count].pid == 1) found_pid_one = 1;
     ++count;
+  }
+
+  if (!found_pid_one && count < capacity) {
+    if (ftop_macos_fill_process_info((pid_t)1, &buffer[count]) == 0 ||
+        ftop_macos_fill_process_info_sysctl((pid_t)1, &buffer[count]) == 0)
+      ++count;
   }
 
   free(pids);
