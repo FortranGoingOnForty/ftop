@@ -12,6 +12,7 @@ program test_process_table
                                   process_table_delete_filter_char, process_table_delete_filter_right, &
                                   process_table_delete_fuzzy_char, &
                                   process_table_move_filter_cursor, process_table_page_delta, &
+                                  process_table_finish_filter, &
                                   process_table_append_signal_digit, process_table_confirm_signal, &
                                    process_table_mark_signal_feedback, process_table_scroll_delta, &
                                   process_table_select_at, process_table_select_delta, &
@@ -190,6 +191,19 @@ program test_process_table
   call require(state%selected_pid == 200, "PID fuzzy query should select exact PID")
   call require(state%fuzzy_is_pid_mode, "numeric fuzzy query should use PID mode")
   call require(index(row_text(buffer, 9), "PID: 200_") > 0, "process table should render PID fuzzy bar")
+  call require(index(row_text(buffer, 9), "(exact)") > 0, "process table should render exact PID fuzzy match")
+
+  buffer = allocate_screen(80, 10)
+  state = process_table_state(tree_view=.false.)
+  call process_table_begin_filter(state)
+  call process_table_append_filter_text(state, "child")
+  call process_table_finish_filter(state)
+  call process_table_append_fuzzy_text(state, "200")
+  call render_process_panel(buffer, widget_rect(1, 1, 80, 10), sample_snapshot(), border_style, title_style, dim_style, state)
+  call require(state%selected_pid == 200, "fuzzy query should search within filtered process rows")
+  call require(state%fuzzy_exact_match, "fuzzy query should track exact PID inside filtered rows")
+  call require(index(process_table_status(state), "PID: 200_ (exact)") > 0, &
+               "process status should include fuzzy query while filter remains active")
 
 contains
 

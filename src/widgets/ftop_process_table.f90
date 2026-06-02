@@ -129,6 +129,7 @@ module ftop_process_table
     integer :: fuzzy_query_length = 0
     character(len=PROCESS_FUZZY_QUERY_LEN) :: fuzzy_query = ""
     logical :: fuzzy_is_pid_mode = .false.
+    logical :: fuzzy_exact_match = .false.
     integer :: fuzzy_match_count = 0
     integer :: fuzzy_step_direction = 0
     logical :: metric_sparklines = .true.
@@ -295,6 +296,7 @@ contains
       match_index = process_fuzzy_next_match(table, process_table_fuzzy_text(state), state%fuzzy_is_pid_mode, &
                                              state%selected_row, state%fuzzy_step_direction, state%fuzzy_match_count)
     end if
+    state%fuzzy_exact_match = state%fuzzy_is_pid_mode .and. process_fuzzy_exact_pid_match(table, process_table_fuzzy_text(state))
     state%fuzzy_step_direction = 0
     if (match_index > 0) state%selected_row = match_index
   end subroutine apply_fuzzy_selection
@@ -1279,6 +1281,7 @@ contains
     was_empty = state%fuzzy_query_length <= 0
     state%fuzzy_query(state%fuzzy_query_length + 1:state%fuzzy_query_length + copy_length) = text(:copy_length)
     state%fuzzy_query_length = state%fuzzy_query_length + copy_length
+    state%fuzzy_exact_match = .false.
     if (was_empty) then
       state%fuzzy_is_pid_mode = ascii_digits(text(:copy_length))
     else if (state%fuzzy_is_pid_mode .and. .not. ascii_digits(text(:copy_length))) then
@@ -1293,6 +1296,7 @@ contains
     if (state%fuzzy_query_length <= 0) return
     state%fuzzy_query(state%fuzzy_query_length:state%fuzzy_query_length) = " "
     state%fuzzy_query_length = state%fuzzy_query_length - 1
+    state%fuzzy_exact_match = .false.
     if (state%fuzzy_query_length <= 0) call process_table_clear_fuzzy(state)
   end subroutine process_table_delete_fuzzy_char
 
@@ -1302,6 +1306,7 @@ contains
     state%fuzzy_query_length = 0
     state%fuzzy_query = ""
     state%fuzzy_is_pid_mode = .false.
+    state%fuzzy_exact_match = .false.
     state%fuzzy_match_count = 0
     state%fuzzy_step_direction = 0
   end subroutine process_table_clear_fuzzy
@@ -1493,6 +1498,25 @@ contains
       return
     end do
   end function process_row_fuzzy_matches
+
+  logical function process_fuzzy_exact_pid_match(table, query) result(exact)
+    type(process_table), intent(in) :: table
+    character(len=*), intent(in) :: query
+    character(len=32) :: pid_text
+    integer :: process_index
+
+    exact = .false.
+    if (len_trim(query) <= 0) return
+    if (.not. allocated(table%items)) return
+    do process_index = 1, size(table%items)
+      if (.not. table%items(process_index)%valid) cycle
+      write(pid_text, '(i0)') max(0, table%items(process_index)%pid)
+      if (trim(pid_text) == trim(query)) then
+        exact = .true.
+        return
+      end if
+    end do
+  end function process_fuzzy_exact_pid_match
 
   function process_table_signal_status(state) result(text)
     type(process_table_state), intent(in) :: state
@@ -1750,6 +1774,7 @@ contains
     if (state%fuzzy_query_length == 0) then
       state%fuzzy_query = ""
       state%fuzzy_is_pid_mode = .false.
+      state%fuzzy_exact_match = .false.
       state%fuzzy_match_count = 0
       state%fuzzy_step_direction = 0
     end if
@@ -1997,7 +2022,11 @@ contains
     else
       label = "Find: "
     end if
-    text = label // query // "_ (" // integer_text(max(0, state%fuzzy_match_count)) // " matches)"
+    if (state%fuzzy_is_pid_mode .and. state%fuzzy_exact_match) then
+      text = label // query // "_ (exact)"
+    else
+      text = label // query // "_ (" // integer_text(max(0, state%fuzzy_match_count)) // " matches)"
+    end if
   end function process_fuzzy_bar_text
 
   integer function process_fuzzy_score(process, query, pid_mode) result(score)
