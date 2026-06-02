@@ -1,8 +1,9 @@
 program test_proc_data
   use, intrinsic :: iso_fortran_env, only : int64, real64
-  use ftop_proc_data, only : assign_process_cpu_percent, build_process_tree, process_count, process_display_command, &
-                             process_info, process_state_label, process_table, process_user_label, PROCESS_SORT_CPU, &
-                             PROCESS_SORT_PID, sort_process_table
+  use ftop_proc_data, only : PROCESS_HISTORY_CAPACITY, PROCESS_SORT_CPU, PROCESS_SORT_PID, &
+                             append_process_histories, assign_process_cpu_percent, build_process_tree, &
+                             process_count, process_display_command, process_info, process_state_label, &
+                             process_table, process_user_label, sort_process_table
   implicit none
 
   type(process_info) :: process
@@ -10,6 +11,7 @@ program test_proc_data
 
   call test_process_labels()
   call test_process_cpu_percent()
+  call test_process_history()
   call test_process_sorting()
   call test_process_tree()
 
@@ -84,6 +86,63 @@ contains
     call assign_process_cpu_percent(current, previous, 0_int64)
     call require(all(current%items%cpu_percent == 0.0_real64), "process CPU should reset invalid elapsed deltas")
   end subroutine test_process_cpu_percent
+
+  subroutine test_process_history()
+    type(process_table) :: current
+    type(process_table) :: previous
+    integer :: history_index
+
+    previous%valid = .true.
+    allocate(previous%items(2))
+    previous%items(1)%valid = .true.
+    previous%items(1)%pid = 10
+    previous%items(1)%start_time = 100
+    previous%items(1)%history_count = 2
+    previous%items(1)%cpu_history(1:2) = [1.0_real64, 2.0_real64]
+    previous%items(1)%mem_history(1:2) = [3.0_real64, 4.0_real64]
+    previous%items(2)%valid = .true.
+    previous%items(2)%pid = 20
+    previous%items(2)%start_time = 200
+    previous%items(2)%history_count = PROCESS_HISTORY_CAPACITY
+    do history_index = 1, PROCESS_HISTORY_CAPACITY
+      previous%items(2)%cpu_history(history_index) = real(history_index, real64)
+      previous%items(2)%mem_history(history_index) = real(history_index + 1, real64)
+    end do
+
+    current%valid = .true.
+    allocate(current%items(3))
+    current%items(1)%valid = .true.
+    current%items(1)%pid = 10
+    current%items(1)%start_time = 100
+    current%items(1)%cpu_percent = 5.0_real64
+    current%items(1)%mem_percent = 6.0_real64
+    current%items(2)%valid = .true.
+    current%items(2)%pid = 20
+    current%items(2)%start_time = 200
+    current%items(2)%cpu_percent = 101.0_real64
+    current%items(2)%mem_percent = -1.0_real64
+    current%items(3)%valid = .true.
+    current%items(3)%pid = 10
+    current%items(3)%start_time = 101
+    current%items(3)%cpu_percent = 7.0_real64
+    current%items(3)%mem_percent = 8.0_real64
+
+    call append_process_histories(current, previous)
+    call require(current%items(1)%history_count == 3, "process history should append matching process sample")
+    call require(all(current%items(1)%cpu_history(1:3) == [1.0_real64, 2.0_real64, 5.0_real64]), &
+                 "process CPU history should preserve previous samples")
+    call require(all(current%items(1)%mem_history(1:3) == [3.0_real64, 4.0_real64, 6.0_real64]), &
+                 "process memory history should preserve previous samples")
+    call require(current%items(2)%history_count == PROCESS_HISTORY_CAPACITY, "process history should stay capped")
+    call require(current%items(2)%cpu_history(1) == 2.0_real64, "capped process CPU history should drop oldest sample")
+    call require(current%items(2)%cpu_history(PROCESS_HISTORY_CAPACITY) == 100.0_real64, &
+                 "process CPU history should clamp high percentages")
+    call require(current%items(2)%mem_history(PROCESS_HISTORY_CAPACITY) == 0.0_real64, &
+                 "process memory history should clamp low percentages")
+    call require(current%items(3)%history_count == 1, "process history should reset on pid reuse")
+    call require(current%items(3)%cpu_history(1) == 7.0_real64, "pid reuse CPU history should start with current sample")
+    call require(current%items(3)%mem_history(1) == 8.0_real64, "pid reuse memory history should start with current sample")
+  end subroutine test_process_history
 
   subroutine test_process_sorting()
     type(process_table) :: sorted

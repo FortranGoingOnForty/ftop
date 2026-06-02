@@ -9,6 +9,7 @@ module ftop_proc_data
   integer, parameter, public :: PROCESS_STATE_LEN = 16
   integer, parameter, public :: PROCESS_CGROUP_LEN = 128
   integer, parameter, public :: PROCESS_TREE_PREFIX_LEN = 128
+  integer, parameter, public :: PROCESS_HISTORY_CAPACITY = 300
   integer, parameter :: PROCESS_TREE_MAX_DEPTH = 24
 
   integer, parameter, public :: PROCESS_SORT_PID = 1
@@ -39,6 +40,9 @@ module ftop_proc_data
     integer(int64) :: io_write_bytes = 0_int64
     integer(int64) :: start_time = 0_int64
     integer(int64) :: cpu_time = 0_int64 ! Cumulative CPU time in milliseconds.
+    integer :: history_count = 0
+    real(real64) :: cpu_history(PROCESS_HISTORY_CAPACITY) = 0.0_real64
+    real(real64) :: mem_history(PROCESS_HISTORY_CAPACITY) = 0.0_real64
     character(len=PROCESS_CGROUP_LEN) :: cgroup = ""
     integer :: jid = 0
     integer :: tree_depth = 0
@@ -54,6 +58,7 @@ module ftop_proc_data
   public :: process_display_command
   public :: process_state_label
   public :: process_user_label
+  public :: append_process_histories
   public :: assign_process_cpu_percent
   public :: build_process_tree
   public :: sort_process_table
@@ -125,6 +130,69 @@ contains
       current%items(current_index)%cpu_percent = 100.0_real64 * real(cpu_delta_ms, real64) / real(elapsed_ms, real64)
     end do
   end subroutine assign_process_cpu_percent
+
+  subroutine append_process_histories(current, previous)
+    type(process_table), intent(inout) :: current
+    type(process_table), intent(in) :: previous
+    integer :: current_index
+    integer :: previous_index
+
+    if (.not. allocated(current%items)) return
+
+    do current_index = 1, size(current%items)
+      current%items(current_index)%history_count = 0
+      current%items(current_index)%cpu_history = 0.0_real64
+      current%items(current_index)%mem_history = 0.0_real64
+      if (.not. current%items(current_index)%valid) cycle
+
+      previous_index = 0
+      if (previous%valid .and. allocated(previous%items)) then
+        previous_index = matching_previous_process(previous, current%items(current_index))
+      end if
+      if (previous_index > 0) call copy_process_history(current%items(current_index), previous%items(previous_index))
+      call append_process_history_sample(current%items(current_index), current%items(current_index)%cpu_percent, &
+                                         current%items(current_index)%mem_percent)
+    end do
+  end subroutine append_process_histories
+
+  subroutine copy_process_history(current, previous)
+    type(process_info), intent(inout) :: current
+    type(process_info), intent(in) :: previous
+    integer :: history_count
+
+    history_count = bounded_history_count(previous%history_count)
+    if (history_count <= 0) return
+    current%history_count = history_count
+    current%cpu_history(:history_count) = previous%cpu_history(:history_count)
+    current%mem_history(:history_count) = previous%mem_history(:history_count)
+  end subroutine copy_process_history
+
+  subroutine append_process_history_sample(process, cpu_percent, mem_percent)
+    type(process_info), intent(inout) :: process
+    real(real64), intent(in) :: cpu_percent
+    real(real64), intent(in) :: mem_percent
+    integer :: history_index
+
+    if (.not. process%valid) return
+    process%history_count = bounded_history_count(process%history_count)
+    if (process%history_count < PROCESS_HISTORY_CAPACITY) then
+      process%history_count = process%history_count + 1
+    else
+      do history_index = 1, PROCESS_HISTORY_CAPACITY - 1
+        process%cpu_history(history_index) = process%cpu_history(history_index + 1)
+        process%mem_history(history_index) = process%mem_history(history_index + 1)
+      end do
+    end if
+
+    process%cpu_history(process%history_count) = clamp_percent(cpu_percent)
+    process%mem_history(process%history_count) = clamp_percent(mem_percent)
+  end subroutine append_process_history_sample
+
+  integer function bounded_history_count(history_count) result(bounded)
+    integer, intent(in) :: history_count
+
+    bounded = max(0, min(PROCESS_HISTORY_CAPACITY, history_count))
+  end function bounded_history_count
 
   subroutine build_process_tree(table)
     type(process_table), intent(inout) :: table
@@ -430,6 +498,12 @@ contains
       comparison = 0
     end if
   end function compare_real
+
+  pure real(real64) function clamp_percent(value) result(clamped)
+    real(real64), intent(in) :: value
+
+    clamped = max(0.0_real64, min(100.0_real64, value))
+  end function clamp_percent
 
   integer function compare_text(left, right) result(comparison)
     character(len=*), intent(in) :: left

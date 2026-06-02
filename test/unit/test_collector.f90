@@ -97,6 +97,10 @@ contains
     call require(size(snapshot%processes%items) > 0, "collector process table must include processes")
     call require(any(snapshot%processes%items%valid), "collector process table must include valid processes")
     call require(any(snapshot%processes%items%pid > 0), "collector process table must include positive pids")
+    call require(any(snapshot%processes%items%history_count > 0), "collector process histories must include samples")
+    call require(all(snapshot%processes%items%history_count >= 0), "collector process history counts must not be negative")
+    call require(all(snapshot%processes%items%history_count <= FTOP_COLLECTOR_HISTORY_CAPACITY), &
+                 "collector process history counts must stay capped")
 
     call require(metrics%stop(), "collector stop failed")
     call require(.not. metrics%running(), "collector must stop running")

@@ -28,10 +28,13 @@ module ftop_collector
   use ftop_proc_data, only : &
     PROCESS_CGROUP_LEN, &
     PROCESS_COMMAND_LEN, &
+    PROCESS_HISTORY_CAPACITY, &
     PROCESS_NAME_LEN, &
     PROCESS_STATE_LEN, &
     PROCESS_USER_LEN, &
+    append_process_histories, &
     assign_process_cpu_percent, &
+    process_info, &
     process_table
   use ftop_pthread, only : &
     ftop_mutex_destroy, &
@@ -48,7 +51,7 @@ module ftop_collector
   integer, parameter, public :: FTOP_COLLECTOR_DEFAULT_INTERVAL_MS = 1000
   integer, parameter, public :: FTOP_COLLECTOR_MIN_INTERVAL_MS = 1
   integer, parameter, public :: FTOP_COLLECTOR_MAX_INTERVAL_MS = 60000
-  integer, parameter, public :: FTOP_COLLECTOR_HISTORY_CAPACITY = 300
+  integer, parameter, public :: FTOP_COLLECTOR_HISTORY_CAPACITY = PROCESS_HISTORY_CAPACITY
   integer, parameter, public :: FTOP_COLLECTOR_MAX_CPU_CORES = 512
   integer, parameter, public :: FTOP_COLLECTOR_MAX_PROCESSES = 256
 
@@ -112,6 +115,9 @@ module ftop_collector
     integer(c_long_long) :: process_io_write_bytes(FTOP_COLLECTOR_MAX_PROCESSES)
     integer(c_long_long) :: process_start_time(FTOP_COLLECTOR_MAX_PROCESSES)
     integer(c_long_long) :: process_cpu_time(FTOP_COLLECTOR_MAX_PROCESSES)
+    integer(c_int) :: process_history_count(FTOP_COLLECTOR_MAX_PROCESSES)
+    real(c_double) :: process_cpu_history(FTOP_COLLECTOR_MAX_PROCESSES, PROCESS_HISTORY_CAPACITY)
+    real(c_double) :: process_mem_history(FTOP_COLLECTOR_MAX_PROCESSES, PROCESS_HISTORY_CAPACITY)
     character(kind=c_char) :: process_cgroup(PROCESS_CGROUP_LEN, FTOP_COLLECTOR_MAX_PROCESSES)
     integer(c_int) :: process_jid(FTOP_COLLECTOR_MAX_PROCESSES)
     integer(c_int) :: history_start
@@ -339,6 +345,7 @@ contains
     type(platform_memory_info) :: memory
     type(load_average_info) :: load_average
     type(process_table) :: processes
+    type(process_table) :: empty_processes
     type(process_table) :: previous_processes
     type(system_uptime_info) :: system_uptime
     integer(c_long_long) :: deadline_ms
@@ -365,6 +372,7 @@ contains
     load_average = backend%get_load_average()
     system_uptime = backend%get_system_uptime()
     processes = backend%get_process_table()
+    call append_process_histories(processes, empty_processes)
     deadline_ms = monotonic_ms()
     previous_processes = processes
     previous_process_sample_ms = deadline_ms
@@ -404,6 +412,7 @@ contains
         processes = backend%get_process_table()
         call assign_process_cpu_percent(processes, previous_processes, &
                                         int(max(0_c_long_long, deadline_ms - previous_process_sample_ms), int64))
+        call append_process_histories(processes, previous_processes)
         previous_processes = processes
         previous_process_sample_ms = deadline_ms
         process_refresh_ms = deadline_ms + 1000_c_long_long
@@ -520,6 +529,9 @@ contains
     state%process_io_write_bytes = 0_c_long_long
     state%process_start_time = 0_c_long_long
     state%process_cpu_time = 0_c_long_long
+    state%process_history_count = 0_c_int
+    state%process_cpu_history = 0.0_c_double
+    state%process_mem_history = 0.0_c_double
     state%process_cgroup = c_null_char
     state%process_jid = 0_c_int
     state%history_start = 1_c_int
@@ -590,6 +602,9 @@ contains
     state%process_io_write_bytes = 0_c_long_long
     state%process_start_time = 0_c_long_long
     state%process_cpu_time = 0_c_long_long
+    state%process_history_count = 0_c_int
+    state%process_cpu_history = 0.0_c_double
+    state%process_mem_history = 0.0_c_double
     state%process_cgroup = c_null_char
     state%process_jid = 0_c_int
     state%history_start = 1_c_int
@@ -661,6 +676,8 @@ contains
     type(collector_shared_state), intent(in) :: state
     type(collector_snapshot), intent(inout) :: snapshot
     integer :: allocation_status
+    integer :: history_count
+    integer :: history_index
     integer :: process_count
     integer :: process_index
     logical :: string_valid
@@ -696,6 +713,16 @@ contains
       snapshot%processes%items(process_index)%io_write_bytes = int(state%process_io_write_bytes(process_index), int64)
       snapshot%processes%items(process_index)%start_time = int(state%process_start_time(process_index), int64)
       snapshot%processes%items(process_index)%cpu_time = int(state%process_cpu_time(process_index), int64)
+      history_count = bounded_process_history_count(int(state%process_history_count(process_index)))
+      snapshot%processes%items(process_index)%history_count = history_count
+      snapshot%processes%items(process_index)%cpu_history = 0.0_real64
+      snapshot%processes%items(process_index)%mem_history = 0.0_real64
+      do history_index = 1, history_count
+        snapshot%processes%items(process_index)%cpu_history(history_index) = &
+          real(state%process_cpu_history(process_index, history_index), real64)
+        snapshot%processes%items(process_index)%mem_history(history_index) = &
+          real(state%process_mem_history(process_index, history_index), real64)
+      end do
       call copy_c_chars_to_fortran(state%process_cgroup(:, process_index), state%process_valid(process_index), &
                                    snapshot%processes%items(process_index)%cgroup, string_valid)
       snapshot%processes%items(process_index)%jid = int(state%process_jid(process_index))
@@ -755,6 +782,12 @@ contains
 
     bounded = max(0, min(FTOP_COLLECTOR_MAX_PROCESSES, process_count))
   end function bounded_process_count
+
+  integer function bounded_process_history_count(history_count) result(bounded)
+    integer, intent(in) :: history_count
+
+    bounded = max(0, min(PROCESS_HISTORY_CAPACITY, history_count))
+  end function bounded_process_history_count
 
   integer function bounded_interval_ms(interval_ms) result(bounded)
     integer, intent(in), optional :: interval_ms
@@ -923,6 +956,9 @@ contains
     state%process_io_write_bytes = 0_c_long_long
     state%process_start_time = 0_c_long_long
     state%process_cpu_time = 0_c_long_long
+    state%process_history_count = 0_c_int
+    state%process_cpu_history = 0.0_c_double
+    state%process_mem_history = 0.0_c_double
     state%process_cgroup = c_null_char
     state%process_jid = 0_c_int
     if (.not. processes%valid .or. .not. allocated(processes%items)) return
@@ -962,12 +998,31 @@ contains
                                                         c_long_long)
       state%process_start_time(process_index) = int(max(0_int64, processes%items(process_index)%start_time), c_long_long)
       state%process_cpu_time(process_index) = int(max(0_int64, processes%items(process_index)%cpu_time), c_long_long)
+      state%process_history_count(process_index) = int(bounded_process_history_count( &
+                                                   processes%items(process_index)%history_count), c_int)
+      call copy_process_history_to_state(state, process_index, processes%items(process_index))
       call copy_fortran_string_to_c_chars(processes%items(process_index)%cgroup, &
                                           len_trim(processes%items(process_index)%cgroup) > 0, &
                                           state%process_cgroup(:, process_index), string_valid)
       state%process_jid(process_index) = int(max(0, processes%items(process_index)%jid), c_int)
     end do
   end subroutine publish_processes
+
+  subroutine copy_process_history_to_state(state, process_index, process)
+    type(collector_shared_state), intent(inout) :: state
+    integer, intent(in) :: process_index
+    type(process_info), intent(in) :: process
+    integer :: history_count
+    integer :: history_index
+
+    history_count = bounded_process_history_count(process%history_count)
+    do history_index = 1, history_count
+      state%process_cpu_history(process_index, history_index) = &
+        real(clamp_percent(process%cpu_history(history_index)), c_double)
+      state%process_mem_history(process_index, history_index) = &
+        real(clamp_percent(process%mem_history(history_index)), c_double)
+    end do
+  end subroutine copy_process_history_to_state
 
   subroutine publish_cpu_cores(state, core_cpus, core_count, warming_up)
     type(collector_shared_state), intent(inout) :: state
