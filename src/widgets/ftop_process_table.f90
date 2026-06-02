@@ -90,9 +90,12 @@ module ftop_process_table
   public :: process_table_delete_signal_digit
   public :: process_table_page_delta
   public :: process_table_mark_signal_feedback
+  public :: process_table_scroll_delta
+  public :: process_table_select_at
   public :: process_table_select_delta
   public :: process_table_set_signal
   public :: process_table_signal_status
+  public :: process_table_sort_at
   public :: process_table_append_signal_digit
   public :: process_table_sort_direction_label
   public :: process_table_sort_key_label
@@ -839,6 +842,64 @@ contains
     call process_table_select_delta(state, delta_pages * step)
   end subroutine process_table_page_delta
 
+  subroutine process_table_scroll_delta(state, delta_rows)
+    type(process_table_state), intent(inout) :: state
+    integer, intent(in) :: delta_rows
+
+    call process_table_select_delta(state, delta_rows)
+  end subroutine process_table_scroll_delta
+
+  logical function process_table_select_at(state, panel, row, col) result(selected)
+    type(process_table_state), intent(inout) :: state
+    type(widget_rect), intent(in) :: panel
+    integer, intent(in) :: row
+    integer, intent(in) :: col
+    type(widget_rect) :: content
+    type(widget_rect) :: table_content
+    integer :: data_row
+
+    selected = .false.
+    content = box_content_rect(panel)
+    table_content = process_table_content_rect(content, process_table_filter_visible(state))
+    if (.not. point_in_rect(table_content, row, col)) return
+    if (row <= table_content%row) return
+
+    data_row = state%scroll_row + row - table_content%row - 1
+    if (data_row < 1 .or. data_row > state%row_count) return
+    state%selected_row = data_row
+    call normalize_process_table_state(state, state%row_count, state%viewport_rows)
+    selected = .true.
+  end function process_table_select_at
+
+  logical function process_table_sort_at(state, panel, row, col) result(sorted)
+    type(process_table_state), intent(inout) :: state
+    type(widget_rect), intent(in) :: panel
+    integer, intent(in) :: row
+    integer, intent(in) :: col
+    type(widget_rect) :: content
+    type(widget_rect) :: table_content
+    integer :: column
+    integer :: sort_key
+
+    sorted = .false.
+    content = box_content_rect(panel)
+    table_content = process_table_content_rect(content, process_table_filter_visible(state))
+    if (.not. point_in_rect(table_content, row, col)) return
+    if (row /= table_content%row) return
+
+    column = process_table_column_at(table_content, col)
+    sort_key = process_sort_key_for_column(column)
+    if (sort_key == 0) return
+
+    if (state%sort_key == sort_key) then
+      call process_table_toggle_sort_direction(state)
+    else
+      state%sort_key = sort_key
+      state%sort_direction = TABLE_SORT_ASCENDING
+    end if
+    sorted = .true.
+  end function process_table_sort_at
+
   subroutine process_table_cycle_sort_key(state, direction)
     type(process_table_state), intent(inout) :: state
     integer, intent(in) :: direction
@@ -1085,6 +1146,92 @@ contains
       sort_key = PROCESS_SORT_PID
     end select
   end function process_sort_key_at
+
+  integer function process_sort_key_for_column(column) result(sort_key)
+    integer, intent(in) :: column
+
+    select case (column)
+    case (1)
+      sort_key = PROCESS_SORT_PID
+    case (2)
+      sort_key = PROCESS_SORT_USER
+    case (3)
+      sort_key = PROCESS_SORT_CPU
+    case (4)
+      sort_key = PROCESS_SORT_MEMORY
+    case (5)
+      sort_key = PROCESS_SORT_RSS
+    case (7)
+      sort_key = PROCESS_SORT_COMMAND
+    case default
+      sort_key = 0
+    end select
+  end function process_sort_key_for_column
+
+  integer function process_table_column_at(rect, target_col) result(column)
+    type(widget_rect), intent(in) :: rect
+    integer, intent(in) :: target_col
+    integer, allocatable :: widths(:)
+    integer :: draw_col
+    integer :: item
+
+    column = 0
+    if (target_col < rect%col .or. target_col >= rect%col + rect%width) return
+
+    call process_table_column_widths(rect%width, widths)
+    draw_col = rect%col
+    do item = 1, size(widths)
+      if (target_col >= draw_col .and. target_col < draw_col + widths(item)) then
+        column = item
+        return
+      end if
+      draw_col = draw_col + widths(item)
+      if (item < size(widths)) then
+        if (target_col == draw_col) return
+        draw_col = draw_col + 1
+      end if
+    end do
+  end function process_table_column_at
+
+  subroutine process_table_column_widths(available_width, widths)
+    integer, intent(in) :: available_width
+    integer, allocatable, intent(out) :: widths(:)
+    integer :: content_width
+    integer :: remaining
+    integer :: separator_cells
+
+    allocate(widths(PROCESS_TABLE_COLUMNS))
+    widths = 0
+    if (available_width <= 0) return
+
+    separator_cells = max(0, PROCESS_TABLE_COLUMNS - 1)
+    content_width = max(0, available_width - separator_cells)
+    widths(1:6) = [6, 8, 6, 6, 8, 2]
+    remaining = max(0, content_width - sum(widths))
+    widths(7) = remaining
+    call shrink_process_widths_to_fit(widths, content_width)
+  end subroutine process_table_column_widths
+
+  subroutine shrink_process_widths_to_fit(widths, available_width)
+    integer, intent(inout) :: widths(:)
+    integer, intent(in) :: available_width
+    integer :: largest
+
+    do while (sum(widths) > available_width .and. any(widths > 0))
+      largest = maxloc(widths, dim=1)
+      widths(largest) = widths(largest) - 1
+    end do
+  end subroutine shrink_process_widths_to_fit
+
+  logical function point_in_rect(rect, row, col) result(inside)
+    type(widget_rect), intent(in) :: rect
+    integer, intent(in) :: row
+    integer, intent(in) :: col
+
+    inside = rect%width > 0 .and. rect%height > 0 .and. &
+             row >= rect%row .and. row < rect%row + rect%height .and. &
+             col >= rect%col .and. col < rect%col + rect%width
+  end function point_in_rect
 
   subroutine normalize_filter_state(state)
     type(process_table_state), intent(inout) :: state

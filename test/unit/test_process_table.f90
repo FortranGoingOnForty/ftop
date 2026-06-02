@@ -4,19 +4,21 @@ program test_process_table
   use fgof_screen_types, only : screen_buffer, screen_style
   use ftop_collector, only : collector_snapshot
   use ftop_color, only : COLOR_UI_ACCENT, COLOR_UI_BORDER, COLOR_UI_DIM, COLOR_UI_PANEL, style_from_rgb
-  use ftop_proc_data, only : PROCESS_SORT_COMMAND, PROCESS_SORT_USER
+  use ftop_proc_data, only : PROCESS_SORT_COMMAND, PROCESS_SORT_CPU, PROCESS_SORT_USER
   use ftop_process_table, only : process_table_append_filter_text, process_table_begin_filter, &
                                  process_table_begin_signal, process_table_cancel_signal, process_table_clear_filter, &
                                  process_table_cycle_sort_key, &
                                  process_table_delete_filter_char, process_table_page_delta, &
                                  process_table_append_signal_digit, process_table_confirm_signal, &
-                                 process_table_mark_signal_feedback, process_table_select_delta, &
+                                 process_table_mark_signal_feedback, process_table_scroll_delta, &
+                                 process_table_select_at, process_table_select_delta, &
                                  process_table_set_signal, process_table_signal_status, &
+                                 process_table_sort_at, &
                                  process_table_state, &
                                  process_table_status, &
                                  process_table_toggle_metric_sparklines, &
                                  process_table_toggle_selected_node, process_table_toggle_sort_direction, render_process_panel
-  use ftop_table, only : TABLE_SORT_DESCENDING
+  use ftop_table, only : TABLE_SORT_ASCENDING, TABLE_SORT_DESCENDING
   use ftop_widgets, only : widget_rect
   implicit none
 
@@ -65,6 +67,23 @@ program test_process_table
   call require(state%row_count == 2, "process table state should track row count")
   call require(state%viewport_rows > 0, "process table state should track viewport rows")
   call require(row_has_bold(buffer, 4), "process table should highlight selected row")
+
+  state%selected_row = 1
+  call require(process_table_select_at(state, widget_rect(1, 1, 80, 10), 4, 5), &
+               "process table mouse row hit should select data row")
+  call require(state%selected_row == 2, "process table mouse row hit should update selected row")
+  call require(.not. process_table_select_at(state, widget_rect(1, 1, 80, 10), 2, 5), &
+               "process table mouse row hit should ignore header row")
+
+  state%sort_key = PROCESS_SORT_USER
+  state%sort_direction = TABLE_SORT_DESCENDING
+  call require(process_table_sort_at(state, widget_rect(1, 1, 80, 10), 2, 19), &
+               "process table mouse header hit should sort clicked column")
+  call require(state%sort_key == PROCESS_SORT_CPU, "process table mouse header hit should choose CPU sort")
+  call require(state%sort_direction == TABLE_SORT_ASCENDING, "process table mouse header hit should reset new sort asc")
+  call require(process_table_sort_at(state, widget_rect(1, 1, 80, 10), 2, 19), &
+               "process table mouse header hit should toggle clicked column")
+  call require(state%sort_direction == TABLE_SORT_DESCENDING, "process table mouse header hit should toggle current sort")
 
   buffer = allocate_screen(80, 10)
   state = process_table_state(tree_view=.false., selected_row=1)
@@ -139,6 +158,8 @@ contains
 
     call process_table_page_delta(local_state, -1)
     call require(local_state%selected_row == 2, "process table page movement should use viewport")
+    call process_table_scroll_delta(local_state, 2)
+    call require(local_state%selected_row == 4, "process table scroll movement should move selection")
 
     call process_table_cycle_sort_key(local_state, 1)
     call require(local_state%sort_key == PROCESS_SORT_USER, "process table sort key should cycle")

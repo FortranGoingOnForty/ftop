@@ -133,6 +133,10 @@ contains
     filter_match = wait_for_string(filter_session, "PID", 2500)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "process table did not publish rows before signal prompt"
 
+    if (.not. send_text(filter_session, achar(27) // "[<0;21;12M")) error stop "failed to click process CPU header"
+    filter_match = wait_for_string(filter_session, "sort cpu asc", 2500)
+    if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not sort process table from mouse header"
+
     if (.not. send_text(filter_session, "k")) error stop "failed to open process signal prompt"
     filter_match = wait_for_string(filter_session, "signal SIGTERM pid", 2500)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not open process signal prompt"
@@ -154,7 +158,7 @@ contains
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not enter process filter"
 
     if (.not. send_text(filter_session, achar(27) // achar(27))) error stop "failed to clear process filter"
-    filter_match = wait_for_string(filter_session, "sort pid asc", 2500)
+    filter_match = wait_for_string(filter_session, "sort cpu asc", 2500)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not clear process filter"
 
     if (.not. send_text(filter_session, "q")) error stop "failed to quit process filter ftop"

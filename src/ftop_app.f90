@@ -32,7 +32,10 @@ module ftop_app
   use ftop_collector, only : collector, collector_snapshot
   use ftop_dashboard, only : render_dashboard
   use ftop_layout, only : &
+    dashboard_layout, &
+    dashboard_layout_from_grid, &
     default_dashboard_grid, &
+    default_dashboard_layout, &
     layout_error, &
     layout_focus_count, &
     layout_focus_widget, &
@@ -53,9 +56,12 @@ module ftop_app
     process_table_finish_filter, &
     process_table_mark_signal_feedback, &
     process_table_page_delta, &
+    process_table_scroll_delta, &
+    process_table_select_at, &
     process_table_select_delta, &
     process_table_set_signal, &
     process_table_signal_status, &
+    process_table_sort_at, &
     process_table_state, &
     process_table_status, &
     process_table_toggle_metric_sparklines, &
@@ -83,6 +89,7 @@ module ftop_app
     read_terminal_input, &
     terminal_read_result, &
     write_terminal_output
+  use ftop_widgets, only : widget_rect
   implicit none
   private
 
@@ -120,6 +127,13 @@ module ftop_app
     logical :: needs_full_render = .true.
     logical :: dirty = .true.
   end type terminal_session
+
+  type :: sgr_mouse_event
+    integer :: code = 0
+    integer :: row = 0
+    integer :: col = 0
+    logical :: pressed = .false.
+  end type sgr_mouse_event
 
   public :: run_ftop
   public :: render_test_frame
@@ -401,6 +415,57 @@ contains
     end if
   end function focused_widget_name
 
+  function current_process_panel_rect(session) result(rect)
+    type(terminal_session), intent(in) :: session
+    type(widget_rect) :: rect
+    type(dashboard_layout) :: layout
+    integer :: height
+    integer :: width
+
+    width = session%current%size%width
+    height = session%current%size%height
+    rect = widget_rect(0, 0, 0, 0)
+    if (width <= 0 .or. height <= 0) return
+
+    if (session%zoomed) then
+      if (focused_widget_name(session) == "process") then
+        rect = widget_rect(3, 3, max(0, width - 4), max(0, height - 5))
+      end if
+      return
+    end if
+
+    if (session%layout_loaded) then
+      layout = dashboard_layout_from_grid(width, height, session%layout)
+    else
+      layout = default_dashboard_layout(width, height)
+    end if
+    rect = layout%process_panel
+  end function current_process_panel_rect
+
+  subroutine focus_widget_named(session, name)
+    type(terminal_session), intent(inout) :: session
+    character(len=*), intent(in) :: name
+    type(layout_grid) :: fallback_grid
+    character(len=:), allocatable :: widget
+    integer :: count
+    integer :: index
+
+    if (session%zoomed) return
+    count = current_focus_count(session)
+    do index = 1, count
+      if (session%layout_loaded) then
+        widget = layout_focus_widget(session%layout, index)
+      else
+        fallback_grid = default_dashboard_grid(stacked=session%current%size%width < 72)
+        widget = layout_focus_widget(fallback_grid, index)
+      end if
+      if (widget == name) then
+        session%focus_index = index
+        return
+      end if
+    end do
+  end subroutine focus_widget_named
+
   subroutine cycle_focus(session, direction)
     type(terminal_session), intent(inout) :: session
     integer, intent(in) :: direction
@@ -443,15 +508,16 @@ contains
     type(terminal_session), intent(inout) :: session
     character(len=*), intent(in) :: bytes
     type(key_event) :: event
+    type(sgr_mouse_event) :: mouse
     character(len=:), allocatable :: input_bytes
     character(len=:), allocatable :: mouse_message
     character(len=:), allocatable :: remaining_bytes
 
     input_bytes = bytes
     do while (len(input_bytes) > 0)
-      if (.not. describe_sgr_mouse(input_bytes, mouse_message, remaining_bytes)) exit
+      if (.not. parse_sgr_mouse(input_bytes, mouse, mouse_message, remaining_bytes)) exit
       call log_debug(mouse_message)
-      call set_status(session, mouse_message)
+      call handle_mouse_event(session, mouse, mouse_message)
       input_bytes = remaining_bytes
     end do
     if (len(input_bytes) == 0) return
@@ -464,6 +530,52 @@ contains
       if (.not. session%running) exit
     end do
   end subroutine handle_input
+
+  subroutine handle_mouse_event(session, mouse, fallback_message)
+    type(terminal_session), intent(inout) :: session
+    type(sgr_mouse_event), intent(in) :: mouse
+    character(len=*), intent(in) :: fallback_message
+
+    if (handle_process_mouse_event(session, mouse)) return
+    call set_status(session, fallback_message)
+  end subroutine handle_mouse_event
+
+  logical function handle_process_mouse_event(session, mouse) result(handled)
+    type(terminal_session), intent(inout) :: session
+    type(sgr_mouse_event), intent(in) :: mouse
+    type(widget_rect) :: panel
+    logical :: selected
+    integer :: scroll_step
+
+    handled = .false.
+    panel = current_process_panel_rect(session)
+    if (.not. point_in_rect(panel, mouse%row, mouse%col)) return
+
+    if (mouse_scroll_up(mouse)) then
+      scroll_step = -max(1, session%process_state%viewport_rows / 3)
+      call focus_widget_named(session, "process")
+      call process_table_scroll_delta(session%process_state, scroll_step)
+    else if (mouse_scroll_down(mouse)) then
+      scroll_step = max(1, session%process_state%viewport_rows / 3)
+      call focus_widget_named(session, "process")
+      call process_table_scroll_delta(session%process_state, scroll_step)
+    else if (mouse_left_press(mouse)) then
+      call focus_widget_named(session, "process")
+      if (.not. process_table_sort_at(session%process_state, panel, mouse%row, mouse%col)) then
+        selected = process_table_select_at(session%process_state, panel, mouse%row, mouse%col)
+        if (.not. selected) then
+          handled = .true.
+          call set_status(session, "focus process")
+          return
+        end if
+      end if
+    else
+      return
+    end if
+
+    handled = .true.
+    call set_status(session, process_table_status(session%process_state))
+  end function handle_process_mouse_event
 
   subroutine handle_key_event(session, event)
     type(terminal_session), intent(inout) :: session
@@ -1008,8 +1120,9 @@ contains
     end if
   end subroutine print_terminal_error
 
-  logical function describe_sgr_mouse(bytes, message, remaining) result(found)
+  logical function parse_sgr_mouse(bytes, event, message, remaining) result(found)
     character(len=*), intent(in) :: bytes
+    type(sgr_mouse_event), intent(out) :: event
     character(len=:), allocatable, intent(out) :: message
     character(len=:), allocatable, intent(out) :: remaining
     integer :: start_index
@@ -1023,6 +1136,7 @@ contains
     logical :: pressed
 
     found = .false.
+    event = sgr_mouse_event()
     message = ""
     remaining = bytes
     start_index = index(bytes, achar(27) // "[<")
@@ -1042,10 +1156,42 @@ contains
     if (parse_status /= 0) return
 
     pressed = bytes(end_index:end_index) == "M"
+    event%code = code
+    event%row = row
+    event%col = col
+    event%pressed = pressed
     message = mouse_event_text(code, row, col, pressed)
     remaining = bytes(:start_index - 1) // bytes(end_index + 1:)
     found = .true.
-  end function describe_sgr_mouse
+  end function parse_sgr_mouse
+
+  logical function mouse_left_press(mouse) result(is_left_press)
+    type(sgr_mouse_event), intent(in) :: mouse
+
+    is_left_press = mouse%pressed .and. iand(mouse%code, 64) == 0 .and. iand(mouse%code, 3) == 0
+  end function mouse_left_press
+
+  logical function mouse_scroll_up(mouse) result(is_scroll_up)
+    type(sgr_mouse_event), intent(in) :: mouse
+
+    is_scroll_up = mouse%pressed .and. iand(mouse%code, 64) /= 0 .and. iand(mouse%code, 3) == 0
+  end function mouse_scroll_up
+
+  logical function mouse_scroll_down(mouse) result(is_scroll_down)
+    type(sgr_mouse_event), intent(in) :: mouse
+
+    is_scroll_down = mouse%pressed .and. iand(mouse%code, 64) /= 0 .and. iand(mouse%code, 3) == 1
+  end function mouse_scroll_down
+
+  logical function point_in_rect(rect, row, col) result(inside)
+    type(widget_rect), intent(in) :: rect
+    integer, intent(in) :: row
+    integer, intent(in) :: col
+
+    inside = rect%width > 0 .and. rect%height > 0 .and. &
+             row >= rect%row .and. row < rect%row + rect%height .and. &
+             col >= rect%col .and. col < rect%col + rect%width
+  end function point_in_rect
 
   subroutine parse_mouse_payload(payload, code, col, row, status)
     character(len=*), intent(in) :: payload
