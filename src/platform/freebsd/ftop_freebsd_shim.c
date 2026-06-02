@@ -1,3 +1,4 @@
+#include <arpa/inet.h>
 #include <errno.h>
 #include <devstat.h>
 #include <fcntl.h>
@@ -5,24 +6,42 @@
 #include <kvm.h>
 #include <limits.h>
 #include <net/if.h>
+#include <netinet/in.h>
+#include <netinet/in_systm.h>
+#include <netinet/ip.h>
+#include <netinet/tcp.h>
+#include <netinet/tcp_seq.h>
 #include <pwd.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/param.h>
+#include <sys/queue.h>
+#include <sys/domain.h>
+#define _WANT_PROTOSW
+#include <sys/protosw.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
+#define _WANT_SOCKET
+#include <sys/socketvar.h>
 #include <sys/sysctl.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/user.h>
+#include <netinet/in_pcb.h>
+#include <netinet/tcp_fsm.h>
+#include <netinet/tcp_var.h>
+#include <libprocstat.h>
 #include <time.h>
 #include <unistd.h>
 
 #define FTOP_FREEBSD_COMMAND_LEN 32
 #define FTOP_FREEBSD_DEVSTAT_NAME_LEN 16
+#define FTOP_NET_PROTOCOL_LEN 8
+#define FTOP_NET_ADDRESS_LEN 64
 #define FTOP_NET_INTERFACE_NAME_LEN 32
+#define FTOP_NET_PROCESS_NAME_LEN 64
 #define FTOP_NET_STATE_LEN 16
 #define FTOP_USER_LOOKUP_BUFFER_LEN 16384
 
@@ -67,6 +86,19 @@ struct ftop_freebsd_net_interface_info {
   char state[FTOP_NET_STATE_LEN];
   int speed_mbps;
   int mtu;
+};
+
+struct ftop_freebsd_net_connection_info {
+  int valid;
+  char protocol[FTOP_NET_PROTOCOL_LEN];
+  char local_addr[FTOP_NET_ADDRESS_LEN];
+  int local_port;
+  char remote_addr[FTOP_NET_ADDRESS_LEN];
+  int remote_port;
+  char state[FTOP_NET_STATE_LEN];
+  long long socket_id;
+  int pid;
+  char process_name[FTOP_NET_PROCESS_NAME_LEN];
 };
 
 #ifndef CPUSTATES
@@ -588,6 +620,256 @@ int ftop_freebsd_network_interfaces(
 
   freeifaddrs(interfaces);
   *interface_count = count;
+  return 0;
+}
+
+static long long ftop_uint64_to_nonnegative_long_long(uint64_t value) {
+  return value > (uint64_t)LLONG_MAX ? LLONG_MAX : (long long)value;
+}
+
+static int ftop_freebsd_endpoint_from_sockaddr(
+    const struct sockaddr_storage *storage, char *address, size_t address_capacity, int *port) {
+  const struct sockaddr_in *ipv4;
+  const struct sockaddr_in6 *ipv6;
+  const void *source;
+  int family;
+
+  if (storage == NULL || address == NULL || port == NULL || address_capacity == 0U) return 0;
+  address[0] = '\0';
+  *port = 0;
+  family = storage->ss_family;
+  if (family == AF_INET) {
+    ipv4 = (const struct sockaddr_in *)(const void *)storage;
+    source = &ipv4->sin_addr;
+    *port = (int)ntohs(ipv4->sin_port);
+  } else if (family == AF_INET6) {
+    ipv6 = (const struct sockaddr_in6 *)(const void *)storage;
+    source = &ipv6->sin6_addr;
+    *port = (int)ntohs(ipv6->sin6_port);
+  } else {
+    return 0;
+  }
+  return inet_ntop(family, source, address, (socklen_t)address_capacity) != NULL;
+}
+
+static void ftop_freebsd_unspecified_address(int family, char *address, size_t address_capacity, int *port) {
+  if (address == NULL || port == NULL || address_capacity == 0U) return;
+  *port = 0;
+  ftop_copy_bounded_string(address, address_capacity, family == AF_INET6 ? "::" : "0.0.0.0");
+}
+
+static int ftop_freebsd_socket_protocol(const struct sockstat *socket_info, const char **protocol) {
+  if (socket_info == NULL || protocol == NULL) return 0;
+  if (socket_info->dom_family != AF_INET && socket_info->dom_family != AF_INET6) return 0;
+  if (socket_info->proto == IPPROTO_TCP) {
+    *protocol = "tcp";
+    return 1;
+  }
+  if (socket_info->proto == IPPROTO_UDP) {
+    *protocol = "udp";
+    return 1;
+  }
+  return 0;
+}
+
+static int ftop_freebsd_connection_exists(
+    const struct ftop_freebsd_net_connection_info *buffer, size_t count, long long socket_id, int pid) {
+  size_t i;
+
+  for (i = 0U; i < count; ++i) {
+    if (buffer[i].socket_id == socket_id && buffer[i].pid == pid) return 1;
+  }
+  return 0;
+}
+
+static const char *ftop_freebsd_tcp_state_label(int state) {
+  switch (state) {
+  case TCPS_CLOSED:
+    return "CLOSE";
+  case TCPS_LISTEN:
+    return "LISTEN";
+  case TCPS_SYN_SENT:
+    return "SYN_SENT";
+  case TCPS_SYN_RECEIVED:
+    return "SYN_RECV";
+  case TCPS_ESTABLISHED:
+    return "ESTABLISHED";
+  case TCPS_CLOSE_WAIT:
+    return "CLOSE_WAIT";
+  case TCPS_FIN_WAIT_1:
+    return "FIN_WAIT1";
+  case TCPS_CLOSING:
+    return "CLOSING";
+  case TCPS_LAST_ACK:
+    return "LAST_ACK";
+  case TCPS_FIN_WAIT_2:
+    return "FIN_WAIT2";
+  case TCPS_TIME_WAIT:
+    return "TIME_WAIT";
+  default:
+    return "UNKNOWN";
+  }
+}
+
+static void ftop_freebsd_store_connection(
+    struct ftop_freebsd_net_connection_info *destination, const struct kinfo_proc *process,
+    const struct sockstat *socket_info, const char *protocol) {
+  char local_address[FTOP_NET_ADDRESS_LEN];
+  char remote_address[FTOP_NET_ADDRESS_LEN];
+  int local_port;
+  int remote_port;
+
+  memset(destination, 0, sizeof(*destination));
+  if (!ftop_freebsd_endpoint_from_sockaddr(&socket_info->sa_local, local_address, sizeof(local_address), &local_port)) {
+    return;
+  }
+  if (!ftop_freebsd_endpoint_from_sockaddr(&socket_info->sa_peer, remote_address, sizeof(remote_address), &remote_port)) {
+    ftop_freebsd_unspecified_address(socket_info->dom_family, remote_address, sizeof(remote_address), &remote_port);
+  }
+
+  destination->valid = 1;
+  ftop_copy_bounded_string(destination->protocol, sizeof(destination->protocol), protocol);
+  ftop_copy_bounded_string(destination->local_addr, sizeof(destination->local_addr), local_address);
+  destination->local_port = local_port;
+  ftop_copy_bounded_string(destination->remote_addr, sizeof(destination->remote_addr), remote_address);
+  destination->remote_port = remote_port;
+  ftop_copy_bounded_string(destination->state, sizeof(destination->state),
+      socket_info->proto == IPPROTO_UDP ? "OPEN" : "UNKNOWN");
+  destination->socket_id = ftop_uint64_to_nonnegative_long_long(socket_info->so_pcb);
+  destination->pid = process->ki_pid > 0 ? (int)process->ki_pid : 0;
+  ftop_copy_bounded_string(destination->process_name, sizeof(destination->process_name), process->ki_comm);
+}
+
+static int ftop_freebsd_read_sysctl_buffer(const char *name, void **buffer, size_t *buffer_len) {
+  void *value;
+  size_t value_len;
+
+  if (name == NULL || buffer == NULL || buffer_len == NULL) return -1;
+  *buffer = NULL;
+  *buffer_len = 0U;
+  value_len = 0U;
+  if (sysctlbyname(name, NULL, &value_len, NULL, 0) != 0) return -1;
+  if (value_len == 0U) return -1;
+  value = malloc(value_len);
+  if (value == NULL) return -1;
+  if (sysctlbyname(name, value, &value_len, NULL, 0) != 0) {
+    free(value);
+    return -1;
+  }
+  *buffer = value;
+  *buffer_len = value_len;
+  return 0;
+}
+
+static void ftop_freebsd_assign_tcp_state(
+    struct ftop_freebsd_net_connection_info *buffer, size_t count, long long socket_id, int state) {
+  size_t i;
+
+  if (socket_id <= 0) return;
+  for (i = 0U; i < count; ++i) {
+    if (strncmp(buffer[i].protocol, "tcp", sizeof(buffer[i].protocol)) != 0) continue;
+    if (buffer[i].socket_id != socket_id) continue;
+    ftop_copy_bounded_string(buffer[i].state, sizeof(buffer[i].state), ftop_freebsd_tcp_state_label(state));
+  }
+}
+
+static void ftop_freebsd_assign_tcp_states(struct ftop_freebsd_net_connection_info *buffer, size_t count) {
+  struct xinpgen *entry;
+  struct xtcpcb *tcp;
+  char *cursor;
+  char *end;
+  void *sysctl_buffer;
+  size_t buffer_len;
+  size_t entry_len;
+  long long socket_id;
+
+  if (buffer == NULL || count == 0U) return;
+  if (ftop_freebsd_read_sysctl_buffer("net.inet.tcp.pcblist", &sysctl_buffer, &buffer_len) != 0) return;
+  cursor = (char *)sysctl_buffer;
+  end = cursor + buffer_len;
+  if (buffer_len < sizeof(struct xinpgen)) {
+    free(sysctl_buffer);
+    return;
+  }
+  entry = (struct xinpgen *)(void *)cursor;
+  if (entry->xig_len < sizeof(struct xinpgen) || (size_t)entry->xig_len > buffer_len) {
+    free(sysctl_buffer);
+    return;
+  }
+  cursor += entry->xig_len;
+
+  while (cursor + sizeof(struct xinpgen) <= end) {
+    entry = (struct xinpgen *)(void *)cursor;
+    entry_len = (size_t)entry->xig_len;
+    if (entry_len <= sizeof(struct xinpgen)) break;
+    if (entry_len > (size_t)(end - cursor)) break;
+    if (entry_len >= sizeof(struct xtcpcb)) {
+      tcp = (struct xtcpcb *)(void *)entry;
+      socket_id = ftop_uint64_to_nonnegative_long_long((uint64_t)tcp->xt_inp.xi_socket.so_pcb);
+      ftop_freebsd_assign_tcp_state(buffer, count, socket_id, tcp->t_state);
+    }
+    cursor += entry_len;
+  }
+
+  free(sysctl_buffer);
+}
+
+int ftop_freebsd_network_connections(
+    struct ftop_freebsd_net_connection_info *buffer, size_t capacity, size_t *connection_count, int *sys_errno) {
+  struct filestat *file;
+  struct filestat_list *files;
+  struct kinfo_proc *processes;
+  struct procstat *procstat;
+  struct sockstat socket_info;
+  const char *protocol;
+  char error_buffer[256];
+  unsigned int process_count;
+  size_t count;
+  long long socket_id;
+  unsigned int process_index;
+
+  if (buffer == NULL || connection_count == NULL || sys_errno == NULL || capacity == 0U) return -1;
+
+  *connection_count = 0U;
+  *sys_errno = 0;
+  procstat = procstat_open_sysctl();
+  if (procstat == NULL) {
+    *sys_errno = errno != 0 ? errno : ENOENT;
+    return -1;
+  }
+
+  process_count = 0U;
+  processes = procstat_getprocs(procstat, KERN_PROC_PROC, 0, &process_count);
+  if (processes == NULL) {
+    *sys_errno = errno != 0 ? errno : EINVAL;
+    procstat_close(procstat);
+    return -1;
+  }
+
+  count = 0U;
+  for (process_index = 0U; process_index < process_count && count < capacity; ++process_index) {
+    files = procstat_getfiles(procstat, &processes[process_index], 0);
+    if (files == NULL) continue;
+    STAILQ_FOREACH(file, files, next) {
+      if (count >= capacity) break;
+      if (file->fs_type != PS_FST_TYPE_SOCKET) continue;
+      memset(&socket_info, 0, sizeof(socket_info));
+      error_buffer[0] = '\0';
+      if (procstat_get_socket_info(procstat, file, &socket_info, error_buffer) != 0) continue;
+      if (!ftop_freebsd_socket_protocol(&socket_info, &protocol)) continue;
+      socket_id = ftop_uint64_to_nonnegative_long_long(socket_info.so_pcb);
+      if (socket_id <= 0) continue;
+      if (ftop_freebsd_connection_exists(buffer, count, socket_id, (int)processes[process_index].ki_pid)) continue;
+      ftop_freebsd_store_connection(&buffer[count], &processes[process_index], &socket_info, protocol);
+      if (buffer[count].valid != 0) ++count;
+    }
+    procstat_freefiles(procstat, files);
+  }
+
+  ftop_freebsd_assign_tcp_states(buffer, count);
+  procstat_freeprocs(procstat, processes);
+  procstat_close(procstat);
+  *connection_count = count;
   return 0;
 }
 

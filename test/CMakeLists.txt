@@ -151,6 +151,11 @@ if(FTOP_PLATFORM STREQUAL "freebsd")
   target_link_libraries(ftop_freebsd_devstat_test PRIVATE ftop_core)
 
   add_test(NAME ftop_freebsd_devstat COMMAND ftop_freebsd_devstat_test)
+
+  add_executable(ftop_freebsd_network_test unit/test_freebsd_network.f90)
+  target_link_libraries(ftop_freebsd_network_test PRIVATE ftop_core)
+
+  add_test(NAME ftop_freebsd_network COMMAND ftop_freebsd_network_test)
 endif()
 
 if(FTOP_PLATFORM STREQUAL "linux")

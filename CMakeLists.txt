@@ -66,7 +66,7 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
     src/platform/freebsd/ftop_freebsd.f90
     src/platform/freebsd/ftop_freebsd_shim.c
   )
-  list(APPEND FTOP_PLATFORM_LIBS devstat kvm)
+  list(APPEND FTOP_PLATFORM_LIBS devstat kvm procstat)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
   set(FTOP_PLATFORM "macos")
   set(FTOP_PLATFORM_SOURCES

@@ -114,8 +114,10 @@ program test_platform
   network = backend%get_network_table()
   if (.not. network%valid) error stop "network table must be valid"
   if (.not. allocated(network%interfaces)) error stop "network interfaces must be allocated"
+  if (.not. allocated(network%connections)) error stop "network connections must be allocated"
   if (size(network%interfaces) <= 0) error stop "network table must include interfaces"
   call validate_network_interfaces(network)
+  call validate_network_connections(network)
 
 contains
 
@@ -141,6 +143,34 @@ contains
     end do
     if (.not. have_valid_interface) error stop "network table must include valid interfaces"
   end subroutine validate_network_interfaces
+
+  subroutine validate_network_connections(network)
+    type(network_table), intent(in) :: network
+    integer :: connection_index
+
+    if (.not. allocated(network%connections)) return
+    do connection_index = 1, size(network%connections)
+      if (.not. network%connections(connection_index)%valid) cycle
+      if (trim(network%connections(connection_index)%protocol) /= "tcp" .and. &
+          trim(network%connections(connection_index)%protocol) /= "udp") then
+        error stop "network connection protocol must be tcp or udp"
+      end if
+      if (len_trim(network%connections(connection_index)%local_addr) <= 0) then
+        error stop "network connection local address must not be empty"
+      end if
+      if (len_trim(network%connections(connection_index)%remote_addr) <= 0) then
+        error stop "network connection remote address must not be empty"
+      end if
+      if (network%connections(connection_index)%local_port < 0) error stop "network connection local port must not be negative"
+      if (network%connections(connection_index)%remote_port < 0) error stop "network connection remote port must not be negative"
+      if (len_trim(network%connections(connection_index)%state) <= 0) error stop "network connection state must not be empty"
+      if (network%connections(connection_index)%pid < 0) error stop "network connection pid must not be negative"
+      if (network%connections(connection_index)%pid > 0 .and. &
+          len_trim(network%connections(connection_index)%process_name) <= 0) then
+        error stop "network connection process name must not be empty when pid is known"
+      end if
+    end do
+  end subroutine validate_network_connections
 
   logical function starts_with(text, prefix) result(matches)
     character(len=*), intent(in) :: text
