@@ -159,7 +159,7 @@ if(FTOP_PLATFORM STREQUAL "freebsd")
 endif()
 
 if(FTOP_PLATFORM STREQUAL "linux")
-  add_executable(ftop_linux_platform_test unit/test_linux_platform.f90)
+  add_executable(ftop_linux_platform_test unit/test_linux_platform.f90 unit/ftop_linux_network.c)
   target_link_libraries(ftop_linux_platform_test PRIVATE ftop_core)
 
   add_test(NAME ftop_linux_platform COMMAND ftop_linux_platform_test)

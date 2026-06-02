@@ -1,5 +1,5 @@
 program test_linux_platform
-  use, intrinsic :: iso_c_binding, only : c_null_char
+  use, intrinsic :: iso_c_binding, only : c_int, c_null_char
   use, intrinsic :: iso_fortran_env, only : int64, real64
   use ftop_cpu_data, only : cpu_state_ticks, cpu_state_total_ticks
   use ftop_mem_data, only : metric_memory_info => memory_info, memory_usage_percent
@@ -18,6 +18,19 @@ program test_linux_platform
     process_table
   use ftop_signal, only : ftop_current_pid
   implicit none
+
+  interface
+    integer(c_int) function ftop_test_linux_network_open(tcp_port, udp_port, sys_errno) &
+        bind(C, name="ftop_test_linux_network_open")
+      import :: c_int
+      integer(c_int), intent(out) :: tcp_port
+      integer(c_int), intent(out) :: udp_port
+      integer(c_int), intent(out) :: sys_errno
+    end function ftop_test_linux_network_open
+
+    subroutine ftop_test_linux_network_close() bind(C, name="ftop_test_linux_network_close")
+    end subroutine ftop_test_linux_network_close
+  end interface
 
   type(linux_hwmon_sensor), allocatable :: sensors(:)
   type(cpu_state_ticks) :: total_cpu
@@ -86,6 +99,7 @@ program test_linux_platform
     if (network%processes(i)%rx_bytes_per_sec < 0.0_real64) error stop "Linux network process rx rate must not be negative"
     if (network%processes(i)%tx_bytes_per_sec < 0.0_real64) error stop "Linux network process tx rate must not be negative"
   end do
+  call test_network_socket_ownership()
 
   if (.not. linux_process_snapshot(processes, memory%total_bytes)) error stop "Linux process snapshot failed"
   if (.not. processes%valid) error stop "Linux process snapshot must be valid"
@@ -105,4 +119,53 @@ program test_linux_platform
     if (processes%items(i)%io_write_bytes < 0_int64) error stop "current Linux process write bytes must not be negative"
   end do
   if (.not. found_current_process) error stop "Linux process snapshot must include current process"
+
+contains
+
+  subroutine test_network_socket_ownership()
+    type(network_table) :: owned_network
+    integer(c_int) :: sys_errno
+    integer(c_int) :: tcp_port
+    integer(c_int) :: udp_port
+    integer :: current_pid
+
+    if (ftop_test_linux_network_open(tcp_port, udp_port, sys_errno) /= 0_c_int) then
+      error stop "Linux network test sockets failed"
+    end if
+    if (.not. linux_network_snapshot(owned_network)) error stop "Linux network ownership snapshot failed"
+    call ftop_test_linux_network_close()
+
+    current_pid = ftop_current_pid()
+    call require_owned_connection(owned_network, "tcp", int(tcp_port), current_pid, "LISTEN", &
+                                  "Linux TCP socket ownership must map to current process")
+    call require_owned_connection(owned_network, "udp", int(udp_port), current_pid, "OPEN", &
+                                  "Linux UDP socket ownership must map to current process")
+  end subroutine test_network_socket_ownership
+
+  subroutine require_owned_connection(network, protocol, local_port, pid, state, message)
+    type(network_table), intent(in) :: network
+    character(len=*), intent(in) :: protocol
+    integer, intent(in) :: local_port
+    integer, intent(in) :: pid
+    character(len=*), intent(in) :: state
+    character(len=*), intent(in) :: message
+    integer :: connection_index
+    logical :: found
+
+    if (.not. allocated(network%connections)) error stop "Linux network connections must be allocated"
+    found = .false.
+    do connection_index = 1, size(network%connections)
+      if (.not. network%connections(connection_index)%valid) cycle
+      if (trim(network%connections(connection_index)%protocol) /= protocol) cycle
+      if (network%connections(connection_index)%local_port /= local_port) cycle
+      if (network%connections(connection_index)%pid /= pid) cycle
+      if (trim(network%connections(connection_index)%state) /= state) error stop "Linux owned socket state mismatch"
+      if (len_trim(network%connections(connection_index)%process_name) <= 0) then
+        error stop "Linux owned socket process name must not be empty"
+      end if
+      found = .true.
+      exit
+    end do
+    if (.not. found) error stop message
+  end subroutine require_owned_connection
 end program test_linux_platform
