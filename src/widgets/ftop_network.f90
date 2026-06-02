@@ -458,10 +458,24 @@ contains
 
     state = trim(snapshot%network%interfaces(interface_index)%state)
     if (len(state) <= 0) state = "unknown"
-    text = trim(snapshot%network%interfaces(interface_index)%name) // " " // state // &
+    text = trim(snapshot%network%interfaces(interface_index)%name) // " " // state_indicator(state) // " " // state // &
            "  rx " // format_byte_rate(snapshot%network%interfaces(interface_index)%rx_bytes_per_sec) // &
            "  tx " // format_byte_rate(snapshot%network%interfaces(interface_index)%tx_bytes_per_sec)
   end function network_interface_text
+
+  function state_indicator(state) result(indicator)
+    character(len=*), intent(in) :: state
+    character(len=:), allocatable :: indicator
+
+    select case (trim(state))
+    case ("up")
+      indicator = "^"
+    case ("down")
+      indicator = "v"
+    case default
+      indicator = "-"
+    end select
+  end function state_indicator
 
   integer function valid_interface_count(snapshot) result(count)
     type(collector_snapshot), intent(in) :: snapshot

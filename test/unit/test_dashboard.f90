@@ -65,7 +65,7 @@ contains
     call require(index(text, "available 8.0 GiB") > 0, "dashboard should render available memory")
     call require(index(text, "swap 1.0 GiB / 2.0 GiB") > 0, "dashboard should render swap")
     call require(index(text, "Interfaces 1") > 0, "dashboard should render network summary")
-    call require(index(text, "eth0 up") > 0, "dashboard should render network interface")
+    call require(index(text, "eth0 ^ up") > 0, "dashboard should render network interface")
     call require(index(text, "Connections 1") > 0, "dashboard should render network connection count")
     call require(index(text, "127.0.0.1:8080") > 0, "dashboard should render network endpoint")
     call require(index(text, "8080(web)") > 0, "dashboard should render service names")

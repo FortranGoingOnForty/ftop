@@ -1,8 +1,8 @@
 ╭ Network ─────────────────────────────────╮
 │ Interfaces 2  rx 1.5 KB/s  tx 2.0 MB/s   │
-│ eth0 up  rx 1.5 KB/s  tx 2.0 MB/s        │
+│ eth0 ^ up  rx 1.5 KB/s  tx 2.0 MB/s      │
 │ ▁▂▄█                                     │
-│ wlan0 down  rx 0 B/s  tx 512 B/s         │
+│ wlan0 v down  rx 0 B/s  tx 512 B/s       │
 │ ▁▂▄█                                     │
 │ Connections 1                            │
 │ tcp 127.0.0.1:8080 -> 10.0.0.2:443(ht... │
