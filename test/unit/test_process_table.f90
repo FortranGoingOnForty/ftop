@@ -4,7 +4,7 @@ program test_process_table
   use fgof_screen_types, only : screen_buffer, screen_style
   use ftop_collector, only : collector_snapshot
   use ftop_color, only : COLOR_UI_ACCENT, COLOR_UI_BORDER, COLOR_UI_DIM, COLOR_UI_PANEL, style_from_rgb
-  use ftop_proc_data, only : PROCESS_SORT_COMMAND, PROCESS_SORT_CPU, PROCESS_SORT_USER, process_table
+  use ftop_proc_data, only : PROCESS_SORT_COMMAND, PROCESS_SORT_CPU, PROCESS_SORT_USER, process_info, process_table
   use ftop_process_table, only : process_table_append_filter_text, process_table_begin_filter, &
                                   process_table_begin_signal, process_table_cancel_signal, process_table_clear_filter, &
                                   process_table_append_fuzzy_text, process_table_clear_fuzzy, &
@@ -290,7 +290,55 @@ contains
     call require(local_state%fuzzy_query_length == 0, "fuzzy clear should reset query")
     call process_table_step_fuzzy_match(local_state, 1)
     call require(local_state%fuzzy_step_direction == 0, "empty fuzzy query should not set next direction")
+
+    table = fuzzy_scoring_table()
+    call require(process_fuzzy_best_match(table, "fire", .false., match_count) == 1, &
+                 "fuzzy name prefix should prefer shorter firefox over longer firewalld config")
+    call require(process_fuzzy_best_match(table, "worker", .false., match_count) == 3, &
+                 "fuzzy word boundary should beat plain substring matches")
+
+    table = fuzzy_pid_table()
+    call require(process_fuzzy_best_match(table, "123", .true., match_count) == 2, &
+                 "fuzzy PID mode should prefer exact PID over prefix match")
+    call require(process_fuzzy_best_match(table, "12", .true., match_count) == 3, &
+                 "fuzzy PID prefix should prefer smallest matching PID")
   end subroutine test_process_fuzzy_matching
+
+  function fuzzy_scoring_table() result(table)
+    type(process_table) :: table
+
+    allocate(table%items(4))
+    table%valid = .true.
+    table%items(1) = fuzzy_process(101, "firefox", "firefox --profile", "desktop")
+    table%items(2) = fuzzy_process(102, "firewalld-config", "firewalld-config", "root")
+    table%items(3) = fuzzy_process(103, "daemon", "background-worker", "service")
+    table%items(4) = fuzzy_process(104, "systemd", "systemdworker", "root")
+  end function fuzzy_scoring_table
+
+  function fuzzy_pid_table() result(table)
+    type(process_table) :: table
+
+    allocate(table%items(3))
+    table%valid = .true.
+    table%items(1) = fuzzy_process(1234, "pid-long", "pid-long", "root")
+    table%items(2) = fuzzy_process(123, "pid-exact", "pid-exact", "root")
+    table%items(3) = fuzzy_process(120, "pid-small", "pid-small", "root")
+  end function fuzzy_pid_table
+
+  function fuzzy_process(pid, name, command, user) result(process)
+    integer, intent(in) :: pid
+    character(len=*), intent(in) :: name
+    character(len=*), intent(in) :: command
+    character(len=*), intent(in) :: user
+    type(process_info) :: process
+
+    process%valid = .true.
+    process%pid = pid
+    process%name = name
+    process%command = command
+    process%user_valid = .true.
+    process%user = user
+  end function fuzzy_process
 
   function sample_snapshot() result(snapshot)
     type(collector_snapshot) :: snapshot

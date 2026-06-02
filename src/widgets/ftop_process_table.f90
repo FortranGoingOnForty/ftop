@@ -1412,12 +1412,14 @@ contains
     logical, intent(in) :: pid_mode
     integer, intent(out), optional :: match_count
     integer :: best_score
+    integer :: best_process_index
     integer :: process_index
     integer :: row
     integer :: score
 
     best_index = 0
     best_score = -1
+    best_process_index = 0
     if (present(match_count)) match_count = 0
     if (len_trim(query) <= 0) return
     if (.not. allocated(table%items)) return
@@ -1432,6 +1434,12 @@ contains
       if (score > best_score) then
         best_score = score
         best_index = row
+        best_process_index = process_index
+      else if (score == best_score .and. best_process_index > 0) then
+        if (process_fuzzy_prefer(table%items(process_index), table%items(best_process_index), pid_mode)) then
+          best_index = row
+          best_process_index = process_index
+        end if
       end if
     end do
   end function process_fuzzy_best_match
@@ -1996,10 +2004,8 @@ contains
     type(process_info), intent(in) :: process
     character(len=*), intent(in) :: query
     logical, intent(in) :: pid_mode
-    character(len=:), allocatable :: haystack
     character(len=:), allocatable :: needle
     character(len=32) :: pid_text
-    integer :: position
 
     score = 0
     if (.not. process%valid .or. len_trim(query) <= 0) return
@@ -2009,26 +2015,82 @@ contains
       if (trim(pid_text) == needle) then
         score = 10000
       else if (index(trim(pid_text), needle) == 1) then
-        score = 8000 - min(999, len_trim(pid_text))
+        score = 8000
       end if
       return
     end if
 
-    haystack = ascii_lower(trim(process%name))
-    position = index(haystack, needle)
-    if (position == 1) score = max(score, 9000 - min(999, len_trim(process%name)))
-    if (position > 1) score = max(score, 7000 - min(999, position))
-
-    haystack = ascii_lower(process_display_command(process))
-    position = index(haystack, needle)
-    if (position == 1) score = max(score, 8500 - min(999, len_trim(haystack)))
-    if (position > 1) score = max(score, 6000 - min(999, position))
-
-    haystack = ascii_lower(process_user_label(process))
-    position = index(haystack, needle)
-    if (position == 1) score = max(score, 8000 - min(999, len_trim(haystack)))
-    if (position > 1) score = max(score, 5000 - min(999, position))
+    score = max(score, process_fuzzy_field_score(process%name, needle, 10000, 9000, 8000, 7000))
+    score = max(score, process_fuzzy_field_score(process_display_command(process), needle, 9500, 8500, 7500, 6000))
+    score = max(score, process_fuzzy_field_score(process_user_label(process), needle, 9000, 8000, 7000, 5000))
   end function process_fuzzy_score
+
+  integer function process_fuzzy_field_score(text, needle, exact_score, prefix_score, word_score, substring_score) result(score)
+    character(len=*), intent(in) :: text
+    character(len=*), intent(in) :: needle
+    integer, intent(in) :: exact_score
+    integer, intent(in) :: prefix_score
+    integer, intent(in) :: word_score
+    integer, intent(in) :: substring_score
+    character(len=:), allocatable :: haystack
+    integer :: penalty
+    integer :: position
+
+    score = 0
+    if (len_trim(text) <= 0 .or. len_trim(needle) <= 0) return
+    haystack = ascii_lower(trim(text))
+    position = index(haystack, needle)
+    if (position <= 0) return
+    penalty = min(999, len_trim(haystack))
+    if (trim(haystack) == needle) then
+      score = exact_score - penalty
+    else if (position == 1) then
+      score = prefix_score - penalty
+    else if (process_fuzzy_word_boundary(haystack, position)) then
+      score = word_score - min(999, position)
+    else
+      score = substring_score - min(999, position)
+    end if
+  end function process_fuzzy_field_score
+
+  logical function process_fuzzy_word_boundary(text, position) result(boundary)
+    character(len=*), intent(in) :: text
+    integer, intent(in) :: position
+
+    boundary = .false.
+    if (position <= 1 .or. position > len(text)) return
+    boundary = .not. ascii_alnum(text(position - 1:position - 1))
+  end function process_fuzzy_word_boundary
+
+  logical function process_fuzzy_prefer(candidate, current, pid_mode) result(prefer)
+    type(process_info), intent(in) :: candidate
+    type(process_info), intent(in) :: current
+    logical, intent(in) :: pid_mode
+
+    prefer = .false.
+    if (.not. candidate%valid) return
+    if (.not. current%valid) then
+      prefer = .true.
+      return
+    end if
+    if (pid_mode) then
+      prefer = candidate%pid < current%pid
+    else
+      prefer = len_trim(process_display_command(candidate)) < len_trim(process_display_command(current))
+    end if
+  end function process_fuzzy_prefer
+
+  logical function ascii_alnum(text) result(alnum)
+    character(len=*), intent(in) :: text
+    integer :: code
+
+    alnum = .false.
+    if (len(text) /= 1) return
+    code = iachar(text(1:1))
+    alnum = (code >= iachar("0") .and. code <= iachar("9")) .or. &
+            (code >= iachar("A") .and. code <= iachar("Z")) .or. &
+            (code >= iachar("a") .and. code <= iachar("z"))
+  end function ascii_alnum
 
   function ascii_lower(text) result(lower)
     character(len=*), intent(in) :: text
