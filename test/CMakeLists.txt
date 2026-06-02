@@ -36,6 +36,12 @@ target_link_libraries(ftop_proc_data_test PRIVATE ftop_core)
 
 add_test(NAME ftop_proc_data COMMAND ftop_proc_data_test)
 
+add_executable(ftop_process_stress_test unit/test_process_stress.f90 unit/ftop_process_stress.c)
+target_link_libraries(ftop_process_stress_test PRIVATE ftop_core)
+
+add_test(NAME ftop_process_stress COMMAND ftop_process_stress_test)
+set_tests_properties(ftop_process_stress PROPERTIES TIMEOUT 30)
+
 add_executable(ftop_color_test unit/test_color.f90)
 target_link_libraries(ftop_color_test PRIVATE ftop_core)
 
