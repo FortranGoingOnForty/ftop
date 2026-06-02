@@ -2,6 +2,7 @@
 #include <ctype.h>
 #include <dirent.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <pwd.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -17,7 +18,12 @@
 #define FTOP_LINUX_PROCESS_STATUS_LEN 2048
 #define FTOP_LINUX_PROCESS_IO_LEN 512
 #define FTOP_LINUX_PROCESS_CGROUP_LEN 1024
+#define FTOP_LINUX_SOCKET_OWNER_PROCESS_NAME_LEN 64
 #define FTOP_USER_LOOKUP_BUFFER_LEN 16384
+
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
 
 struct ftop_linux_hwmon_sensor {
   char path[FTOP_LINUX_HWMON_PATH_LEN];
@@ -36,6 +42,12 @@ struct ftop_linux_process_raw {
   size_t io_len;
   char cgroup[FTOP_LINUX_PROCESS_CGROUP_LEN];
   size_t cgroup_len;
+};
+
+struct ftop_linux_socket_owner {
+  long long inode;
+  int pid;
+  char process_name[FTOP_LINUX_SOCKET_OWNER_PROCESS_NAME_LEN];
 };
 
 static int ftop_read_file_into_buffer(const char *path, char *buffer, size_t buffer_len, size_t *value_len, int *sys_errno) {
@@ -85,6 +97,14 @@ int ftop_linux_read_proc_uptime(char *buffer, size_t buffer_len, size_t *value_l
 
 int ftop_linux_read_proc_net_dev(char *buffer, size_t buffer_len, size_t *value_len, int *sys_errno) {
   return ftop_read_file_into_buffer("/proc/net/dev", buffer, buffer_len, value_len, sys_errno);
+}
+
+int ftop_linux_read_proc_net_tcp(char *buffer, size_t buffer_len, size_t *value_len, int *sys_errno) {
+  return ftop_read_file_into_buffer("/proc/net/tcp", buffer, buffer_len, value_len, sys_errno);
+}
+
+int ftop_linux_read_proc_net_udp(char *buffer, size_t buffer_len, size_t *value_len, int *sys_errno) {
+  return ftop_read_file_into_buffer("/proc/net/udp", buffer, buffer_len, value_len, sys_errno);
 }
 
 static int ftop_linux_safe_net_name(const char *name) {
@@ -179,6 +199,129 @@ int ftop_linux_process_snapshot(
 
   closedir(directory);
   *process_count = count;
+  return 0;
+}
+
+static void ftop_copy_owner_process_name(char *destination, const char *source, size_t source_len) {
+  size_t copied_len;
+
+  if (destination == NULL) return;
+  destination[0] = '\0';
+  if (source == NULL || source_len == 0U) return;
+  while (source_len > 0U && (source[source_len - 1U] == '\n' || source[source_len - 1U] == '\r')) --source_len;
+  copied_len = source_len < FTOP_LINUX_SOCKET_OWNER_PROCESS_NAME_LEN - 1U ?
+      source_len : FTOP_LINUX_SOCKET_OWNER_PROCESS_NAME_LEN - 1U;
+  memcpy(destination, source, copied_len);
+  destination[copied_len] = '\0';
+}
+
+static int ftop_linux_read_process_comm(int pid, char *buffer, size_t buffer_len) {
+  char comm[FTOP_LINUX_SOCKET_OWNER_PROCESS_NAME_LEN];
+  size_t value_len;
+
+  if (buffer == NULL || buffer_len == 0U) return -1;
+  buffer[0] = '\0';
+  value_len = 0U;
+  if (ftop_linux_read_process_file(pid, "comm", comm, sizeof(comm), &value_len) != 0) return -1;
+  ftop_copy_owner_process_name(buffer, comm, value_len);
+  return buffer[0] == '\0' ? -1 : 0;
+}
+
+static int ftop_socket_inode_from_link(const char *target, long long *inode) {
+  const char prefix[] = "socket:[";
+  char *end;
+  long long value;
+
+  if (target == NULL || inode == NULL) return 0;
+  if (strncmp(target, prefix, sizeof(prefix) - 1U) != 0) return 0;
+  errno = 0;
+  value = strtoll(target + sizeof(prefix) - 1U, &end, 10);
+  if (end == target + sizeof(prefix) - 1U || *end != ']' || errno != 0 || value <= 0) return 0;
+  *inode = value;
+  return 1;
+}
+
+static int ftop_socket_owner_exists(
+    const struct ftop_linux_socket_owner *owners, size_t count, long long inode, int pid) {
+  size_t i;
+
+  for (i = 0U; i < count; ++i) {
+    if (owners[i].inode == inode && owners[i].pid == pid) return 1;
+  }
+  return 0;
+}
+
+static void ftop_store_socket_owner(
+    struct ftop_linux_socket_owner *owner, int pid, long long inode, const char *process_name) {
+  memset(owner, 0, sizeof(*owner));
+  owner->inode = inode;
+  owner->pid = pid;
+  if (process_name != NULL) {
+    ftop_copy_owner_process_name(owner->process_name, process_name, strlen(process_name));
+  }
+}
+
+static void ftop_scan_process_socket_owners(
+    int pid, struct ftop_linux_socket_owner *owners, size_t capacity, size_t *count) {
+  char fd_directory_path[PATH_MAX];
+  char link_path[PATH_MAX];
+  char process_name[FTOP_LINUX_SOCKET_OWNER_PROCESS_NAME_LEN];
+  char target[128];
+  DIR *fd_directory;
+  struct dirent *entry;
+  long long inode;
+  ssize_t target_len;
+  int written;
+
+  if (count == NULL || *count >= capacity) return;
+  written = snprintf(fd_directory_path, sizeof(fd_directory_path), "/proc/%d/fd", pid);
+  if (written < 0 || (size_t)written >= sizeof(fd_directory_path)) return;
+  fd_directory = opendir(fd_directory_path);
+  if (fd_directory == NULL) return;
+
+  process_name[0] = '\0';
+  (void)ftop_linux_read_process_comm(pid, process_name, sizeof(process_name));
+  while ((entry = readdir(fd_directory)) != NULL && *count < capacity) {
+    if (entry->d_name[0] == '.') continue;
+    written = snprintf(link_path, sizeof(link_path), "%s/%s", fd_directory_path, entry->d_name);
+    if (written < 0 || (size_t)written >= sizeof(link_path)) continue;
+    target_len = readlink(link_path, target, sizeof(target) - 1U);
+    if (target_len <= 0) continue;
+    target[target_len] = '\0';
+    if (!ftop_socket_inode_from_link(target, &inode)) continue;
+    if (ftop_socket_owner_exists(owners, *count, inode, pid)) continue;
+    ftop_store_socket_owner(&owners[*count], pid, inode, process_name);
+    ++(*count);
+  }
+
+  closedir(fd_directory);
+}
+
+int ftop_linux_socket_owners(
+    struct ftop_linux_socket_owner *owners, size_t capacity, size_t *owner_count, int *sys_errno) {
+  DIR *directory;
+  struct dirent *entry;
+  int pid;
+  size_t count;
+
+  if (owners == NULL || owner_count == NULL || sys_errno == NULL || capacity == 0U) return -1;
+
+  *owner_count = 0U;
+  *sys_errno = 0;
+  directory = opendir("/proc");
+  if (directory == NULL) {
+    *sys_errno = errno;
+    return -1;
+  }
+
+  count = 0U;
+  while ((entry = readdir(directory)) != NULL && count < capacity) {
+    if (!ftop_linux_pid_from_name(entry->d_name, &pid)) continue;
+    ftop_scan_process_socket_owners(pid, owners, capacity, &count);
+  }
+
+  closedir(directory);
+  *owner_count = count;
   return 0;
 }
 

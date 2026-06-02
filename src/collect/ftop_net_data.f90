@@ -35,6 +35,7 @@ module ftop_net_data
     character(len=NET_ADDRESS_LEN) :: remote_addr = ""
     integer :: remote_port = 0
     character(len=NET_STATE_LEN) :: state = ""
+    integer(int64) :: inode = 0_int64
     integer :: pid = 0
     character(len=NET_PROCESS_NAME_LEN) :: process_name = ""
   end type net_connection
@@ -58,6 +59,7 @@ module ftop_net_data
   public :: assign_interface_rates
   public :: decode_linux_ipv4_endpoint
   public :: format_byte_rate
+  public :: parse_linux_proc_net_connections
   public :: parse_linux_proc_net_dev
 
 contains
@@ -100,6 +102,108 @@ contains
     allocate(table%connections(0))
     allocate(table%processes(0))
   end function parse_linux_proc_net_dev
+
+  function parse_linux_proc_net_connections(tcp_text, udp_text) result(connections)
+    character(len=*), intent(in) :: tcp_text
+    character(len=*), intent(in) :: udp_text
+    type(net_connection), allocatable :: connections(:)
+    integer :: connection_count
+
+    connection_count = count_linux_proc_net_connections(tcp_text, "tcp") + &
+                       count_linux_proc_net_connections(udp_text, "udp")
+    allocate(connections(connection_count))
+    connection_count = 0
+    call append_linux_proc_net_connections(tcp_text, "tcp", connections, connection_count)
+    call append_linux_proc_net_connections(udp_text, "udp", connections, connection_count)
+  end function parse_linux_proc_net_connections
+
+  integer function count_linux_proc_net_connections(text, protocol) result(connection_count)
+    character(len=*), intent(in) :: text
+    character(len=*), intent(in) :: protocol
+    integer :: cursor
+    integer :: line_end
+    integer :: line_start
+    type(net_connection) :: connection
+
+    connection_count = 0
+    cursor = 1
+    do while (cursor <= len(text))
+      line_start = cursor
+      line_end = next_line_end(text, line_start)
+      if (parse_linux_proc_net_connection_line(text(line_start:line_end), protocol, connection)) then
+        connection_count = connection_count + 1
+      end if
+      cursor = line_end + 2
+    end do
+  end function count_linux_proc_net_connections
+
+  subroutine append_linux_proc_net_connections(text, protocol, connections, connection_count)
+    character(len=*), intent(in) :: text
+    character(len=*), intent(in) :: protocol
+    type(net_connection), intent(inout) :: connections(:)
+    integer, intent(inout) :: connection_count
+    integer :: cursor
+    integer :: line_end
+    integer :: line_start
+    type(net_connection) :: connection
+
+    cursor = 1
+    do while (cursor <= len(text))
+      line_start = cursor
+      line_end = next_line_end(text, line_start)
+      if (parse_linux_proc_net_connection_line(text(line_start:line_end), protocol, connection)) then
+        if (connection_count < size(connections)) then
+          connection_count = connection_count + 1
+          connections(connection_count) = connection
+        end if
+      end if
+      cursor = line_end + 2
+    end do
+  end subroutine append_linux_proc_net_connections
+
+  logical function parse_linux_proc_net_connection_line(line, protocol, connection) result(parsed)
+    character(len=*), intent(in) :: line
+    character(len=*), intent(in) :: protocol
+    type(net_connection), intent(out) :: connection
+    character(len=64) :: local_endpoint
+    character(len=64) :: remote_endpoint
+    character(len=16) :: slot
+    character(len=16) :: state_hex
+    character(len=32) :: retransmit_timeout
+    character(len=32) :: timer_when
+    character(len=32) :: timeout
+    character(len=32) :: transmit_receive_queue
+    integer :: local_separator
+    integer :: read_status
+    integer :: remote_separator
+    integer(int64) :: inode
+    integer(int64) :: uid
+
+    parsed = .false.
+    connection = net_connection()
+    local_endpoint = ""
+    remote_endpoint = ""
+    state_hex = ""
+    read(line, *, iostat=read_status) slot, local_endpoint, remote_endpoint, state_hex, &
+      transmit_receive_queue, timer_when, retransmit_timeout, uid, timeout, inode
+    if (read_status /= 0) return
+
+    local_separator = index(local_endpoint, ":")
+    remote_separator = index(remote_endpoint, ":")
+    if (local_separator <= 1 .or. remote_separator <= 1) return
+    if (.not. decode_linux_ipv4_endpoint(local_endpoint(:local_separator - 1), &
+                                         local_endpoint(local_separator + 1:), &
+                                         connection%local_addr, connection%local_port)) return
+    if (.not. decode_linux_ipv4_endpoint(remote_endpoint(:remote_separator - 1), &
+                                         remote_endpoint(remote_separator + 1:), &
+                                         connection%remote_addr, connection%remote_port)) return
+
+    connection%valid = .true.
+    connection%protocol = bounded_text(protocol, len(connection%protocol))
+    connection%state = bounded_text(linux_connection_state_label(protocol, state_hex), len(connection%state))
+    connection%inode = max(0_int64, inode)
+    parsed = connection%inode > 0_int64
+  end function parse_linux_proc_net_connection_line
 
   logical function linux_net_dev_line_matches(line, include_loopback) result(matches)
     character(len=*), intent(in) :: line
@@ -322,6 +426,50 @@ contains
     port = parsed_port
     success = .true.
   end function decode_linux_ipv4_endpoint
+
+  function linux_connection_state_label(protocol, state_hex) result(label)
+    character(len=*), intent(in) :: protocol
+    character(len=*), intent(in) :: state_hex
+    character(len=:), allocatable :: label
+    integer :: state_value
+
+    if (.not. parse_hex_int(trim(state_hex), state_value)) then
+      label = "UNKNOWN"
+      return
+    end if
+
+    if (trim(protocol) == "udp" .and. state_value == 7) then
+      label = "OPEN"
+      return
+    end if
+
+    select case (state_value)
+    case (1)
+      label = "ESTABLISHED"
+    case (2)
+      label = "SYN_SENT"
+    case (3)
+      label = "SYN_RECV"
+    case (4)
+      label = "FIN_WAIT1"
+    case (5)
+      label = "FIN_WAIT2"
+    case (6)
+      label = "TIME_WAIT"
+    case (7)
+      label = "CLOSE"
+    case (8)
+      label = "CLOSE_WAIT"
+    case (9)
+      label = "LAST_ACK"
+    case (10)
+      label = "LISTEN"
+    case (11)
+      label = "CLOSING"
+    case default
+      label = "UNKNOWN"
+    end select
+  end function linux_connection_state_label
 
   logical function parse_hex_byte(text, value) result(success)
     character(len=*), intent(in) :: text

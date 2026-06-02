@@ -69,7 +69,33 @@ contains
                                       network_gradient, dim_style)
       line_index = line_index + 1
     end do
+
+    call render_connection_rows(buffer, content, line_index, snapshot, dim_style)
   end subroutine render_network_panel
+
+  subroutine render_connection_rows(buffer, content, line_index, snapshot, dim_style)
+    type(screen_buffer), intent(inout) :: buffer
+    type(widget_rect), intent(in) :: content
+    integer, intent(inout) :: line_index
+    type(collector_snapshot), intent(in) :: snapshot
+    type(screen_style), intent(in) :: dim_style
+    integer :: connection_index
+
+    if (line_index > content%height) return
+    if (.not. allocated(snapshot%network%connections)) return
+    if (valid_connection_count(snapshot) <= 0) return
+
+    call render_text(buffer, content_line_rect(content, line_index), &
+                     "Connections " // integer_text(valid_connection_count(snapshot)), dim_style)
+    line_index = line_index + 1
+    do connection_index = 1, size(snapshot%network%connections)
+      if (line_index > content%height) exit
+      if (.not. snapshot%network%connections(connection_index)%valid) cycle
+      call render_text(buffer, content_line_rect(content, line_index), &
+                       connection_text(snapshot, connection_index), dim_style)
+      line_index = line_index + 1
+    end do
+  end subroutine render_connection_rows
 
   subroutine render_interface_sparkline(buffer, rect, snapshot, interface_index, network_gradient, dim_style)
     type(screen_buffer), intent(inout) :: buffer
@@ -126,6 +152,53 @@ contains
       if (snapshot%network%interfaces(interface_index)%valid) count = count + 1
     end do
   end function valid_interface_count
+
+  integer function valid_connection_count(snapshot) result(count)
+    type(collector_snapshot), intent(in) :: snapshot
+    integer :: connection_index
+
+    count = 0
+    if (.not. allocated(snapshot%network%connections)) return
+    do connection_index = 1, size(snapshot%network%connections)
+      if (snapshot%network%connections(connection_index)%valid) count = count + 1
+    end do
+  end function valid_connection_count
+
+  function connection_text(snapshot, connection_index) result(text)
+    type(collector_snapshot), intent(in) :: snapshot
+    integer, intent(in) :: connection_index
+    character(len=:), allocatable :: text
+    character(len=:), allocatable :: owner
+
+    owner = connection_owner_text(snapshot, connection_index)
+    text = trim(snapshot%network%connections(connection_index)%protocol) // " " // &
+           endpoint_text(snapshot%network%connections(connection_index)%local_addr, &
+                         snapshot%network%connections(connection_index)%local_port) // &
+           " -> " // endpoint_text(snapshot%network%connections(connection_index)%remote_addr, &
+                                    snapshot%network%connections(connection_index)%remote_port) // &
+           " " // trim(snapshot%network%connections(connection_index)%state) // owner
+  end function connection_text
+
+  function endpoint_text(address, port) result(text)
+    character(len=*), intent(in) :: address
+    integer, intent(in) :: port
+    character(len=:), allocatable :: text
+
+    text = trim(address) // ":" // integer_text(max(0, port))
+  end function endpoint_text
+
+  function connection_owner_text(snapshot, connection_index) result(text)
+    type(collector_snapshot), intent(in) :: snapshot
+    integer, intent(in) :: connection_index
+    character(len=:), allocatable :: text
+
+    text = ""
+    if (snapshot%network%connections(connection_index)%pid <= 0) return
+    text = " pid " // integer_text(snapshot%network%connections(connection_index)%pid)
+    if (len_trim(snapshot%network%connections(connection_index)%process_name) > 0) then
+      text = text // " " // trim(snapshot%network%connections(connection_index)%process_name)
+    end if
+  end function connection_owner_text
 
   real(real64) function total_rx_rate(snapshot) result(rate)
     type(collector_snapshot), intent(in) :: snapshot

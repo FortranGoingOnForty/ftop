@@ -19,8 +19,11 @@ module ftop_collector
     cpu_total_info
   use ftop_mem_data, only : metric_memory_info => memory_info
   use ftop_net_data, only : &
+    NET_ADDRESS_LEN, &
     NET_HISTORY_CAPACITY, &
     NET_INTERFACE_NAME_LEN, &
+    NET_PROCESS_NAME_LEN, &
+    NET_PROTOCOL_LEN, &
     NET_STATE_LEN, &
     append_interface_histories, &
     assign_interface_rates, &
@@ -63,6 +66,7 @@ module ftop_collector
   integer, parameter, public :: FTOP_COLLECTOR_MAX_CPU_CORES = 512
   integer, parameter, public :: FTOP_COLLECTOR_MAX_PROCESSES = 256
   integer, parameter, public :: FTOP_COLLECTOR_MAX_INTERFACES = 64
+  integer, parameter, public :: FTOP_COLLECTOR_MAX_CONNECTIONS = 512
 
   type, bind(C) :: collector_shared_state
     integer(c_int) :: stop_requested
@@ -145,6 +149,16 @@ module ftop_collector
     integer(c_int) :: network_interface_history_count(FTOP_COLLECTOR_MAX_INTERFACES)
     real(c_double) :: network_interface_rx_history(FTOP_COLLECTOR_MAX_INTERFACES, NET_HISTORY_CAPACITY)
     real(c_double) :: network_interface_tx_history(FTOP_COLLECTOR_MAX_INTERFACES, NET_HISTORY_CAPACITY)
+    integer(c_int) :: network_connection_count
+    integer(c_int) :: network_connection_valid(FTOP_COLLECTOR_MAX_CONNECTIONS)
+    character(kind=c_char) :: network_connection_protocol(NET_PROTOCOL_LEN, FTOP_COLLECTOR_MAX_CONNECTIONS)
+    character(kind=c_char) :: network_connection_local_addr(NET_ADDRESS_LEN, FTOP_COLLECTOR_MAX_CONNECTIONS)
+    integer(c_int) :: network_connection_local_port(FTOP_COLLECTOR_MAX_CONNECTIONS)
+    character(kind=c_char) :: network_connection_remote_addr(NET_ADDRESS_LEN, FTOP_COLLECTOR_MAX_CONNECTIONS)
+    integer(c_int) :: network_connection_remote_port(FTOP_COLLECTOR_MAX_CONNECTIONS)
+    character(kind=c_char) :: network_connection_state(NET_STATE_LEN, FTOP_COLLECTOR_MAX_CONNECTIONS)
+    integer(c_int) :: network_connection_pid(FTOP_COLLECTOR_MAX_CONNECTIONS)
+    character(kind=c_char) :: network_connection_process_name(NET_PROCESS_NAME_LEN, FTOP_COLLECTOR_MAX_CONNECTIONS)
     integer(c_int) :: history_start
     integer(c_int) :: history_count
     real(c_double) :: cpu_usage_history(FTOP_COLLECTOR_HISTORY_CAPACITY)
@@ -596,6 +610,16 @@ contains
     state%network_interface_history_count = 0_c_int
     state%network_interface_rx_history = 0.0_c_double
     state%network_interface_tx_history = 0.0_c_double
+    state%network_connection_count = 0_c_int
+    state%network_connection_valid = 0_c_int
+    state%network_connection_protocol = c_null_char
+    state%network_connection_local_addr = c_null_char
+    state%network_connection_local_port = 0_c_int
+    state%network_connection_remote_addr = c_null_char
+    state%network_connection_remote_port = 0_c_int
+    state%network_connection_state = c_null_char
+    state%network_connection_pid = 0_c_int
+    state%network_connection_process_name = c_null_char
     state%history_start = 1_c_int
     state%history_count = 0_c_int
     state%cpu_usage_history = 0.0_c_double
@@ -685,6 +709,16 @@ contains
     state%network_interface_history_count = 0_c_int
     state%network_interface_rx_history = 0.0_c_double
     state%network_interface_tx_history = 0.0_c_double
+    state%network_connection_count = 0_c_int
+    state%network_connection_valid = 0_c_int
+    state%network_connection_protocol = c_null_char
+    state%network_connection_local_addr = c_null_char
+    state%network_connection_local_port = 0_c_int
+    state%network_connection_remote_addr = c_null_char
+    state%network_connection_remote_port = 0_c_int
+    state%network_connection_state = c_null_char
+    state%network_connection_pid = 0_c_int
+    state%network_connection_process_name = c_null_char
     state%history_start = 1_c_int
     state%history_count = 0_c_int
     state%cpu_usage_history = 0.0_c_double
@@ -815,6 +849,8 @@ contains
     type(collector_shared_state), intent(in) :: state
     type(collector_snapshot), intent(inout) :: snapshot
     integer :: allocation_status
+    integer :: connection_count
+    integer :: connection_index
     integer :: history_count
     integer :: history_index
     integer :: interface_count
@@ -823,10 +859,11 @@ contains
 
     success = .false.
     interface_count = bounded_interface_count(int(state%network_interface_count))
+    connection_count = bounded_connection_count(int(state%network_connection_count))
     snapshot%network%valid = state%network_table_valid /= 0_c_int
     allocate(snapshot%network%interfaces(interface_count), stat=allocation_status)
     if (allocation_status /= 0) return
-    allocate(snapshot%network%connections(0), stat=allocation_status)
+    allocate(snapshot%network%connections(connection_count), stat=allocation_status)
     if (allocation_status /= 0) return
     allocate(snapshot%network%processes(0), stat=allocation_status)
     if (allocation_status /= 0) return
@@ -862,6 +899,28 @@ contains
         snapshot%network%interfaces(interface_index)%tx_history(history_index) = &
           real(state%network_interface_tx_history(interface_index, history_index), real64)
       end do
+    end do
+
+    do connection_index = 1, connection_count
+      snapshot%network%connections(connection_index)%valid = state%network_connection_valid(connection_index) /= 0_c_int
+      call copy_c_chars_to_fortran(state%network_connection_protocol(:, connection_index), &
+                                   state%network_connection_valid(connection_index), &
+                                   snapshot%network%connections(connection_index)%protocol, string_valid)
+      call copy_c_chars_to_fortran(state%network_connection_local_addr(:, connection_index), &
+                                   state%network_connection_valid(connection_index), &
+                                   snapshot%network%connections(connection_index)%local_addr, string_valid)
+      snapshot%network%connections(connection_index)%local_port = int(state%network_connection_local_port(connection_index))
+      call copy_c_chars_to_fortran(state%network_connection_remote_addr(:, connection_index), &
+                                   state%network_connection_valid(connection_index), &
+                                   snapshot%network%connections(connection_index)%remote_addr, string_valid)
+      snapshot%network%connections(connection_index)%remote_port = int(state%network_connection_remote_port(connection_index))
+      call copy_c_chars_to_fortran(state%network_connection_state(:, connection_index), &
+                                   state%network_connection_valid(connection_index), &
+                                   snapshot%network%connections(connection_index)%state, string_valid)
+      snapshot%network%connections(connection_index)%pid = int(state%network_connection_pid(connection_index))
+      call copy_c_chars_to_fortran(state%network_connection_process_name(:, connection_index), &
+                                   state%network_connection_valid(connection_index), &
+                                   snapshot%network%connections(connection_index)%process_name, string_valid)
     end do
 
     success = .true.
@@ -924,6 +983,12 @@ contains
 
     bounded = max(0, min(FTOP_COLLECTOR_MAX_INTERFACES, interface_count))
   end function bounded_interface_count
+
+  integer function bounded_connection_count(connection_count) result(bounded)
+    integer, intent(in) :: connection_count
+
+    bounded = max(0, min(FTOP_COLLECTOR_MAX_CONNECTIONS, connection_count))
+  end function bounded_connection_count
 
   integer function bounded_process_history_count(history_count) result(bounded)
     integer, intent(in) :: history_count
@@ -1161,6 +1226,8 @@ contains
   subroutine publish_network(state, network)
     type(collector_shared_state), intent(inout) :: state
     type(network_table), intent(in) :: network
+    integer :: connection_count
+    integer :: connection_index
     integer :: interface_count
     integer :: interface_index
     integer(c_int) :: string_valid
@@ -1181,37 +1248,77 @@ contains
     state%network_interface_history_count = 0_c_int
     state%network_interface_rx_history = 0.0_c_double
     state%network_interface_tx_history = 0.0_c_double
-    if (.not. network%valid .or. .not. allocated(network%interfaces)) return
+    state%network_connection_count = 0_c_int
+    state%network_connection_valid = 0_c_int
+    state%network_connection_protocol = c_null_char
+    state%network_connection_local_addr = c_null_char
+    state%network_connection_local_port = 0_c_int
+    state%network_connection_remote_addr = c_null_char
+    state%network_connection_remote_port = 0_c_int
+    state%network_connection_state = c_null_char
+    state%network_connection_pid = 0_c_int
+    state%network_connection_process_name = c_null_char
+    if (.not. network%valid) return
 
-    interface_count = bounded_interface_count(size(network%interfaces))
-    state%network_interface_count = int(interface_count, c_int)
-    do interface_index = 1, interface_count
-      state%network_interface_valid(interface_index) = &
-        merge(1_c_int, 0_c_int, network%interfaces(interface_index)%valid)
-      call copy_fortran_string_to_c_chars(network%interfaces(interface_index)%name, &
-                                          len_trim(network%interfaces(interface_index)%name) > 0, &
-                                          state%network_interface_name(:, interface_index), string_valid)
-      state%network_interface_rx_bytes(interface_index) = &
-        int(max(0_int64, network%interfaces(interface_index)%rx_bytes), c_long_long)
-      state%network_interface_tx_bytes(interface_index) = &
-        int(max(0_int64, network%interfaces(interface_index)%tx_bytes), c_long_long)
-      state%network_interface_rx_packets(interface_index) = &
-        int(max(0_int64, network%interfaces(interface_index)%rx_packets), c_long_long)
-      state%network_interface_tx_packets(interface_index) = &
-        int(max(0_int64, network%interfaces(interface_index)%tx_packets), c_long_long)
-      call copy_fortran_string_to_c_chars(network%interfaces(interface_index)%state, &
-                                          len_trim(network%interfaces(interface_index)%state) > 0, &
-                                          state%network_interface_state(:, interface_index), string_valid)
-      state%network_interface_speed_mbps(interface_index) = &
-        int(max(0, network%interfaces(interface_index)%speed_mbps), c_int)
-      state%network_interface_mtu(interface_index) = int(max(0, network%interfaces(interface_index)%mtu), c_int)
-      state%network_interface_rx_bytes_per_sec(interface_index) = &
-        real(max(0.0_real64, network%interfaces(interface_index)%rx_bytes_per_sec), c_double)
-      state%network_interface_tx_bytes_per_sec(interface_index) = &
-        real(max(0.0_real64, network%interfaces(interface_index)%tx_bytes_per_sec), c_double)
-      state%network_interface_history_count(interface_index) = &
-        int(bounded_interface_history_count(network%interfaces(interface_index)%history_count), c_int)
-      call copy_interface_history_to_state(state, interface_index, network)
+    if (allocated(network%interfaces)) then
+      interface_count = bounded_interface_count(size(network%interfaces))
+      state%network_interface_count = int(interface_count, c_int)
+      do interface_index = 1, interface_count
+        state%network_interface_valid(interface_index) = &
+          merge(1_c_int, 0_c_int, network%interfaces(interface_index)%valid)
+        call copy_fortran_string_to_c_chars(network%interfaces(interface_index)%name, &
+                                            len_trim(network%interfaces(interface_index)%name) > 0, &
+                                            state%network_interface_name(:, interface_index), string_valid)
+        state%network_interface_rx_bytes(interface_index) = &
+          int(max(0_int64, network%interfaces(interface_index)%rx_bytes), c_long_long)
+        state%network_interface_tx_bytes(interface_index) = &
+          int(max(0_int64, network%interfaces(interface_index)%tx_bytes), c_long_long)
+        state%network_interface_rx_packets(interface_index) = &
+          int(max(0_int64, network%interfaces(interface_index)%rx_packets), c_long_long)
+        state%network_interface_tx_packets(interface_index) = &
+          int(max(0_int64, network%interfaces(interface_index)%tx_packets), c_long_long)
+        call copy_fortran_string_to_c_chars(network%interfaces(interface_index)%state, &
+                                            len_trim(network%interfaces(interface_index)%state) > 0, &
+                                            state%network_interface_state(:, interface_index), string_valid)
+        state%network_interface_speed_mbps(interface_index) = &
+          int(max(0, network%interfaces(interface_index)%speed_mbps), c_int)
+        state%network_interface_mtu(interface_index) = int(max(0, network%interfaces(interface_index)%mtu), c_int)
+        state%network_interface_rx_bytes_per_sec(interface_index) = &
+          real(max(0.0_real64, network%interfaces(interface_index)%rx_bytes_per_sec), c_double)
+        state%network_interface_tx_bytes_per_sec(interface_index) = &
+          real(max(0.0_real64, network%interfaces(interface_index)%tx_bytes_per_sec), c_double)
+        state%network_interface_history_count(interface_index) = &
+          int(bounded_interface_history_count(network%interfaces(interface_index)%history_count), c_int)
+        call copy_interface_history_to_state(state, interface_index, network)
+      end do
+    end if
+
+    if (.not. allocated(network%connections)) return
+    connection_count = bounded_connection_count(size(network%connections))
+    state%network_connection_count = int(connection_count, c_int)
+    do connection_index = 1, connection_count
+      state%network_connection_valid(connection_index) = &
+        merge(1_c_int, 0_c_int, network%connections(connection_index)%valid)
+      call copy_fortran_string_to_c_chars(network%connections(connection_index)%protocol, &
+                                          len_trim(network%connections(connection_index)%protocol) > 0, &
+                                          state%network_connection_protocol(:, connection_index), string_valid)
+      call copy_fortran_string_to_c_chars(network%connections(connection_index)%local_addr, &
+                                          len_trim(network%connections(connection_index)%local_addr) > 0, &
+                                          state%network_connection_local_addr(:, connection_index), string_valid)
+      state%network_connection_local_port(connection_index) = &
+        int(max(0, network%connections(connection_index)%local_port), c_int)
+      call copy_fortran_string_to_c_chars(network%connections(connection_index)%remote_addr, &
+                                          len_trim(network%connections(connection_index)%remote_addr) > 0, &
+                                          state%network_connection_remote_addr(:, connection_index), string_valid)
+      state%network_connection_remote_port(connection_index) = &
+        int(max(0, network%connections(connection_index)%remote_port), c_int)
+      call copy_fortran_string_to_c_chars(network%connections(connection_index)%state, &
+                                          len_trim(network%connections(connection_index)%state) > 0, &
+                                          state%network_connection_state(:, connection_index), string_valid)
+      state%network_connection_pid(connection_index) = int(max(0, network%connections(connection_index)%pid), c_int)
+      call copy_fortran_string_to_c_chars(network%connections(connection_index)%process_name, &
+                                          len_trim(network%connections(connection_index)%process_name) > 0, &
+                                          state%network_connection_process_name(:, connection_index), string_valid)
     end do
   end subroutine publish_network
 

@@ -1,10 +1,12 @@
 program test_net_data
   use, intrinsic :: iso_fortran_env, only : int64, real64
   use ftop_net_data, only : append_interface_histories, assign_interface_rates, decode_linux_ipv4_endpoint, &
-                            format_byte_rate, network_table, parse_linux_proc_net_dev
+                            format_byte_rate, net_connection, network_table, parse_linux_proc_net_connections, &
+                            parse_linux_proc_net_dev
   implicit none
 
   call test_linux_proc_net_dev_parser()
+  call test_linux_proc_net_connection_parser()
   call test_interface_rates()
   call test_interface_histories()
   call test_byte_rate_formatting()
@@ -37,6 +39,35 @@ contains
     call require(size(with_loopback%interfaces) == 3, "network parser should optionally include loopback")
     call require(trim(with_loopback%interfaces(1)%name) == "lo", "network parser should keep loopback when requested")
   end subroutine test_linux_proc_net_dev_parser
+
+  subroutine test_linux_proc_net_connection_parser()
+    type(net_connection), allocatable :: connections(:)
+    character(len=*), parameter :: tcp_text = &
+      "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode" // &
+      new_line("a") // &
+      "   0: 0100007F:1F90 0200000A:01BB 01 00000000:00000000 00:00000000 00000000 1000 0 12345" // &
+      new_line("a") // &
+      "   1: 00000000:0016 00000000:0000 0A 00000000:00000000 00:00000000 00000000 0 0 54321"
+    character(len=*), parameter :: udp_text = &
+      "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode" // &
+      new_line("a") // &
+      "   0: 00000000:0035 00000000:0000 07 00000000:00000000 00:00000000 00000000 0 0 67890"
+
+    connections = parse_linux_proc_net_connections(tcp_text, udp_text)
+    call require(size(connections) == 3, "network connection parser should parse tcp and udp rows")
+    call require(connections(1)%valid, "network connection parser should mark tcp row valid")
+    call require(trim(connections(1)%protocol) == "tcp", "network connection parser should set tcp protocol")
+    call require(trim(connections(1)%local_addr) == "127.0.0.1", "network connection parser local address mismatch")
+    call require(connections(1)%local_port == 8080, "network connection parser local port mismatch")
+    call require(trim(connections(1)%remote_addr) == "10.0.0.2", "network connection parser remote address mismatch")
+    call require(connections(1)%remote_port == 443, "network connection parser remote port mismatch")
+    call require(trim(connections(1)%state) == "ESTABLISHED", "network connection parser state mismatch")
+    call require(connections(1)%inode == 12345_int64, "network connection parser inode mismatch")
+    call require(trim(connections(2)%state) == "LISTEN", "network connection parser should decode listen state")
+    call require(trim(connections(3)%protocol) == "udp", "network connection parser should set udp protocol")
+    call require(trim(connections(3)%state) == "OPEN", "network connection parser should label udp state")
+    call require(connections(3)%local_port == 53, "network connection parser udp port mismatch")
+  end subroutine test_linux_proc_net_connection_parser
 
   subroutine test_interface_rates()
     type(network_table) :: previous

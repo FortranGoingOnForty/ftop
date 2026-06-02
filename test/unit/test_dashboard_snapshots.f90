@@ -144,7 +144,7 @@ contains
 
     snapshot%network%valid = .true.
     allocate(snapshot%network%interfaces(2))
-    allocate(snapshot%network%connections(0))
+    allocate(snapshot%network%connections(1))
     allocate(snapshot%network%processes(0))
     snapshot%network%interfaces(1)%valid = .true.
     snapshot%network%interfaces(1)%name = "eth0"
@@ -162,6 +162,15 @@ contains
     snapshot%network%interfaces(2)%history_count = 4
     snapshot%network%interfaces(2)%rx_history(:4) = [0.0_real64, 0.0_real64, 0.0_real64, 0.0_real64]
     snapshot%network%interfaces(2)%tx_history(:4) = [0.0_real64, 128.0_real64, 256.0_real64, 512.0_real64]
+    snapshot%network%connections(1)%valid = .true.
+    snapshot%network%connections(1)%protocol = "tcp"
+    snapshot%network%connections(1)%local_addr = "127.0.0.1"
+    snapshot%network%connections(1)%local_port = 8080
+    snapshot%network%connections(1)%remote_addr = "10.0.0.2"
+    snapshot%network%connections(1)%remote_port = 443
+    snapshot%network%connections(1)%state = "ESTABLISHED"
+    snapshot%network%connections(1)%pid = 1234
+    snapshot%network%connections(1)%process_name = "curl"
   end function sample_snapshot
 
   function golden_file(root, name) result(path)

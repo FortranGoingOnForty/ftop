@@ -7,8 +7,11 @@ module ftop_platform
   use ftop_linux_proc_stat, only : linux_proc_stat_parse
   use ftop_mem_data, only : metric_memory_info => memory_info
   use ftop_net_data, only : &
+    NET_PROCESS_NAME_LEN, &
     interface_info, &
+    net_connection, &
     network_table, &
+    parse_linux_proc_net_connections, &
     parse_linux_proc_net_dev
   use ftop_platform_types, only : &
     cpu_tick_sample, &
@@ -33,7 +36,9 @@ module ftop_platform
   integer, parameter :: LINUX_PROC_LOADAVG_BUFFER_LEN = 256
   integer, parameter :: LINUX_PROC_UPTIME_BUFFER_LEN = 128
   integer, parameter :: LINUX_PROC_NET_DEV_BUFFER_LEN = 262144
+  integer, parameter :: LINUX_PROC_NET_CONNECTION_BUFFER_LEN = 1048576
   integer, parameter :: LINUX_NET_IFACE_FIELD_BUFFER_LEN = 128
+  integer, parameter :: LINUX_SOCKET_OWNER_CAPACITY = 16384
   integer, parameter :: LINUX_PROCESS_CAPACITY = 4096
   integer, parameter :: LINUX_PROCESS_STAT_LEN = 512
   integer, parameter :: LINUX_PROCESS_STATUS_LEN = 2048
@@ -64,6 +69,12 @@ module ftop_platform
     character(kind=c_char) :: cgroup(LINUX_PROCESS_CGROUP_RAW_LEN)
     integer(c_size_t) :: cgroup_len
   end type linux_process_raw
+
+  type, bind(C), public :: linux_socket_owner
+    integer(c_long_long) :: inode
+    integer(c_int) :: pid
+    character(kind=c_char) :: process_name(NET_PROCESS_NAME_LEN)
+  end type linux_socket_owner
 
   type, extends(platform_backend) :: linux_backend
   contains
@@ -149,6 +160,33 @@ module ftop_platform
       integer(c_size_t), intent(out) :: value_len
       integer(c_int), intent(out) :: sys_errno
     end function c_ftop_linux_read_proc_net_dev
+
+    integer(c_int) function c_ftop_linux_read_proc_net_tcp(buffer, buffer_capacity, value_len, sys_errno) &
+        bind(C, name="ftop_linux_read_proc_net_tcp")
+      import :: c_char, c_int, c_size_t
+      character(kind=c_char), intent(out) :: buffer(*)
+      integer(c_size_t), value :: buffer_capacity
+      integer(c_size_t), intent(out) :: value_len
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_linux_read_proc_net_tcp
+
+    integer(c_int) function c_ftop_linux_read_proc_net_udp(buffer, buffer_capacity, value_len, sys_errno) &
+        bind(C, name="ftop_linux_read_proc_net_udp")
+      import :: c_char, c_int, c_size_t
+      character(kind=c_char), intent(out) :: buffer(*)
+      integer(c_size_t), value :: buffer_capacity
+      integer(c_size_t), intent(out) :: value_len
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_linux_read_proc_net_udp
+
+    integer(c_int) function c_ftop_linux_socket_owners(owners, capacity, owner_count, sys_errno) &
+        bind(C, name="ftop_linux_socket_owners")
+      import :: c_int, c_size_t, linux_socket_owner
+      type(linux_socket_owner), intent(out) :: owners(*)
+      integer(c_size_t), value :: capacity
+      integer(c_size_t), intent(out) :: owner_count
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_linux_socket_owners
 
     integer(c_int) function c_ftop_linux_read_net_interface_file(interface_name, field_name, buffer, &
         buffer_capacity, value_len, sys_errno) bind(C, name="ftop_linux_read_net_interface_file")
@@ -435,6 +473,7 @@ contains
     integer, intent(out), optional :: error_code
     character(kind=c_char), allocatable :: c_buffer(:)
     character(len=:), allocatable :: buffer
+    type(net_connection), allocatable :: connections(:)
     integer(c_size_t) :: value_len
     integer(c_int) :: sys_errno
     integer(c_int) :: rc
@@ -447,10 +486,102 @@ contains
       call c_chars_to_string(c_buffer, int(value_len), buffer)
       table = parse_linux_proc_net_dev(buffer)
       call assign_linux_interface_metadata(table)
+      if (linux_connection_snapshot(connections)) then
+        if (allocated(table%connections)) deallocate(table%connections)
+        call move_alloc(connections, table%connections)
+      end if
       success = table%valid
     end if
     call assign_error(error_code, sys_errno)
   end function linux_network_snapshot
+
+  logical function linux_connection_snapshot(connections, error_code) result(success)
+    type(net_connection), allocatable, intent(out) :: connections(:)
+    integer, intent(out), optional :: error_code
+    character(kind=c_char), allocatable :: c_tcp_buffer(:)
+    character(kind=c_char), allocatable :: c_udp_buffer(:)
+    character(len=:), allocatable :: tcp_buffer
+    character(len=:), allocatable :: udp_buffer
+    integer(c_size_t) :: tcp_value_len
+    integer(c_size_t) :: udp_value_len
+    integer(c_int) :: sys_errno
+    integer(c_int) :: tcp_rc
+    integer(c_int) :: udp_rc
+
+    allocate(connections(0))
+    allocate(c_tcp_buffer(LINUX_PROC_NET_CONNECTION_BUFFER_LEN))
+    allocate(c_udp_buffer(LINUX_PROC_NET_CONNECTION_BUFFER_LEN))
+    tcp_rc = c_ftop_linux_read_proc_net_tcp(c_tcp_buffer, int(size(c_tcp_buffer), c_size_t), &
+                                           tcp_value_len, sys_errno)
+    if (tcp_rc /= 0_c_int) then
+      call assign_error(error_code, sys_errno)
+      success = .false.
+      return
+    end if
+    udp_rc = c_ftop_linux_read_proc_net_udp(c_udp_buffer, int(size(c_udp_buffer), c_size_t), &
+                                           udp_value_len, sys_errno)
+    if (udp_rc /= 0_c_int) then
+      call assign_error(error_code, sys_errno)
+      success = .false.
+      return
+    end if
+
+    call c_chars_to_string(c_tcp_buffer, int(tcp_value_len), tcp_buffer)
+    call c_chars_to_string(c_udp_buffer, int(udp_value_len), udp_buffer)
+    connections = parse_linux_proc_net_connections(tcp_buffer, udp_buffer)
+    call assign_linux_connection_owners(connections)
+    call assign_error(error_code, 0_c_int)
+    success = .true.
+  end function linux_connection_snapshot
+
+  subroutine assign_linux_connection_owners(connections)
+    type(net_connection), intent(inout) :: connections(:)
+    type(linux_socket_owner), allocatable :: owners(:)
+    integer(c_size_t) :: owner_count
+    integer(c_int) :: sys_errno
+    integer(c_int) :: rc
+    integer :: connection_index
+    integer :: owner_index
+
+    if (size(connections) <= 0) return
+    allocate(owners(LINUX_SOCKET_OWNER_CAPACITY))
+    rc = c_ftop_linux_socket_owners(owners, int(size(owners), c_size_t), owner_count, sys_errno)
+    if (rc /= 0_c_int) return
+
+    do connection_index = 1, size(connections)
+      if (.not. connections(connection_index)%valid) cycle
+      owner_index = matching_socket_owner(owners, int(owner_count), connections(connection_index)%inode)
+      if (owner_index <= 0) cycle
+      connections(connection_index)%pid = int(max(0_c_int, owners(owner_index)%pid))
+      call copy_socket_owner_name(owners(owner_index), connections(connection_index)%process_name)
+    end do
+  end subroutine assign_linux_connection_owners
+
+  integer function matching_socket_owner(owners, owner_count, inode) result(owner_index)
+    type(linux_socket_owner), intent(in) :: owners(:)
+    integer, intent(in) :: owner_count
+    integer(int64), intent(in) :: inode
+    integer :: candidate
+    integer :: limit
+
+    owner_index = 0
+    if (inode <= 0_int64) return
+    limit = max(0, min(owner_count, size(owners)))
+    do candidate = 1, limit
+      if (int(max(0_c_long_long, owners(candidate)%inode), int64) == inode) then
+        owner_index = candidate
+        return
+      end if
+    end do
+  end function matching_socket_owner
+
+  subroutine copy_socket_owner_name(owner, process_name)
+    type(linux_socket_owner), intent(in) :: owner
+    character(len=*), intent(out) :: process_name
+    integer :: name_len
+
+    call copy_c_line_value(owner%process_name, size(owner%process_name), process_name, name_len)
+  end subroutine copy_socket_owner_name
 
   subroutine assign_linux_interface_metadata(table)
     type(network_table), intent(inout) :: table

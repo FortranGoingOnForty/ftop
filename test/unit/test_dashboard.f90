@@ -60,6 +60,8 @@ contains
     call require(index(text, "swap 1.0 GiB / 2.0 GiB") > 0, "dashboard should render swap")
     call require(index(text, "Interfaces 1") > 0, "dashboard should render network summary")
     call require(index(text, "eth0 up") > 0, "dashboard should render network interface")
+    call require(index(text, "Connections 1") > 0, "dashboard should render network connection count")
+    call require(index(text, "127.0.0.1:8080") > 0, "dashboard should render network endpoint")
     call require(index(text, "refresh 1000ms frame 7 fps 1.0 samples 3") > 0, &
                  "dashboard should render footer")
     call require(index(text, "ready") > 0, "dashboard should render status")
@@ -136,7 +138,7 @@ contains
 
     snapshot%network%valid = .true.
     allocate(snapshot%network%interfaces(1))
-    allocate(snapshot%network%connections(0))
+    allocate(snapshot%network%connections(1))
     allocate(snapshot%network%processes(0))
     snapshot%network%interfaces(1)%valid = .true.
     snapshot%network%interfaces(1)%name = "eth0"
@@ -146,6 +148,15 @@ contains
     snapshot%network%interfaces(1)%history_count = 3
     snapshot%network%interfaces(1)%rx_history(:3) = [128.0_real64, 512.0_real64, 1536.0_real64]
     snapshot%network%interfaces(1)%tx_history(:3) = [64.0_real64, 256.0_real64, 512.0_real64]
+    snapshot%network%connections(1)%valid = .true.
+    snapshot%network%connections(1)%protocol = "tcp"
+    snapshot%network%connections(1)%local_addr = "127.0.0.1"
+    snapshot%network%connections(1)%local_port = 8080
+    snapshot%network%connections(1)%remote_addr = "10.0.0.2"
+    snapshot%network%connections(1)%remote_port = 443
+    snapshot%network%connections(1)%state = "ESTABLISHED"
+    snapshot%network%connections(1)%pid = 1234
+    snapshot%network%connections(1)%process_name = "curl"
   end function sample_snapshot
 
   function buffer_text(buffer) result(text)

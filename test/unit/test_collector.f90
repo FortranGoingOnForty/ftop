@@ -237,6 +237,7 @@ contains
 
     call require(snapshot%network%valid, "collector network table must be valid")
     call require(allocated(snapshot%network%interfaces), "collector network interfaces must be allocated")
+    call require(allocated(snapshot%network%connections), "collector network connections must be allocated")
     call require(size(snapshot%network%interfaces) > 0, "collector network table must include interfaces")
 
     have_valid_interface = .false.
