@@ -3,6 +3,7 @@ program test_linux_platform
   use, intrinsic :: iso_fortran_env, only : int64, real64
   use ftop_cpu_data, only : cpu_state_ticks, cpu_state_total_ticks
   use ftop_mem_data, only : metric_memory_info => memory_info, memory_usage_percent
+  use ftop_net_data, only : process_bandwidth
   use ftop_platform, only : &
     linux_cpuinfo_field, &
     linux_cpuinfo_field_count, &
@@ -13,6 +14,7 @@ program test_linux_platform
     linux_load_average_snapshot, &
     linux_memory_snapshot, &
     linux_network_snapshot, &
+    linux_process_bandwidth_snapshot, &
     linux_process_snapshot, &
     network_table, &
     process_table
@@ -30,6 +32,12 @@ program test_linux_platform
 
     subroutine ftop_test_linux_network_close() bind(C, name="ftop_test_linux_network_close")
     end subroutine ftop_test_linux_network_close
+
+    integer(c_int) function ftop_test_linux_network_open_traffic(sys_errno) &
+        bind(C, name="ftop_test_linux_network_open_traffic")
+      import :: c_int
+      integer(c_int), intent(out) :: sys_errno
+    end function ftop_test_linux_network_open_traffic
   end interface
 
   type(linux_hwmon_sensor), allocatable :: sensors(:)
@@ -100,6 +108,7 @@ program test_linux_platform
     if (network%processes(i)%tx_bytes_per_sec < 0.0_real64) error stop "Linux network process tx rate must not be negative"
   end do
   call test_network_socket_ownership()
+  call test_network_process_bandwidth()
 
   if (.not. linux_process_snapshot(processes, memory%total_bytes)) error stop "Linux process snapshot failed"
   if (.not. processes%valid) error stop "Linux process snapshot must be valid"
@@ -141,6 +150,41 @@ contains
     call require_owned_connection(owned_network, "udp", int(udp_port), current_pid, "OPEN", &
                                   "Linux UDP socket ownership must map to current process")
   end subroutine test_network_socket_ownership
+
+  subroutine test_network_process_bandwidth()
+    type(process_bandwidth), allocatable :: bandwidth(:)
+    integer(c_int) :: sys_errno
+
+    if (ftop_test_linux_network_open_traffic(sys_errno) /= 0_c_int) then
+      error stop "Linux network traffic test sockets failed"
+    end if
+    if (.not. linux_process_bandwidth_snapshot(bandwidth)) then
+      call ftop_test_linux_network_close()
+      error stop "Linux process bandwidth snapshot failed"
+    end if
+    call ftop_test_linux_network_close()
+
+    call require_process_bandwidth(bandwidth, ftop_current_pid())
+  end subroutine test_network_process_bandwidth
+
+  subroutine require_process_bandwidth(bandwidth, pid)
+    type(process_bandwidth), intent(in) :: bandwidth(:)
+    integer, intent(in) :: pid
+    integer :: process_index
+
+    do process_index = 1, size(bandwidth)
+      if (.not. bandwidth(process_index)%valid) cycle
+      if (bandwidth(process_index)%pid /= pid) cycle
+      if (bandwidth(process_index)%start_time <= 0_int64) error stop "Linux bandwidth start time must be positive"
+      if (len_trim(bandwidth(process_index)%process_name) <= 0) then
+        error stop "Linux bandwidth process name must not be empty"
+      end if
+      if (bandwidth(process_index)%rx_bytes <= 0_int64) error stop "Linux bandwidth rx bytes must be positive"
+      if (bandwidth(process_index)%tx_bytes <= 0_int64) error stop "Linux bandwidth tx bytes must be positive"
+      return
+    end do
+    error stop "Linux process bandwidth must include current process traffic"
+  end subroutine require_process_bandwidth
 
   subroutine require_owned_connection(network, protocol, local_port, pid, state, message)
     type(network_table), intent(in) :: network
