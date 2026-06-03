@@ -182,9 +182,24 @@ contains
     filter_match = wait_for_string(filter_session, "Find: k_", 2500)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "old process signal key did not start fuzzy search"
 
-    if (.not. send_text(filter_session, achar(27))) error stop "failed to clear old signal key fuzzy query"
+    if (.not. send_text(filter_session, achar(27) // achar(27))) error stop "failed to clear old signal key fuzzy query"
     filter_match = wait_for_string(filter_session, "history numeric", 2500)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not clear old signal key fuzzy query"
+
+    if (.not. send_text(filter_session, "s")) error stop "failed to send old sort key as fuzzy text"
+    filter_match = wait_for_string(filter_session, "Find: s_", 2500)
+    if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "old process sort key did not start fuzzy search"
+    if (.not. send_text(filter_session, achar(27) // achar(27))) error stop "failed to clear old sort key fuzzy query"
+
+    if (.not. send_text(filter_session, "h")) error stop "failed to send old sparkline key as fuzzy text"
+    filter_match = wait_for_string(filter_session, "Find: h_", 2500)
+    if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "old process sparkline key did not start fuzzy search"
+    if (.not. send_text(filter_session, achar(27) // achar(27))) error stop "failed to clear old sparkline key fuzzy query"
+
+    if (.not. send_text(filter_session, "t")) error stop "failed to send old tree key as fuzzy text"
+    filter_match = wait_for_string(filter_session, "Find: t_", 2500)
+    if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "old process tree key did not start fuzzy search"
+    if (.not. send_text(filter_session, achar(27) // achar(27))) error stop "failed to clear old tree key fuzzy query"
 
     if (.not. send_text(filter_session, achar(27) // "OQ")) error stop "failed to open process signal prompt"
     filter_match = wait_for_string(filter_session, "signal SIGTERM pid", 2500)
