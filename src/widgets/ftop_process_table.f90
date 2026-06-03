@@ -107,6 +107,11 @@ module ftop_process_table
     integer :: selected_pid = 0
     integer(int64) :: selected_start_time = 0_int64
     logical :: selected_has_children = .false.
+    logical :: following = .false.
+    logical :: follow_filtered = .false.
+    logical :: follow_exited = .false.
+    integer :: follow_pid = 0
+    integer(int64) :: follow_start_time = 0_int64
     integer :: collapsed_count = 0
     integer :: collapsed_pid(PROCESS_COLLAPSED_CAPACITY) = 0
     integer(int64) :: collapsed_start_time(PROCESS_COLLAPSED_CAPACITY) = 0_int64
@@ -172,6 +177,7 @@ module ftop_process_table
   public :: process_table_status
   public :: process_table_finish_filter
   public :: process_table_toggle_metric_sparklines
+  public :: process_table_toggle_follow
   public :: process_table_toggle_selected_node
   public :: process_table_toggle_sort_direction
   public :: process_table_toggle_tree
@@ -199,6 +205,7 @@ contains
     type(table_cell), allocatable :: cells(:, :)
     type(table_column), allocatable :: columns(:)
     type(process_table_state) :: active_state
+    type(process_table) :: filtered_source
     type(process_table) :: sorted_processes
     type(process_table) :: tree_processes
     type(widget_rect) :: content
@@ -245,6 +252,7 @@ contains
     call prune_signal_feedback_state(active_state, sorted_processes)
     call sort_process_table(sorted_processes, active_state%sort_key, &
                             descending=active_state%sort_direction == TABLE_SORT_DESCENDING)
+    filtered_source = sorted_processes
     call filter_process_table(sorted_processes, active_state)
     if (active_state%tree_view) then
       call build_process_tree(sorted_processes)
@@ -253,6 +261,7 @@ contains
     else
       tree_processes = sorted_processes
     end if
+    call apply_follow_selection(sorted_processes, filtered_source, active_state)
     call apply_fuzzy_selection(sorted_processes, active_state)
     cells = process_cells(sorted_processes, active_state, signal_feedback_style(title_style))
     if (size(cells, 1) <= 0) then
@@ -281,6 +290,29 @@ contains
     if (show_filter_bar) call render_process_input_bar(buffer, content, active_state, title_style, dim_style)
     if (present(state)) state = active_state
   end subroutine render_process_panel
+
+  subroutine apply_follow_selection(visible_table, filtered_source, state)
+    type(process_table), intent(in) :: visible_table
+    type(process_table), intent(in) :: filtered_source
+    type(process_table_state), intent(inout) :: state
+    integer :: row
+
+    if (.not. state%following) return
+    state%follow_filtered = .false.
+    state%follow_exited = .false.
+    if (state%fuzzy_query_length > 0) return
+    row = process_row_for_identity(visible_table, state%follow_pid, state%follow_start_time)
+    if (row > 0) then
+      state%selected_row = row
+      return
+    end if
+    if (process_identity_exists(filtered_source, state%follow_pid, state%follow_start_time)) then
+      state%follow_filtered = .true.
+    else
+      state%follow_exited = .true.
+      state%following = .false.
+    end if
+  end subroutine apply_follow_selection
 
   subroutine apply_fuzzy_selection(table, state)
     type(process_table), intent(in) :: table
@@ -1311,6 +1343,28 @@ contains
     state%fuzzy_step_direction = 0
   end subroutine process_table_clear_fuzzy
 
+  logical function process_table_toggle_follow(state) result(following)
+    type(process_table_state), intent(inout) :: state
+
+    if (state%selected_pid <= 0) then
+      following = state%following
+      return
+    end if
+    if (state%following .and. state%follow_pid == state%selected_pid .and. &
+        state%follow_start_time == state%selected_start_time) then
+      state%following = .false.
+      state%follow_pid = 0
+      state%follow_start_time = 0_int64
+    else
+      state%following = .true.
+      state%follow_pid = state%selected_pid
+      state%follow_start_time = state%selected_start_time
+    end if
+    state%follow_filtered = .false.
+    state%follow_exited = .false.
+    following = state%following
+  end function process_table_toggle_follow
+
   subroutine process_table_step_fuzzy_match(state, direction)
     type(process_table_state), intent(inout) :: state
     integer, intent(in) :: direction
@@ -1400,6 +1454,12 @@ contains
       text = text // " history spark"
     else
       text = text // " history numeric"
+    end if
+    if (state%following) then
+      text = text // " following PID " // integer_text(max(0, state%follow_pid))
+      if (state%follow_filtered) text = text // " filtered"
+    else if (state%follow_exited) then
+      text = text // " process " // integer_text(max(0, state%follow_pid)) // " exited"
     end if
     if (state%signal_pending) text = text // " " // process_table_signal_status(state)
     if (process_table_filter_visible(state)) then
@@ -1498,6 +1558,22 @@ contains
       return
     end do
   end function process_row_fuzzy_matches
+
+  integer function process_row_for_identity(table, pid, start_time) result(row)
+    type(process_table), intent(in) :: table
+    integer, intent(in) :: pid
+    integer(int64), intent(in) :: start_time
+    integer :: process_index
+
+    row = 0
+    if (.not. allocated(table%items)) return
+    do process_index = 1, size(table%items)
+      if (.not. table%items(process_index)%valid) cycle
+      row = row + 1
+      if (table%items(process_index)%pid == pid .and. table%items(process_index)%start_time == start_time) return
+    end do
+    row = 0
+  end function process_row_for_identity
 
   logical function process_fuzzy_exact_pid_match(table, query) result(exact)
     type(process_table), intent(in) :: table

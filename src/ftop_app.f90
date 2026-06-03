@@ -20,6 +20,7 @@ module ftop_app
     FGOF_KEY_F5, &
     FGOF_KEY_F6, &
     FGOF_KEY_F7, &
+    FGOF_KEY_F8, &
     FGOF_KEY_HOME, &
     FGOF_KEY_LEFT, &
     FGOF_KEY_PAGEDOWN, &
@@ -92,6 +93,7 @@ module ftop_app
     process_table_state, &
     process_table_status, &
     process_table_toggle_metric_sparklines, &
+    process_table_toggle_follow, &
     process_table_toggle_selected_node, &
     process_table_toggle_sort_direction, &
     process_table_toggle_tree
@@ -1260,12 +1262,28 @@ contains
       call process_table_toggle_sort_direction(session%process_state)
     case (FGOF_KEY_F6)
       call process_table_toggle_metric_sparklines(session%process_state)
+    case (FGOF_KEY_F8)
+      call toggle_process_follow(session)
     case default
       return
     end select
     handled = .true.
     call set_status(session, process_table_status(session%process_state))
   end function handle_process_function_key
+
+  subroutine toggle_process_follow(session)
+    type(terminal_session), intent(inout) :: session
+    logical :: following
+
+    following = process_table_toggle_follow(session%process_state)
+    if (session%process_state%selected_pid <= 0) then
+      call set_status(session, "no process selected")
+    else if (following) then
+      call set_status(session, "following PID " // integer_text(max(0, session%process_state%follow_pid)))
+    else
+      call set_status(session, "follow disabled")
+    end if
+  end subroutine toggle_process_follow
 
   logical function ascii_alnum_text(text) result(alnum)
     character(len=*), intent(in) :: text

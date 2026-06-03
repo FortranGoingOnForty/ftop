@@ -186,6 +186,11 @@ contains
     filter_match = wait_for_string(filter_session, "history numeric", 2500)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not toggle process sparklines from F6"
 
+    if (.not. send_text(filter_session, achar(27) // "[19~")) error stop "failed to send process F8"
+    filter_match = wait_for_string(filter_session, "following PID", 2500)
+    if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not follow selected process from F8"
+    if (.not. send_text(filter_session, achar(27) // "[19~")) error stop "failed to disable process follow"
+
     if (.not. send_text(filter_session, "k")) error stop "failed to send old signal key as fuzzy text"
     filter_match = wait_for_string(filter_session, "Find: k_", 2500)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "old process signal key did not start fuzzy search"

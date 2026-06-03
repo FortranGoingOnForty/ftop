@@ -22,7 +22,7 @@ program test_process_table
                                   process_table_state, &
                                   process_table_status, &
                                   process_fuzzy_best_match, process_fuzzy_next_match, &
-                                  process_table_toggle_metric_sparklines, &
+                                  process_table_toggle_metric_sparklines, process_table_toggle_follow, &
                                  process_table_toggle_selected_node, process_table_toggle_sort_direction, render_process_panel
   use ftop_table, only : TABLE_SORT_ASCENDING, TABLE_SORT_DESCENDING
   use ftop_widgets, only : widget_rect
@@ -45,6 +45,7 @@ program test_process_table
   border_style = style_from_rgb(fg=COLOR_UI_BORDER)
   title_style = style_from_rgb(fg=COLOR_UI_ACCENT, bg=COLOR_UI_PANEL, bold=.true.)
   dim_style = style_from_rgb(fg=COLOR_UI_DIM)
+  call test_process_follow_state()
   bad_columns = [character(len=8) :: "pid", "bogus"]
   custom_columns = [character(len=8) :: "pid", "cpu", "mem", "command"]
 
@@ -317,6 +318,46 @@ contains
     call require(process_fuzzy_best_match(table, "12", .true., match_count) == 3, &
                  "fuzzy PID prefix should prefer smallest matching PID")
   end subroutine test_process_fuzzy_matching
+
+  subroutine test_process_follow_state()
+    type(screen_buffer) :: local_buffer
+    type(process_table_state) :: local_state
+    type(collector_snapshot) :: snapshot
+    logical :: following
+
+    local_buffer = allocate_screen(80, 10)
+    local_state = process_table_state(tree_view=.false., selected_row=2)
+    snapshot = sample_snapshot()
+    call render_process_panel(local_buffer, widget_rect(1, 1, 80, 10), snapshot, border_style, title_style, dim_style, local_state)
+    call require(local_state%selected_pid == 200, "follow setup should select child process")
+    following = process_table_toggle_follow(local_state)
+    call require(following .and. local_state%follow_pid == 200, "follow toggle should capture selected process identity")
+
+    local_state%sort_key = PROCESS_SORT_CPU
+    local_state%sort_direction = TABLE_SORT_ASCENDING
+    local_buffer = allocate_screen(80, 10)
+    call render_process_panel(local_buffer, widget_rect(1, 1, 80, 10), snapshot, border_style, title_style, dim_style, local_state)
+    call require(local_state%selected_pid == 200, "follow should keep selected process after sort")
+    call require(local_state%selected_row == 1, "follow should update selected row after sort")
+    call require(index(process_table_status(local_state), "following PID 200") > 0, "follow status should include followed PID")
+
+    call process_table_begin_filter(local_state)
+    call process_table_append_filter_text(local_state, "parent")
+    call process_table_finish_filter(local_state)
+    local_buffer = allocate_screen(80, 10)
+    call render_process_panel(local_buffer, widget_rect(1, 1, 80, 10), snapshot, border_style, title_style, dim_style, local_state)
+    call require(local_state%following .and. local_state%follow_filtered, "follow should pause when process is filtered out")
+    call require(index(process_table_status(local_state), "following PID 200 filtered") > 0, &
+                 "follow status should report filtered process")
+
+    call process_table_clear_filter(local_state)
+    snapshot = sample_snapshot()
+    snapshot%processes%items(2)%valid = .false.
+    local_buffer = allocate_screen(80, 10)
+    call render_process_panel(local_buffer, widget_rect(1, 1, 80, 10), snapshot, border_style, title_style, dim_style, local_state)
+    call require(.not. local_state%following .and. local_state%follow_exited, "follow should disable when process exits")
+    call require(index(process_table_status(local_state), "process 200 exited") > 0, "follow status should report exited process")
+  end subroutine test_process_follow_state
 
   function fuzzy_scoring_table() result(table)
     type(process_table) :: table
