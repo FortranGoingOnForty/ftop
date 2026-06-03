@@ -64,6 +64,14 @@ program test_terminal_smoke
   match = wait_for_string(session, "layout compact", 2500)
   if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not cycle layout preset"
 
+  if (.not. send_text(session, achar(27) // "[18~")) error stop "failed to send pause key"
+  match = wait_for_string(session, "ftop PAUSED", 2500)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not render paused indicator"
+
+  if (.not. send_text(session, achar(27) // "[18~")) error stop "failed to send resume key"
+  match = wait_for_string(session, "Resumed", 2500)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not resume from pause"
+
   if (.not. send_text(session, "3")) error stop "failed to send direct layout key"
   match = wait_for_string(session, "layout process", 2500)
   if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not jump to layout preset"

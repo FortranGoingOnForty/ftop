@@ -14,6 +14,7 @@ program test_dashboard
 
   call test_default_layout()
   call test_dashboard_renders_metrics()
+  call test_dashboard_renders_paused_indicator()
   call test_dashboard_renders_zoomed_widget()
   call test_dashboard_renders_zoomed_network_table()
   call test_dashboard_handles_large_network_table()
@@ -86,6 +87,20 @@ contains
     text = buffer_text(buffer)
     call require(index(text, "layout network") > 0, "dashboard should render active layout name")
   end subroutine test_dashboard_renders_metrics
+
+  subroutine test_dashboard_renders_paused_indicator()
+    type(screen_buffer) :: buffer
+    type(collector_snapshot) :: snapshot
+    character(len=:), allocatable :: text
+
+    snapshot = sample_snapshot()
+    buffer = allocate_screen(80, 24)
+    call render_dashboard(buffer, snapshot, 1000, 7, "Paused", paused=.true.)
+    text = buffer_text(buffer)
+
+    call require(index(text, "ftop PAUSED") > 0, "dashboard should render paused title indicator")
+    call require(index(text, "Paused") > 0, "dashboard should render paused status")
+  end subroutine test_dashboard_renders_paused_indicator
 
   subroutine test_dashboard_renders_zoomed_widget()
     type(screen_buffer) :: buffer

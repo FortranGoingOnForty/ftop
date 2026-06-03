@@ -26,7 +26,7 @@ module ftop_dashboard
 contains
 
   subroutine render_dashboard(buffer, snapshot, refresh_ms, frame_count, status_text, grid, focused_widget, zoomed, render_fps, &
-                              process_state, network_state, layout_name)
+                              process_state, network_state, layout_name, paused)
     type(screen_buffer), intent(inout) :: buffer
     type(collector_snapshot), intent(in) :: snapshot
     integer, intent(in) :: refresh_ms
@@ -39,6 +39,7 @@ contains
     type(process_table_state), intent(inout), optional :: process_state
     type(network_table_state), intent(inout), optional :: network_state
     character(len=*), intent(in), optional :: layout_name
+    logical, intent(in), optional :: paused
     type(dashboard_layout) :: layout
     type(screen_style) :: border_style
     type(screen_style) :: cpu_border_style
@@ -55,6 +56,7 @@ contains
     integer :: title_col
     integer :: width
     logical :: is_zoomed
+    logical :: is_paused
 
     width = buffer%size%width
     height = buffer%size%height
@@ -68,6 +70,8 @@ contains
     if (present(focused_widget)) focus = trim(focused_widget)
     is_zoomed = .false.
     if (present(zoomed)) is_zoomed = zoomed .and. len(focus) > 0
+    is_paused = .false.
+    if (present(paused)) is_paused = paused
 
     call clear_screen(buffer)
     buffer%cursor_visible = .false.
@@ -82,7 +86,11 @@ contains
     else
       layout = default_dashboard_layout(width, height)
     end if
-    call draw_box(buffer, layout%frame, BOX_STYLE_DOUBLE, border_style, "ftop", title_style, TEXT_ALIGN_CENTER)
+    if (is_paused) then
+      call draw_box(buffer, layout%frame, BOX_STYLE_DOUBLE, border_style, "ftop PAUSED", title_style, TEXT_ALIGN_CENTER)
+    else
+      call draw_box(buffer, layout%frame, BOX_STYLE_DOUBLE, border_style, "ftop", title_style, TEXT_ALIGN_CENTER)
+    end if
 
     if (is_zoomed) then
       zoom_rect = widget_rect(3, 3, max(0, width - 4), max(0, height - 5))

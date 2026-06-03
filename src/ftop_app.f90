@@ -19,6 +19,7 @@ module ftop_app
     FGOF_KEY_F4, &
     FGOF_KEY_F5, &
     FGOF_KEY_F6, &
+    FGOF_KEY_F7, &
     FGOF_KEY_HOME, &
     FGOF_KEY_LEFT, &
     FGOF_KEY_PAGEDOWN, &
@@ -150,6 +151,7 @@ module ftop_app
     type(screen_buffer) :: current
     type(screen_buffer) :: previous
     type(collector), allocatable :: metrics
+    type(collector_snapshot) :: last_snapshot
     type(layout_grid) :: layout
     type(key_decoder_state) :: decoder
     type(network_table_state) :: network_state
@@ -174,6 +176,7 @@ module ftop_app
     logical :: layout_loaded = .false.
     logical :: zoomed = .false.
     logical :: help_visible = .false.
+    logical :: paused = .false.
     logical :: running = .true.
     logical :: needs_full_render = .true.
     logical :: dirty = .true.
@@ -333,22 +336,27 @@ contains
     type(collector_snapshot) :: snapshot
     character(len=:), allocatable :: focus
 
-    if (allocated(session%metrics)) then
-      if (session%metrics%initialized()) snapshot = session%metrics%snapshot()
+    if (session%paused) then
+      snapshot = session%last_snapshot
+    else if (allocated(session%metrics)) then
+      if (session%metrics%initialized()) then
+        snapshot = session%metrics%snapshot()
+        session%last_snapshot = snapshot
+      end if
     end if
     focus = focused_widget_name(session)
     if (session%layout_loaded) then
       call render_dashboard(session%current, snapshot, session%refresh_ms, session%frame_count, &
-                              session%status_text, session%layout, focus, session%zoomed, &
-                              layout_name=trim(session%layout_preset_name), render_fps=session%render_fps, &
-                              process_state=session%process_state, &
-                              network_state=session%network_state)
+                               session%status_text, session%layout, focus, session%zoomed, &
+                               layout_name=trim(session%layout_preset_name), render_fps=session%render_fps, &
+                               process_state=session%process_state, &
+                               network_state=session%network_state, paused=session%paused)
     else
       call render_dashboard(session%current, snapshot, session%refresh_ms, session%frame_count, &
-                              session%status_text, focused_widget=focus, zoomed=session%zoomed, &
-                              layout_name=trim(session%layout_preset_name), render_fps=session%render_fps, &
-                              process_state=session%process_state, &
-                              network_state=session%network_state)
+                               session%status_text, focused_widget=focus, zoomed=session%zoomed, &
+                               layout_name=trim(session%layout_preset_name), render_fps=session%render_fps, &
+                               process_state=session%process_state, &
+                               network_state=session%network_state, paused=session%paused)
     end if
     if (session%help_visible) call render_help_overlay(session%current, focus)
   end subroutine draw_frame
@@ -951,6 +959,10 @@ contains
     if (.not. allocated(event%key_name)) return
     if (handle_help_named_key(session, event%key_name)) return
     if (session%help_visible) return
+    if (event%key_name == FGOF_KEY_F7) then
+      call toggle_pause(session)
+      return
+    end if
     if (handle_process_named_key(session, event%key_name)) return
     if (handle_network_named_key(session, event%key_name)) return
     select case (event%key_name)
@@ -1058,13 +1070,29 @@ contains
     type(terminal_session), intent(inout) :: session
     type(collector_snapshot) :: snapshot
 
-    if (allocated(session%metrics)) then
-      if (session%metrics%initialized()) snapshot = session%metrics%snapshot()
+    if (.not. session%paused .and. allocated(session%metrics)) then
+      if (session%metrics%initialized()) then
+        snapshot = session%metrics%snapshot()
+        session%last_snapshot = snapshot
+      end if
     end if
     session%frame_count = session%frame_count + 1
     call system_clock(session%last_refresh_count)
     call set_status(session, "refresh")
   end subroutine force_refresh
+
+  subroutine toggle_pause(session)
+    type(terminal_session), intent(inout) :: session
+
+    session%paused = .not. session%paused
+    if (session%paused) then
+      call set_status(session, "Paused")
+    else
+      call set_status(session, "Resumed")
+      call mark_refresh(session)
+    end if
+    session%needs_full_render = .true.
+  end subroutine toggle_pause
 
   logical function handle_layout_preset_key(session, text) result(handled)
     type(terminal_session), intent(inout) :: session
