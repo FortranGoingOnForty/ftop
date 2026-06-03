@@ -178,6 +178,14 @@ contains
     filter_match = wait_for_string(filter_session, "history numeric", 2500)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not toggle process sparklines from F6"
 
+    if (.not. send_text(filter_session, "k")) error stop "failed to send old signal key as fuzzy text"
+    filter_match = wait_for_string(filter_session, "Find: k_", 2500)
+    if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "old process signal key did not start fuzzy search"
+
+    if (.not. send_text(filter_session, achar(27))) error stop "failed to clear old signal key fuzzy query"
+    filter_match = wait_for_string(filter_session, "history numeric", 2500)
+    if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not clear old signal key fuzzy query"
+
     if (.not. send_text(filter_session, achar(27) // "OQ")) error stop "failed to open process signal prompt"
     filter_match = wait_for_string(filter_session, "signal SIGTERM pid", 2500)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not open process signal prompt"
