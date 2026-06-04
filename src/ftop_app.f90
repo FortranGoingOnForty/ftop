@@ -200,8 +200,10 @@ module ftop_app
   public :: run_ftop
   public :: render_test_frame
   public :: process_batch_signal_status
+  public :: process_vim_navigation_delta
   public :: select_draw_snapshot
   public :: summarize_batch_signal_results
+  public :: vim_navigation_delta
 
 contains
 
@@ -1147,6 +1149,7 @@ contains
   logical function handle_process_printable_key(session, text) result(handled)
     type(terminal_session), intent(inout) :: session
     character(len=*), intent(in) :: text
+    integer :: navigation_delta
 
     handled = .false.
     if (.not. process_widget_focused(session)) return
@@ -1161,12 +1164,16 @@ contains
       call set_status(session, process_table_status(session%process_state))
       return
     end if
+    navigation_delta = process_vim_navigation_delta(text, session%process_state%fuzzy_query_length, &
+                                                    session%process_state%row_count)
     if (text == " ") then
       if (process_table_toggle_tag(session%process_state)) then
         continue
       end if
     else if (text == "U") then
       call process_table_clear_tags(session%process_state)
+    else if (navigation_delta /= 0) then
+      call process_table_select_delta(session%process_state, navigation_delta)
     else
       if (.not. ascii_alnum_text(text)) return
       call process_table_append_fuzzy_text(session%process_state, text)
@@ -1341,6 +1348,34 @@ contains
             (code >= iachar("a") .and. code <= iachar("z"))
   end function ascii_alnum_text
 
+  integer function process_vim_navigation_delta(text, fuzzy_query_length, row_count) result(delta)
+    character(len=*), intent(in) :: text
+    integer, intent(in) :: fuzzy_query_length
+    integer, intent(in) :: row_count
+
+    delta = 0
+    if (fuzzy_query_length > 0) return
+    delta = vim_navigation_delta(text, row_count)
+  end function process_vim_navigation_delta
+
+  integer function vim_navigation_delta(text, row_count) result(delta)
+    character(len=*), intent(in) :: text
+    integer, intent(in) :: row_count
+
+    select case (text)
+    case ("j")
+      delta = 1
+    case ("k")
+      delta = -1
+    case ("g")
+      delta = -max(0, row_count)
+    case ("G")
+      delta = max(0, row_count)
+    case default
+      delta = 0
+    end select
+  end function vim_navigation_delta
+
   logical function handle_network_printable_key(session, text) result(handled)
     type(terminal_session), intent(inout) :: session
     character(len=*), intent(in) :: text
@@ -1348,6 +1383,8 @@ contains
     handled = .false.
     if (.not. network_widget_focused(session)) return
     select case (text)
+    case ("j", "k", "g", "G")
+      call network_table_select_delta(session%network_state, vim_navigation_delta(text, session%network_state%row_count))
     case ("f")
       call network_table_cycle_state_filter(session%network_state)
     case ("s")

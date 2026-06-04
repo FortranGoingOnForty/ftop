@@ -1,9 +1,11 @@
 program test_app_batch_signal
   use ftop_app, only : process_batch_signal_status, select_draw_snapshot, summarize_batch_signal_results
+  use ftop_app, only : process_vim_navigation_delta, vim_navigation_delta
   use ftop_collector, only : collector_snapshot
   implicit none
 
   call test_pause_snapshot_selection()
+  call test_vim_navigation_deltas()
   call test_batch_signal_summary()
   call test_batch_signal_status_text()
 
@@ -26,6 +28,19 @@ contains
     call require(selected_snapshot%sample_count == 87, "unpaused draw should use current snapshot")
     call require(update_last_snapshot, "unpaused draw should refresh frozen snapshot cache")
   end subroutine test_pause_snapshot_selection
+
+  subroutine test_vim_navigation_deltas()
+    call require(process_vim_navigation_delta("j", 0, 10) == 1, "process j should move down without fuzzy")
+    call require(process_vim_navigation_delta("k", 0, 10) == -1, "process k should move up without fuzzy")
+    call require(process_vim_navigation_delta("g", 0, 10) == -10, "process g should jump to first without fuzzy")
+    call require(process_vim_navigation_delta("G", 0, 10) == 10, "process G should jump to last without fuzzy")
+    call require(process_vim_navigation_delta("j", 1, 10) == 0, "process j should go to fuzzy when fuzzy active")
+    call require(process_vim_navigation_delta("G", 1, 10) == 0, "process G should go to fuzzy when fuzzy active")
+    call require(vim_navigation_delta("j", 4) == 1, "network j should move down")
+    call require(vim_navigation_delta("k", 4) == -1, "network k should move up")
+    call require(vim_navigation_delta("g", 4) == -4, "network g should jump first")
+    call require(vim_navigation_delta("G", 4) == 4, "network G should jump last")
+  end subroutine test_vim_navigation_deltas
 
   subroutine test_batch_signal_summary()
     integer :: failed_count
