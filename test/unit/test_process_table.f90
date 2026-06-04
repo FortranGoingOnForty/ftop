@@ -51,6 +51,7 @@ program test_process_table
   dim_style = style_from_rgb(fg=COLOR_UI_DIM)
   call test_process_follow_state()
   call test_process_tag_state()
+  call test_process_tag_stress()
   bad_columns = [character(len=8) :: "pid", "bogus"]
   custom_columns = [character(len=8) :: "pid", "cpu", "mem", "command"]
 
@@ -429,6 +430,44 @@ contains
     call require(local_state%tag_count == 0, "clear tags should remove every tag")
   end subroutine test_process_tag_state
 
+  subroutine test_process_tag_stress()
+    integer, parameter :: STRESS_COUNT = 100
+    type(screen_buffer) :: local_buffer
+    type(process_table_state) :: local_state
+    type(collector_snapshot) :: snapshot
+    integer :: index_value
+    integer :: pid
+    integer(int64) :: start_time
+    logical :: tagged
+    logical :: valid_target
+
+    snapshot = stress_snapshot(STRESS_COUNT)
+    local_buffer = allocate_screen(100, 20)
+    local_state = process_table_state(tree_view=.false., selected_row=1)
+    call render_process_panel(local_buffer, widget_rect(1, 1, 100, 20), snapshot, border_style, title_style, dim_style, &
+                              local_state)
+
+    do index_value = 1, STRESS_COUNT
+      local_state%selected_row = index_value
+      call render_process_panel(local_buffer, widget_rect(1, 1, 100, 20), snapshot, border_style, title_style, dim_style, &
+                                local_state)
+      tagged = process_table_toggle_tag(local_state)
+      call require(tagged, "stress tag toggle should add each selected process")
+    end do
+    call require(local_state%tag_count == STRESS_COUNT, "stress tag toggle should tag 100 processes")
+    call require(process_table_begin_tag_signal(local_state, 15, "SIGTERM"), "stress tag signal should start")
+    call require(process_table_signal_target_count(local_state) == STRESS_COUNT, &
+                 "stress tag signal should target all tagged processes")
+    call process_table_signal_target_at(local_state, STRESS_COUNT, pid, start_time, valid_target)
+    call require(valid_target .and. pid == 1000 + STRESS_COUNT .and. start_time == int(STRESS_COUNT, int64), &
+                 "stress tag signal should enumerate final tagged target")
+    call process_table_cancel_signal(local_state)
+
+    snapshot%processes%items(STRESS_COUNT)%start_time = 9999_int64
+    call process_table_prune_tags(local_state, snapshot%processes)
+    call require(local_state%tag_count == STRESS_COUNT - 1, "stress prune should remove stale tagged process")
+  end subroutine test_process_tag_stress
+
   function fuzzy_scoring_table() result(table)
     type(process_table) :: table
 
@@ -515,6 +554,30 @@ contains
     snapshot%processes%items(2)%mem_history(1:6) = [100.0_real64, 80.0_real64, 60.0_real64, &
                                                     40.0_real64, 20.0_real64, 0.0_real64]
   end function sample_history_snapshot
+
+  function stress_snapshot(process_count) result(snapshot)
+    integer, intent(in) :: process_count
+    type(collector_snapshot) :: snapshot
+    integer :: index_value
+    character(len=32) :: scratch
+
+    snapshot%processes%valid = .true.
+    allocate(snapshot%processes%items(max(0, process_count)))
+    do index_value = 1, process_count
+      write(scratch, '(a,i0)') "stress-", index_value
+      snapshot%processes%items(index_value)%valid = .true.
+      snapshot%processes%items(index_value)%pid = 1000 + index_value
+      snapshot%processes%items(index_value)%uid = 1001
+      snapshot%processes%items(index_value)%user_valid = .true.
+      snapshot%processes%items(index_value)%user = "tester"
+      snapshot%processes%items(index_value)%name = trim(scratch)
+      snapshot%processes%items(index_value)%command = trim(scratch)
+      snapshot%processes%items(index_value)%state = "S"
+      snapshot%processes%items(index_value)%start_time = int(index_value, int64)
+      snapshot%processes%items(index_value)%priority = 20
+      snapshot%processes%items(index_value)%nice = 0
+    end do
+  end function stress_snapshot
 
   function row_text(buffer, row) result(text)
     type(screen_buffer), intent(in) :: buffer
