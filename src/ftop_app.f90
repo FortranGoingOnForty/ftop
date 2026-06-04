@@ -1399,8 +1399,11 @@ contains
     logical :: started
 
     signal_number = terminal_signal_number(FTOP_SIGNAL_TERM)
-    started = process_table_begin_tag_signal(session%process_state, signal_number, "SIGTERM", &
-                                            process_signal_requires_confirmation(signal_number))
+    if (session%process_state%tag_count <= 0) then
+      call begin_process_signal(session)
+      return
+    end if
+    started = process_table_begin_tag_signal(session%process_state, signal_number, "SIGTERM")
     if (started) then
       call set_status(session, process_table_signal_status(session%process_state))
     else
@@ -1478,6 +1481,8 @@ contains
     integer :: pid
     integer :: signal_number
     integer :: sent_count
+    integer :: failed_count
+    integer :: first_error_code
     integer :: target_count
     integer :: target_index
     integer(int64) :: start_time
@@ -1498,17 +1503,22 @@ contains
     target_count = process_table_signal_target_count(session%process_state)
     if (session%process_state%signal_tagged) then
       sent_count = 0
+      failed_count = 0
+      first_error_code = 0
       do target_index = 1, target_count
         call process_table_signal_target_at(session%process_state, target_index, pid, start_time, valid_target)
         if (.not. valid_target) cycle
         if (terminal_kill(pid, signal_number, error_code)) then
           sent_count = sent_count + 1
           call process_table_mark_signal_feedback(session%process_state, pid, start_time)
+        else
+          failed_count = failed_count + 1
+          if (first_error_code == 0) first_error_code = error_code
         end if
       end do
       call process_table_cancel_signal(session%process_state)
-      call set_status(session, "sent " // signal_name // " to " // integer_text(max(0, sent_count)) // "/" // &
-                      integer_text(max(0, target_count)) // " tagged")
+      if (sent_count > 0) call process_table_clear_tags(session%process_state)
+      call set_status(session, process_batch_signal_status(signal_name, sent_count, failed_count, first_error_code))
       return
     end if
 
@@ -1522,6 +1532,39 @@ contains
       call set_status(session, process_signal_error_status(pid, signal_name, error_code))
     end if
   end subroutine send_pending_process_signal
+
+  function process_batch_signal_status(signal_name, sent_count, failed_count, error_code) result(message)
+    character(len=*), intent(in) :: signal_name
+    integer, intent(in) :: sent_count
+    integer, intent(in) :: failed_count
+    integer, intent(in) :: error_code
+    character(len=:), allocatable :: message
+    integer :: total_count
+
+    total_count = max(0, sent_count) + max(0, failed_count)
+    if (failed_count <= 0) then
+      message = "sent " // signal_name // " to " // integer_text(total_count) // " processes"
+    else if (sent_count > 0) then
+      message = "sent " // signal_name // " to " // integer_text(max(0, sent_count)) // " processes (" // &
+                integer_text(max(0, failed_count)) // " failed: " // process_signal_error_label(error_code) // ")"
+    else
+      message = "failed to send " // signal_name // ": " // process_signal_error_label(error_code)
+    end if
+  end function process_batch_signal_status
+
+  function process_signal_error_label(error_code) result(label)
+    integer, intent(in) :: error_code
+    character(len=:), allocatable :: label
+
+    select case (error_code)
+    case (1)
+      label = "permission denied"
+    case (3)
+      label = "process not found"
+    case default
+      label = "errno=" // integer_text(error_code)
+    end select
+  end function process_signal_error_label
 
   function process_signal_error_status(pid, signal_name, error_code) result(message)
     integer, intent(in) :: pid

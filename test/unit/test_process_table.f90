@@ -413,8 +413,13 @@ contains
     call require(local_state%tag_count == 2, "tag toggle should support multiple tagged processes")
     call require(process_table_begin_tag_signal(local_state, 15, "SIGTERM"), "tag signal should start for tagged processes")
     call require(process_table_signal_target_count(local_state) == 2, "tag signal should target each tagged process")
-    call require(index(process_table_signal_status(local_state), "signal SIGTERM 2 tagged") > 0, &
+    call require(index(process_table_signal_status(local_state), "Send SIGTERM to 2 tagged?") > 0, &
                  "tag signal status should include tagged target count")
+    call require(local_state%signal_confirm_required .and. .not. local_state%signal_confirmed, &
+                 "tag signal should require confirmation")
+    call process_table_confirm_signal(local_state)
+    call require(index(process_table_signal_status(local_state), "confirmed enter to send") > 0, &
+                 "confirmed tag signal status should request final enter")
     call process_table_signal_target_at(local_state, 2, pid, start_time, valid_target)
     call require(valid_target .and. pid == 200 .and. start_time == 2000_int64, &
                  "tag signal target lookup should return tagged identity")

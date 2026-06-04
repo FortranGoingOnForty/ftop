@@ -1140,11 +1140,10 @@ contains
     started = process_table_set_signal(state, signal_number, signal_name, confirm_required)
   end function process_table_begin_signal
 
-  logical function process_table_begin_tag_signal(state, signal_number, signal_name, confirm_required) result(started)
+  logical function process_table_begin_tag_signal(state, signal_number, signal_name) result(started)
     type(process_table_state), intent(inout) :: state
     integer, intent(in) :: signal_number
     character(len=*), intent(in) :: signal_name
-    logical, intent(in), optional :: confirm_required
 
     started = .false.
     call normalize_tag_state(state)
@@ -1156,7 +1155,7 @@ contains
     state%signal_start_time = 0_int64
     state%signal_tagged = .true.
     call process_table_clear_signal_input(state)
-    started = process_table_set_signal(state, signal_number, signal_name, confirm_required)
+    started = process_table_set_signal(state, signal_number, signal_name, .true.)
   end function process_table_begin_tag_signal
 
   logical function process_table_set_signal(state, signal_number, signal_name, confirm_required) result(started)
@@ -1785,7 +1784,13 @@ contains
     character(len=:), allocatable :: text
 
     if (state%signal_pending) then
-      if (state%signal_confirm_required .and. .not. state%signal_confirmed) then
+      if (state%signal_tagged .and. state%signal_confirm_required .and. .not. state%signal_confirmed) then
+        text = "Send " // process_signal_name_text(state) // " to " // process_signal_target_text(state) // &
+               "? enter to confirm escape to cancel"
+      else if (state%signal_tagged .and. state%signal_confirm_required) then
+        text = "Send " // process_signal_name_text(state) // " to " // process_signal_target_text(state) // &
+               "? confirmed enter to send escape to cancel"
+      else if (state%signal_confirm_required .and. .not. state%signal_confirmed) then
         text = "signal " // process_signal_name_text(state) // " " // process_signal_target_text(state) // &
                " enter to confirm escape to cancel"
       else if (state%signal_confirm_required) then
