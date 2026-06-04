@@ -1,10 +1,12 @@
 program test_app_batch_signal
-  use ftop_app, only : process_batch_signal_status, select_draw_snapshot, summarize_batch_signal_results
+  use ftop_app, only : adjusted_refresh_ms, process_batch_signal_status, refresh_status_text, select_draw_snapshot
+  use ftop_app, only : summarize_batch_signal_results
   use ftop_app, only : process_vim_navigation_delta, vim_navigation_delta
   use ftop_collector, only : collector_snapshot
   implicit none
 
   call test_pause_snapshot_selection()
+  call test_refresh_adjustment()
   call test_vim_navigation_deltas()
   call test_batch_signal_summary()
   call test_batch_signal_status_text()
@@ -28,6 +30,15 @@ contains
     call require(selected_snapshot%sample_count == 87, "unpaused draw should use current snapshot")
     call require(update_last_snapshot, "unpaused draw should refresh frozen snapshot cache")
   end subroutine test_pause_snapshot_selection
+
+  subroutine test_refresh_adjustment()
+    call require(adjusted_refresh_ms(1000, -1) == 900, "plus should reduce refresh interval")
+    call require(adjusted_refresh_ms(1000, 1) == 1100, "minus should increase refresh interval")
+    call require(adjusted_refresh_ms(100, -1) == 100, "faster refresh should clamp to minimum")
+    call require(adjusted_refresh_ms(60000, 1) == 60000, "slower refresh should clamp to maximum")
+    call require(adjusted_refresh_ms(50, 0) == 100, "neutral refresh adjustment should clamp current value")
+    call require(refresh_status_text(900) == "refresh 900 ms", "refresh status should report milliseconds")
+  end subroutine test_refresh_adjustment
 
   subroutine test_vim_navigation_deltas()
     call require(process_vim_navigation_delta("j", 0, 10) == 1, "process j should move down without fuzzy")

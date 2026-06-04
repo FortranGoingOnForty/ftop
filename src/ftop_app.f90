@@ -199,7 +199,9 @@ module ftop_app
 
   public :: run_ftop
   public :: render_test_frame
+  public :: adjusted_refresh_ms
   public :: process_batch_signal_status
+  public :: refresh_status_text
   public :: process_vim_navigation_delta
   public :: select_draw_snapshot
   public :: summarize_batch_signal_results
@@ -971,6 +973,8 @@ contains
         continue
       else if (session%help_visible) then
         continue
+      else if (handle_refresh_printable_key(session, text)) then
+        continue
       else if (handle_global_printable_key(session, text)) then
         continue
       else if (handle_process_printable_key(session, text)) then
@@ -1129,6 +1133,50 @@ contains
     end if
     session%needs_full_render = .true.
   end subroutine toggle_pause
+
+  logical function handle_refresh_printable_key(session, text) result(handled)
+    type(terminal_session), intent(inout) :: session
+    character(len=*), intent(in) :: text
+    integer :: new_refresh_ms
+
+    handled = .false.
+    if (text_input_active(session)) return
+    select case (text)
+    case ("+", "=")
+      new_refresh_ms = adjusted_refresh_ms(session%refresh_ms, -1)
+    case ("-")
+      new_refresh_ms = adjusted_refresh_ms(session%refresh_ms, 1)
+    case default
+      return
+    end select
+
+    session%refresh_ms = new_refresh_ms
+    call system_clock(session%last_refresh_count)
+    call set_status(session, refresh_status_text(new_refresh_ms))
+    handled = .true.
+  end function handle_refresh_printable_key
+
+  integer function adjusted_refresh_ms(refresh_ms, direction) result(adjusted)
+    integer, intent(in) :: refresh_ms
+    integer, intent(in) :: direction
+    integer :: step_ms
+
+    step_ms = max(100, refresh_ms / 10)
+    if (direction < 0) then
+      adjusted = bounded_refresh_ms(refresh_ms - step_ms)
+    else if (direction > 0) then
+      adjusted = bounded_refresh_ms(refresh_ms + step_ms)
+    else
+      adjusted = bounded_refresh_ms(refresh_ms)
+    end if
+  end function adjusted_refresh_ms
+
+  function refresh_status_text(refresh_ms) result(text)
+    integer, intent(in) :: refresh_ms
+    character(len=:), allocatable :: text
+
+    text = "refresh " // integer_text(refresh_ms) // " ms"
+  end function refresh_status_text
 
   logical function handle_layout_preset_key(session, text) result(handled)
     type(terminal_session), intent(inout) :: session

@@ -40,7 +40,8 @@ contains
     call render_line(buffer, row, content_col, overlay%width - 4, "d/g: disk/GPU placeholder status", dim_style)
     call render_line(buffer, row, content_col, overlay%width - 4, "P: cycle layout   1-4: jump layouts", dim_style)
     call render_line(buffer, row, content_col, overlay%width - 4, "Tab: next focus   Shift+Tab: last focus", dim_style)
-    call render_line(buffer, row, content_col, overlay%width - 4, "z/Enter: zoom   Ctrl+L: redraw   Ctrl+R: refresh", dim_style)
+    call render_line(buffer, row, content_col, overlay%width - 4, "z/Enter: zoom   +/-: refresh rate", dim_style)
+    call render_line(buffer, row, content_col, overlay%width - 4, "Ctrl+L: redraw   Ctrl+R: refresh", dim_style)
 
     call render_section(buffer, row, content_col, overlay%width - 4, "Process", focused_widget == "process", focus_style, dim_style)
     call render_line(buffer, row, content_col, overlay%width - 4, "F2: signal   F3: tree   F4: filter   F9: signal tags", dim_style)
