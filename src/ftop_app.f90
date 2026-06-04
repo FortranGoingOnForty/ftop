@@ -199,6 +199,8 @@ module ftop_app
 
   public :: run_ftop
   public :: render_test_frame
+  public :: process_batch_signal_status
+  public :: summarize_batch_signal_results
 
 contains
 
@@ -1486,6 +1488,8 @@ contains
     integer :: target_count
     integer :: target_index
     integer(int64) :: start_time
+    integer, allocatable :: error_codes(:)
+    logical, allocatable :: signal_results(:)
     logical :: valid_target
 
     if (.not. session%process_state%signal_pending) return
@@ -1502,20 +1506,21 @@ contains
 
     target_count = process_table_signal_target_count(session%process_state)
     if (session%process_state%signal_tagged) then
-      sent_count = 0
-      failed_count = 0
-      first_error_code = 0
+      allocate(signal_results(max(0, target_count)))
+      allocate(error_codes(max(0, target_count)))
+      signal_results = .false.
+      error_codes = 0
       do target_index = 1, target_count
         call process_table_signal_target_at(session%process_state, target_index, pid, start_time, valid_target)
         if (.not. valid_target) cycle
         if (terminal_kill(pid, signal_number, error_code)) then
-          sent_count = sent_count + 1
+          signal_results(target_index) = .true.
           call process_table_mark_signal_feedback(session%process_state, pid, start_time)
         else
-          failed_count = failed_count + 1
-          if (first_error_code == 0) first_error_code = error_code
+          error_codes(target_index) = error_code
         end if
       end do
+      call summarize_batch_signal_results(signal_results, error_codes, sent_count, failed_count, first_error_code)
       call process_table_cancel_signal(session%process_state)
       if (sent_count > 0) call process_table_clear_tags(session%process_state)
       call set_status(session, process_batch_signal_status(signal_name, sent_count, failed_count, first_error_code))
@@ -1551,6 +1556,29 @@ contains
       message = "failed to send " // signal_name // ": " // process_signal_error_label(error_code)
     end if
   end function process_batch_signal_status
+
+  subroutine summarize_batch_signal_results(results, error_codes, sent_count, failed_count, first_error_code)
+    logical, intent(in) :: results(:)
+    integer, intent(in) :: error_codes(:)
+    integer, intent(out) :: sent_count
+    integer, intent(out) :: failed_count
+    integer, intent(out) :: first_error_code
+    integer :: index_value
+    integer :: limit
+
+    sent_count = 0
+    failed_count = 0
+    first_error_code = 0
+    limit = min(size(results), size(error_codes))
+    do index_value = 1, limit
+      if (results(index_value)) then
+        sent_count = sent_count + 1
+      else
+        failed_count = failed_count + 1
+        if (first_error_code == 0) first_error_code = error_codes(index_value)
+      end if
+    end do
+  end subroutine summarize_batch_signal_results
 
   function process_signal_error_label(error_code) result(label)
     integer, intent(in) :: error_code
