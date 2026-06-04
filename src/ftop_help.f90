@@ -43,7 +43,7 @@ contains
     call render_line(buffer, row, content_col, overlay%width - 4, "z/Enter: zoom   Ctrl+L: redraw   Ctrl+R: refresh", dim_style)
 
     call render_section(buffer, row, content_col, overlay%width - 4, "Process", focused_widget == "process", focus_style, dim_style)
-    call render_line(buffer, row, content_col, overlay%width - 4, "F2: signal   F3: tree   F4: filter", dim_style)
+    call render_line(buffer, row, content_col, overlay%width - 4, "F2: signal   F3: tree   F4: filter   F9: signal tags", dim_style)
     call render_line(buffer, row, content_col, overlay%width - 4, &
                      "F5: sort direction   F6: sparklines", dim_style)
     call render_line(buffer, row, content_col, overlay%width - 4, &

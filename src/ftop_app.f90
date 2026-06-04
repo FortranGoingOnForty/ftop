@@ -1,5 +1,5 @@
 module ftop_app
-  use, intrinsic :: iso_fortran_env, only : error_unit
+  use, intrinsic :: iso_fortran_env, only : error_unit, int64
   use fgof_keys, only : &
     buffer_input, &
     clear_decoder_state, &
@@ -21,6 +21,7 @@ module ftop_app
     FGOF_KEY_F6, &
     FGOF_KEY_F7, &
     FGOF_KEY_F8, &
+    FGOF_KEY_F9, &
     FGOF_KEY_HOME, &
     FGOF_KEY_LEFT, &
     FGOF_KEY_PAGEDOWN, &
@@ -66,6 +67,7 @@ module ftop_app
     process_table_append_signal_digit, &
     process_table_begin_filter, &
     process_table_begin_signal, &
+    process_table_begin_tag_signal, &
     process_table_cancel_signal, &
     process_table_clear_filter, &
     process_table_clear_fuzzy, &
@@ -88,6 +90,8 @@ module ftop_app
     process_table_select_delta, &
     process_table_set_columns, &
     process_table_set_signal, &
+    process_table_signal_target_at, &
+    process_table_signal_target_count, &
     process_table_step_fuzzy_match, &
     process_table_signal_status, &
     process_table_sort_at, &
@@ -1274,6 +1278,10 @@ contains
       call process_table_toggle_metric_sparklines(session%process_state)
     case (FGOF_KEY_F8)
       call toggle_process_follow(session)
+    case (FGOF_KEY_F9)
+      call begin_tagged_process_signal(session)
+      handled = .true.
+      return
     case default
       return
     end select
@@ -1385,6 +1393,21 @@ contains
     end if
   end subroutine begin_process_signal
 
+  subroutine begin_tagged_process_signal(session)
+    type(terminal_session), intent(inout) :: session
+    integer :: signal_number
+    logical :: started
+
+    signal_number = terminal_signal_number(FTOP_SIGNAL_TERM)
+    started = process_table_begin_tag_signal(session%process_state, signal_number, "SIGTERM", &
+                                            process_signal_requires_confirmation(signal_number))
+    if (started) then
+      call set_status(session, process_table_signal_status(session%process_state))
+    else
+      call set_status(session, "no tagged processes")
+    end if
+  end subroutine begin_tagged_process_signal
+
   subroutine handle_process_signal_text(session, text)
     type(terminal_session), intent(inout) :: session
     character(len=*), intent(in) :: text
@@ -1454,6 +1477,11 @@ contains
     integer :: error_code
     integer :: pid
     integer :: signal_number
+    integer :: sent_count
+    integer :: target_count
+    integer :: target_index
+    integer(int64) :: start_time
+    logical :: valid_target
 
     if (.not. session%process_state%signal_pending) return
     if (session%process_state%signal_confirm_required .and. .not. session%process_state%signal_confirmed) then
@@ -1466,6 +1494,23 @@ contains
     signal_number = session%process_state%signal_number
     signal_name = trim(session%process_state%signal_name)
     if (len(signal_name) <= 0) signal_name = "signal " // integer_text(max(0, signal_number))
+
+    target_count = process_table_signal_target_count(session%process_state)
+    if (session%process_state%signal_tagged) then
+      sent_count = 0
+      do target_index = 1, target_count
+        call process_table_signal_target_at(session%process_state, target_index, pid, start_time, valid_target)
+        if (.not. valid_target) cycle
+        if (terminal_kill(pid, signal_number, error_code)) then
+          sent_count = sent_count + 1
+          call process_table_mark_signal_feedback(session%process_state, pid, start_time)
+        end if
+      end do
+      call process_table_cancel_signal(session%process_state)
+      call set_status(session, "sent " // signal_name // " to " // integer_text(max(0, sent_count)) // "/" // &
+                      integer_text(max(0, target_count)) // " tagged")
+      return
+    end if
 
     if (terminal_kill(pid, signal_number, error_code)) then
       call process_table_mark_signal_feedback(session%process_state, pid, session%process_state%signal_start_time)

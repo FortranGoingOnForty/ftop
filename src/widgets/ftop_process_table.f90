@@ -123,6 +123,7 @@ module ftop_process_table
     logical :: signal_pending = .false.
     integer :: signal_pid = 0
     integer(int64) :: signal_start_time = 0_int64
+    logical :: signal_tagged = .false.
     integer :: signal_number = 0
     character(len=PROCESS_SIGNAL_NAME_LEN) :: signal_name = ""
     logical :: signal_confirm_required = .false.
@@ -153,6 +154,7 @@ module ftop_process_table
   public :: process_panel_min_size
   public :: process_table_append_filter_text
   public :: process_table_begin_signal
+  public :: process_table_begin_tag_signal
   public :: process_table_begin_filter
   public :: process_table_cancel_signal
   public :: process_table_clear_filter
@@ -174,6 +176,8 @@ module ftop_process_table
   public :: process_table_select_at
   public :: process_table_select_delta
   public :: process_table_set_signal
+  public :: process_table_signal_target_at
+  public :: process_table_signal_target_count
   public :: process_table_set_columns
   public :: process_table_step_fuzzy_match
   public :: process_table_signal_status
@@ -1131,9 +1135,29 @@ contains
     state%signal_pending = .true.
     state%signal_pid = state%selected_pid
     state%signal_start_time = state%selected_start_time
+    state%signal_tagged = .false.
     call process_table_clear_signal_input(state)
     started = process_table_set_signal(state, signal_number, signal_name, confirm_required)
   end function process_table_begin_signal
+
+  logical function process_table_begin_tag_signal(state, signal_number, signal_name, confirm_required) result(started)
+    type(process_table_state), intent(inout) :: state
+    integer, intent(in) :: signal_number
+    character(len=*), intent(in) :: signal_name
+    logical, intent(in), optional :: confirm_required
+
+    started = .false.
+    call normalize_tag_state(state)
+    if (state%tag_count <= 0) return
+    if (signal_number <= 0) return
+
+    state%signal_pending = .true.
+    state%signal_pid = 0
+    state%signal_start_time = 0_int64
+    state%signal_tagged = .true.
+    call process_table_clear_signal_input(state)
+    started = process_table_set_signal(state, signal_number, signal_name, confirm_required)
+  end function process_table_begin_tag_signal
 
   logical function process_table_set_signal(state, signal_number, signal_name, confirm_required) result(started)
     type(process_table_state), intent(inout) :: state
@@ -1210,6 +1234,7 @@ contains
     state%signal_pending = .false.
     state%signal_pid = 0
     state%signal_start_time = 0_int64
+    state%signal_tagged = .false.
     state%signal_number = 0
     state%signal_name = ""
     state%signal_confirm_required = .false.
@@ -1439,6 +1464,42 @@ contains
 
     tagged = process_table_tag_index(state, pid, start_time) > 0
   end function process_table_process_tagged
+
+  integer function process_table_signal_target_count(state) result(count)
+    type(process_table_state), intent(in) :: state
+
+    if (state%signal_tagged) then
+      count = max(0, state%tag_count)
+    else if (state%signal_pending .and. state%signal_pid > 0) then
+      count = 1
+    else
+      count = 0
+    end if
+  end function process_table_signal_target_count
+
+  subroutine process_table_signal_target_at(state, target_index, pid, start_time, valid)
+    type(process_table_state), intent(in) :: state
+    integer, intent(in) :: target_index
+    integer, intent(out) :: pid
+    integer(int64), intent(out) :: start_time
+    logical, intent(out) :: valid
+
+    pid = 0
+    start_time = 0_int64
+    valid = .false.
+    if (target_index < 1) return
+    if (state%signal_tagged) then
+      if (.not. allocated(state%tags)) return
+      if (target_index > max(0, min(state%tag_count, size(state%tags)))) return
+      pid = state%tags(target_index)%pid
+      start_time = state%tags(target_index)%start_time
+    else
+      if (target_index /= 1) return
+      pid = state%signal_pid
+      start_time = state%signal_start_time
+    end if
+    valid = pid > 0
+  end subroutine process_table_signal_target_at
 
   subroutine process_table_add_tag(state, pid, start_time)
     type(process_table_state), intent(inout) :: state
@@ -1725,19 +1786,30 @@ contains
 
     if (state%signal_pending) then
       if (state%signal_confirm_required .and. .not. state%signal_confirmed) then
-        text = "signal " // process_signal_name_text(state) // " pid " // integer_text(max(0, state%signal_pid)) // &
+        text = "signal " // process_signal_name_text(state) // " " // process_signal_target_text(state) // &
                " enter to confirm escape to cancel"
       else if (state%signal_confirm_required) then
-        text = "signal " // process_signal_name_text(state) // " pid " // integer_text(max(0, state%signal_pid)) // &
+        text = "signal " // process_signal_name_text(state) // " " // process_signal_target_text(state) // &
                " confirmed enter to send escape to cancel"
       else
-        text = "signal " // process_signal_name_text(state) // " pid " // integer_text(max(0, state%signal_pid)) // &
+        text = "signal " // process_signal_name_text(state) // " " // process_signal_target_text(state) // &
                " enter to send arrows cycle number to set escape to cancel"
       end if
     else
       text = "signal inactive"
     end if
   end function process_table_signal_status
+
+  function process_signal_target_text(state) result(text)
+    type(process_table_state), intent(in) :: state
+    character(len=:), allocatable :: text
+
+    if (state%signal_tagged) then
+      text = integer_text(max(0, state%tag_count)) // " tagged"
+    else
+      text = "pid " // integer_text(max(0, state%signal_pid))
+    end if
+  end function process_signal_target_text
 
   function process_table_sort_key_label(state) result(label)
     type(process_table_state), intent(in) :: state

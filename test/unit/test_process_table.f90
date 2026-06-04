@@ -6,7 +6,8 @@ program test_process_table
   use ftop_color, only : COLOR_UI_ACCENT, COLOR_UI_BORDER, COLOR_UI_DIM, COLOR_UI_PANEL, style_from_rgb
   use ftop_proc_data, only : PROCESS_SORT_COMMAND, PROCESS_SORT_CPU, PROCESS_SORT_USER, process_info, process_table
   use ftop_process_table, only : process_table_append_filter_text, process_table_begin_filter, &
-                                  process_table_begin_signal, process_table_cancel_signal, process_table_clear_filter, &
+                                  process_table_begin_signal, process_table_begin_tag_signal, &
+                                  process_table_cancel_signal, process_table_clear_filter, &
                                   process_table_append_fuzzy_text, process_table_clear_fuzzy, &
                                   process_table_clear_tags, &
                                   process_table_cycle_sort_key, &
@@ -19,6 +20,7 @@ program test_process_table
                                   process_table_select_at, process_table_select_delta, &
                                   process_table_set_columns, &
                                   process_table_set_signal, process_table_signal_status, &
+                                  process_table_signal_target_at, process_table_signal_target_count, &
                                   process_table_sort_at, process_table_step_fuzzy_match, &
                                   process_table_state, &
                                   process_table_status, &
@@ -367,6 +369,9 @@ contains
     type(process_table_state) :: local_state
     type(collector_snapshot) :: snapshot
     logical :: tagged
+    integer :: pid
+    integer(int64) :: start_time
+    logical :: valid_target
 
     snapshot = sample_snapshot()
     local_buffer = allocate_screen(80, 10)
@@ -401,6 +406,20 @@ contains
     local_state%selected_row = 1
     call render_process_panel(local_buffer, widget_rect(1, 1, 80, 10), snapshot, border_style, title_style, dim_style, local_state)
     tagged = process_table_toggle_tag(local_state)
+    local_state%selected_row = 2
+    call render_process_panel(local_buffer, widget_rect(1, 1, 80, 10), snapshot, border_style, title_style, dim_style, &
+                              local_state)
+    tagged = process_table_toggle_tag(local_state)
+    call require(local_state%tag_count == 2, "tag toggle should support multiple tagged processes")
+    call require(process_table_begin_tag_signal(local_state, 15, "SIGTERM"), "tag signal should start for tagged processes")
+    call require(process_table_signal_target_count(local_state) == 2, "tag signal should target each tagged process")
+    call require(index(process_table_signal_status(local_state), "signal SIGTERM 2 tagged") > 0, &
+                 "tag signal status should include tagged target count")
+    call process_table_signal_target_at(local_state, 2, pid, start_time, valid_target)
+    call require(valid_target .and. pid == 200 .and. start_time == 2000_int64, &
+                 "tag signal target lookup should return tagged identity")
+    call process_table_cancel_signal(local_state)
+
     call process_table_clear_tags(local_state)
     call require(local_state%tag_count == 0, "clear tags should remove every tag")
   end subroutine test_process_tag_state

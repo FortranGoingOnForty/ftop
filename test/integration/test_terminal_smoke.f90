@@ -194,6 +194,12 @@ contains
     if (.not. send_text(filter_session, " ")) error stop "failed to tag selected process"
     filter_match = wait_for_string(filter_session, "1 tagged", 2500)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not tag selected process"
+    if (.not. send_text(filter_session, achar(27) // "[20~")) error stop "failed to send process F9"
+    filter_match = wait_for_string(filter_session, "signal SIGTERM 1 tagged", 2500)
+    if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not open tagged process signal prompt"
+    if (.not. send_text(filter_session, achar(27) // achar(27))) error stop "failed to cancel tagged process signal prompt"
+    filter_match = wait_for_string(filter_session, "cancelled", 2500)
+    if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not cancel tagged process signal prompt"
     if (.not. send_text(filter_session, "U")) error stop "failed to clear process tags"
     filter_match = wait_for_string(filter_session, "history numeric", 2500)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not clear process tags"
