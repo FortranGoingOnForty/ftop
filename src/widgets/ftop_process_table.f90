@@ -96,6 +96,11 @@ module ftop_process_table
   integer, parameter :: PROCESS_SIGNAL_INPUT_LEN = 4
   integer, parameter, public :: PROCESS_FUZZY_QUERY_LEN = 64
 
+  type :: tagged_process
+    integer :: pid = 0
+    integer(int64) :: start_time = 0_int64
+  end type tagged_process
+
   type, public :: process_table_state
     integer :: selected_row = 1
     integer :: scroll_row = 1
@@ -139,6 +144,8 @@ module ftop_process_table
     integer :: fuzzy_step_direction = 0
     logical :: metric_sparklines = .true.
     logical :: tree_view = .true.
+    type(tagged_process), allocatable :: tags(:)
+    integer :: tag_count = 0
     integer :: column_count = PROCESS_TABLE_COLUMNS
     integer :: column_ids(PROCESS_TABLE_COLUMNS) = DEFAULT_PROCESS_COLUMN_IDS
   end type process_table_state
@@ -178,9 +185,13 @@ module ftop_process_table
   public :: process_table_finish_filter
   public :: process_table_toggle_metric_sparklines
   public :: process_table_toggle_follow
+  public :: process_table_toggle_tag
   public :: process_table_toggle_selected_node
   public :: process_table_toggle_sort_direction
   public :: process_table_toggle_tree
+  public :: process_table_clear_tags
+  public :: process_table_prune_tags
+  public :: process_table_process_tagged
   public :: process_fuzzy_best_match
   public :: process_fuzzy_next_match
   public :: render_process_panel
@@ -248,6 +259,7 @@ contains
     columns = process_columns(active_state)
     sorted_processes = snapshot%processes
     active_state%total_row_count = count_valid_processes(sorted_processes)
+    call process_table_prune_tags(active_state, sorted_processes)
     call prune_collapsed_nodes(active_state, sorted_processes)
     call prune_signal_feedback_state(active_state, sorted_processes)
     call sort_process_table(sorted_processes, active_state%sort_key, &
@@ -342,7 +354,13 @@ contains
     column_count = process_table_column_count(state)
     allocate(columns(column_count))
     do column_index = 1, column_count
-      call process_column_definition(process_table_column_id(state, column_index), columns(column_index))
+      if (process_table_tags_visible(state) .and. column_index == 1) then
+        columns(column_index)%name = ""
+        columns(column_index)%width_mode = TABLE_WIDTH_FIXED
+        columns(column_index)%width = 1
+      else
+        call process_column_definition(process_table_column_id(state, column_index), columns(column_index))
+      end if
     end do
     call mark_sort_column(columns, state)
   end function process_columns
@@ -745,6 +763,15 @@ contains
     integer, intent(in) :: column_index
     type(screen_style), intent(in), optional :: row_style
     type(table_cell) :: cell
+
+    if (process_table_tags_visible(state) .and. column_index == 1) then
+      if (process_table_process_tagged(state, process%pid, process%start_time)) then
+        cell = process_cell("*", row_style)
+      else
+        cell = process_cell("", row_style)
+      end if
+      return
+    end if
 
     select case (process_table_column_id(state, column_index))
     case (PROCESS_COLUMN_USER)
@@ -1365,6 +1392,103 @@ contains
     following = state%following
   end function process_table_toggle_follow
 
+  logical function process_table_toggle_tag(state) result(tagged)
+    type(process_table_state), intent(inout) :: state
+    integer :: tag_index
+
+    tagged = .false.
+    if (state%selected_pid <= 0) return
+    call normalize_tag_state(state)
+    tag_index = process_table_tag_index(state, state%selected_pid, state%selected_start_time)
+    if (tag_index > 0) then
+      call process_table_remove_tag_at(state, tag_index)
+    else
+      call process_table_add_tag(state, state%selected_pid, state%selected_start_time)
+      tagged = .true.
+    end if
+    call process_table_select_delta(state, 1)
+  end function process_table_toggle_tag
+
+  subroutine process_table_clear_tags(state)
+    type(process_table_state), intent(inout) :: state
+
+    if (allocated(state%tags)) deallocate(state%tags)
+    state%tag_count = 0
+  end subroutine process_table_clear_tags
+
+  subroutine process_table_prune_tags(state, table)
+    type(process_table_state), intent(inout) :: state
+    type(process_table), intent(in) :: table
+    integer :: tag_index
+
+    call normalize_tag_state(state)
+    tag_index = 1
+    do while (tag_index <= state%tag_count)
+      if (process_identity_exists(table, state%tags(tag_index)%pid, state%tags(tag_index)%start_time)) then
+        tag_index = tag_index + 1
+      else
+        call process_table_remove_tag_at(state, tag_index)
+      end if
+    end do
+  end subroutine process_table_prune_tags
+
+  logical function process_table_process_tagged(state, pid, start_time) result(tagged)
+    type(process_table_state), intent(in) :: state
+    integer, intent(in) :: pid
+    integer(int64), intent(in) :: start_time
+
+    tagged = process_table_tag_index(state, pid, start_time) > 0
+  end function process_table_process_tagged
+
+  subroutine process_table_add_tag(state, pid, start_time)
+    type(process_table_state), intent(inout) :: state
+    integer, intent(in) :: pid
+    integer(int64), intent(in) :: start_time
+    type(tagged_process), allocatable :: updated(:)
+
+    call normalize_tag_state(state)
+    allocate(updated(state%tag_count + 1))
+    if (state%tag_count > 0) updated(:state%tag_count) = state%tags(:state%tag_count)
+    updated(state%tag_count + 1)%pid = pid
+    updated(state%tag_count + 1)%start_time = start_time
+    call move_alloc(updated, state%tags)
+    state%tag_count = state%tag_count + 1
+  end subroutine process_table_add_tag
+
+  subroutine process_table_remove_tag_at(state, tag_index)
+    type(process_table_state), intent(inout) :: state
+    integer, intent(in) :: tag_index
+    type(tagged_process), allocatable :: updated(:)
+
+    call normalize_tag_state(state)
+    if (tag_index < 1 .or. tag_index > state%tag_count) return
+    if (state%tag_count <= 1) then
+      call process_table_clear_tags(state)
+      return
+    end if
+    allocate(updated(state%tag_count - 1))
+    if (tag_index > 1) updated(:tag_index - 1) = state%tags(:tag_index - 1)
+    if (tag_index < state%tag_count) updated(tag_index:) = state%tags(tag_index + 1:state%tag_count)
+    call move_alloc(updated, state%tags)
+    state%tag_count = state%tag_count - 1
+  end subroutine process_table_remove_tag_at
+
+  integer function process_table_tag_index(state, pid, start_time) result(tag_index)
+    type(process_table_state), intent(in) :: state
+    integer, intent(in) :: pid
+    integer(int64), intent(in) :: start_time
+    integer :: candidate
+
+    tag_index = 0
+    if (.not. allocated(state%tags)) return
+    do candidate = 1, max(0, min(state%tag_count, size(state%tags)))
+      if (process_identity_matches(state%tags(candidate)%pid, state%tags(candidate)%start_time, pid, start_time)) then
+        tag_index = candidate
+        return
+      end if
+    end do
+  end function process_table_tag_index
+
   subroutine process_table_step_fuzzy_match(state, direction)
     type(process_table_state), intent(inout) :: state
     integer, intent(in) :: direction
@@ -1461,6 +1585,7 @@ contains
     else if (state%follow_exited) then
       text = text // " process " // integer_text(max(0, state%follow_pid)) // " exited"
     end if
+    if (state%tag_count > 0) text = text // " " // integer_text(max(0, state%tag_count)) // " tagged"
     if (state%signal_pending) text = text // " " // process_table_signal_status(state)
     if (process_table_filter_visible(state)) then
       text = text // " filter " // process_table_filter_text(state) // " showing " // &
@@ -1723,22 +1848,29 @@ contains
 
     count = state%column_count
     if (count < 1 .or. count > PROCESS_TABLE_COLUMNS) count = PROCESS_TABLE_COLUMNS
+    if (process_table_tags_visible(state)) count = count + 1
   end function process_table_column_count
 
   integer function process_table_column_id(state, column_index) result(column_id)
     type(process_table_state), intent(in) :: state
     integer, intent(in) :: column_index
     integer :: count
+    integer :: source_index
 
     column_id = 0
     count = process_table_column_count(state)
     if (column_index < 1 .or. column_index > count) return
+    source_index = column_index
+    if (process_table_tags_visible(state)) then
+      if (column_index == 1) return
+      source_index = column_index - 1
+    end if
 
     if (state%column_count >= 1 .and. state%column_count <= PROCESS_TABLE_COLUMNS) then
-      column_id = state%column_ids(column_index)
+      column_id = state%column_ids(source_index)
       if (valid_process_column_id(column_id)) return
     end if
-    column_id = DEFAULT_PROCESS_COLUMN_IDS(column_index)
+    column_id = DEFAULT_PROCESS_COLUMN_IDS(source_index)
   end function process_table_column_id
 
   integer function process_column_sort_key(column_id) result(sort_key)
@@ -1820,6 +1952,7 @@ contains
     call normalize_process_columns(state)
     call normalize_filter_state(state)
     call normalize_fuzzy_state(state)
+    call normalize_tag_state(state)
     call normalize_collapsed_state(state)
     if (state%sort_direction /= TABLE_SORT_DESCENDING) state%sort_direction = TABLE_SORT_ASCENDING
     if (state%row_count <= 0) then
@@ -1855,6 +1988,17 @@ contains
       state%fuzzy_step_direction = 0
     end if
   end subroutine normalize_fuzzy_state
+
+  subroutine normalize_tag_state(state)
+    type(process_table_state), intent(inout) :: state
+
+    if (.not. allocated(state%tags)) then
+      state%tag_count = 0
+      return
+    end if
+    state%tag_count = max(0, min(state%tag_count, size(state%tags)))
+    if (state%tag_count == 0) call process_table_clear_tags(state)
+  end subroutine normalize_tag_state
 
   integer function process_sort_key_for_column(state, column) result(sort_key)
     type(process_table_state), intent(in) :: state
@@ -1998,6 +2142,12 @@ contains
 
     visible = state%fuzzy_query_length > 0
   end function process_table_fuzzy_visible
+
+  logical function process_table_tags_visible(state) result(visible)
+    type(process_table_state), intent(in) :: state
+
+    visible = state%tag_count > 0
+  end function process_table_tags_visible
 
   logical function process_table_input_bar_visible(state) result(visible)
     type(process_table_state), intent(in) :: state

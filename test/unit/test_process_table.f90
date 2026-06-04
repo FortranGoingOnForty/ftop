@@ -8,6 +8,7 @@ program test_process_table
   use ftop_process_table, only : process_table_append_filter_text, process_table_begin_filter, &
                                   process_table_begin_signal, process_table_cancel_signal, process_table_clear_filter, &
                                   process_table_append_fuzzy_text, process_table_clear_fuzzy, &
+                                  process_table_clear_tags, &
                                   process_table_cycle_sort_key, &
                                   process_table_delete_filter_char, process_table_delete_filter_right, &
                                   process_table_delete_fuzzy_char, &
@@ -22,7 +23,8 @@ program test_process_table
                                   process_table_state, &
                                   process_table_status, &
                                   process_fuzzy_best_match, process_fuzzy_next_match, &
-                                  process_table_toggle_metric_sparklines, process_table_toggle_follow, &
+                                  process_table_process_tagged, process_table_prune_tags, &
+                                  process_table_toggle_metric_sparklines, process_table_toggle_follow, process_table_toggle_tag, &
                                  process_table_toggle_selected_node, process_table_toggle_sort_direction, render_process_panel
   use ftop_table, only : TABLE_SORT_ASCENDING, TABLE_SORT_DESCENDING
   use ftop_widgets, only : widget_rect
@@ -46,6 +48,7 @@ program test_process_table
   title_style = style_from_rgb(fg=COLOR_UI_ACCENT, bg=COLOR_UI_PANEL, bold=.true.)
   dim_style = style_from_rgb(fg=COLOR_UI_DIM)
   call test_process_follow_state()
+  call test_process_tag_state()
   bad_columns = [character(len=8) :: "pid", "bogus"]
   custom_columns = [character(len=8) :: "pid", "cpu", "mem", "command"]
 
@@ -358,6 +361,49 @@ contains
     call require(.not. local_state%following .and. local_state%follow_exited, "follow should disable when process exits")
     call require(index(process_table_status(local_state), "process 200 exited") > 0, "follow status should report exited process")
   end subroutine test_process_follow_state
+
+  subroutine test_process_tag_state()
+    type(screen_buffer) :: local_buffer
+    type(process_table_state) :: local_state
+    type(collector_snapshot) :: snapshot
+    logical :: tagged
+
+    snapshot = sample_snapshot()
+    local_buffer = allocate_screen(80, 10)
+    local_state = process_table_state(tree_view=.false., selected_row=1)
+    call render_process_panel(local_buffer, widget_rect(1, 1, 80, 10), snapshot, border_style, title_style, dim_style, local_state)
+
+    tagged = process_table_toggle_tag(local_state)
+    call require(tagged, "tag toggle should add selected process tag")
+    call require(local_state%tag_count == 1, "tag toggle should increment tag count")
+    call require(process_table_process_tagged(local_state, 100, 1000_int64), "tagged process should be found by identity")
+    call require(local_state%selected_row == 2, "tag toggle should move selection down")
+    call require(index(process_table_status(local_state), "1 tagged") > 0, "process status should include tag count")
+
+    local_buffer = allocate_screen(80, 10)
+    call render_process_panel(local_buffer, widget_rect(1, 1, 80, 10), snapshot, border_style, title_style, dim_style, local_state)
+    call require(index(row_text(local_buffer, 3), "*") > 0, "process table should render tag marker column")
+
+    local_state%selected_row = 1
+    call render_process_panel(local_buffer, widget_rect(1, 1, 80, 10), snapshot, border_style, title_style, dim_style, local_state)
+    tagged = process_table_toggle_tag(local_state)
+    call require(.not. tagged, "tag toggle should remove an existing selected process tag")
+    call require(local_state%tag_count == 0, "untag should decrement tag count")
+
+    local_state%selected_row = 1
+    call render_process_panel(local_buffer, widget_rect(1, 1, 80, 10), snapshot, border_style, title_style, dim_style, local_state)
+    tagged = process_table_toggle_tag(local_state)
+    snapshot%processes%items(1)%start_time = 9999_int64
+    call process_table_prune_tags(local_state, snapshot%processes)
+    call require(local_state%tag_count == 0, "tag pruning should remove stale PID reuse identities")
+
+    snapshot = sample_snapshot()
+    local_state%selected_row = 1
+    call render_process_panel(local_buffer, widget_rect(1, 1, 80, 10), snapshot, border_style, title_style, dim_style, local_state)
+    tagged = process_table_toggle_tag(local_state)
+    call process_table_clear_tags(local_state)
+    call require(local_state%tag_count == 0, "clear tags should remove every tag")
+  end subroutine test_process_tag_state
 
   function fuzzy_scoring_table() result(table)
     type(process_table) :: table

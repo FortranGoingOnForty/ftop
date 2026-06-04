@@ -70,6 +70,7 @@ module ftop_app
     process_table_clear_filter, &
     process_table_clear_fuzzy, &
     process_table_clear_signal_input, &
+    process_table_clear_tags, &
     process_table_confirm_signal, &
     process_table_cycle_sort_key, &
     process_table_delete_filter_char, &
@@ -94,6 +95,7 @@ module ftop_app
     process_table_status, &
     process_table_toggle_metric_sparklines, &
     process_table_toggle_follow, &
+    process_table_toggle_tag, &
     process_table_toggle_selected_node, &
     process_table_toggle_sort_direction, &
     process_table_toggle_tree
@@ -1129,8 +1131,16 @@ contains
       call set_status(session, process_table_status(session%process_state))
       return
     end if
-    if (.not. ascii_alnum_text(text)) return
-    call process_table_append_fuzzy_text(session%process_state, text)
+    if (text == " ") then
+      if (process_table_toggle_tag(session%process_state)) then
+        continue
+      end if
+    else if (text == "U") then
+      call process_table_clear_tags(session%process_state)
+    else
+      if (.not. ascii_alnum_text(text)) return
+      call process_table_append_fuzzy_text(session%process_state, text)
+    end if
     handled = .true.
     call set_status(session, process_table_status(session%process_state))
   end function handle_process_printable_key

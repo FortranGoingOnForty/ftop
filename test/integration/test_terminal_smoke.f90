@@ -191,6 +191,13 @@ contains
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not follow selected process from F8"
     if (.not. send_text(filter_session, achar(27) // "[19~")) error stop "failed to disable process follow"
 
+    if (.not. send_text(filter_session, " ")) error stop "failed to tag selected process"
+    filter_match = wait_for_string(filter_session, "1 tagged", 2500)
+    if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not tag selected process"
+    if (.not. send_text(filter_session, "U")) error stop "failed to clear process tags"
+    filter_match = wait_for_string(filter_session, "history numeric", 2500)
+    if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not clear process tags"
+
     if (.not. send_text(filter_session, "k")) error stop "failed to send old signal key as fuzzy text"
     filter_match = wait_for_string(filter_session, "Find: k_", 2500)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "old process signal key did not start fuzzy search"
