@@ -200,6 +200,7 @@ module ftop_app
   public :: run_ftop
   public :: render_test_frame
   public :: process_batch_signal_status
+  public :: select_draw_snapshot
   public :: summarize_batch_signal_results
 
 contains
@@ -344,15 +345,23 @@ contains
   subroutine draw_frame(session)
     type(terminal_session), intent(inout) :: session
     type(collector_snapshot) :: snapshot
+    type(collector_snapshot) :: current_snapshot
     character(len=:), allocatable :: focus
+    logical :: has_current_snapshot
+    logical :: update_last_snapshot
 
+    has_current_snapshot = .false.
     if (session%paused) then
       snapshot = session%last_snapshot
     else if (allocated(session%metrics)) then
       if (session%metrics%initialized()) then
-        snapshot = session%metrics%snapshot()
-        session%last_snapshot = snapshot
+        current_snapshot = session%metrics%snapshot()
+        has_current_snapshot = .true.
       end if
+    end if
+    if (session%paused .or. has_current_snapshot) then
+      snapshot = select_draw_snapshot(session%paused, session%last_snapshot, current_snapshot, update_last_snapshot)
+      if (update_last_snapshot) session%last_snapshot = snapshot
     end if
     focus = focused_widget_name(session)
     if (session%layout_loaded) then
@@ -370,6 +379,21 @@ contains
     end if
     if (session%help_visible) call render_help_overlay(session%current, focus)
   end subroutine draw_frame
+
+  function select_draw_snapshot(paused, last_snapshot, current_snapshot, update_last_snapshot) result(snapshot)
+    logical, intent(in) :: paused
+    type(collector_snapshot), intent(in) :: last_snapshot
+    type(collector_snapshot), intent(in) :: current_snapshot
+    logical, intent(out) :: update_last_snapshot
+    type(collector_snapshot) :: snapshot
+
+    update_last_snapshot = .not. paused
+    if (paused) then
+      snapshot = last_snapshot
+    else
+      snapshot = current_snapshot
+    end if
+  end function select_draw_snapshot
 
   subroutine initialize_layout(session)
     type(terminal_session), intent(inout) :: session

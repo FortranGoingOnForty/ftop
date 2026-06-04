@@ -1,11 +1,31 @@
 program test_app_batch_signal
-  use ftop_app, only : process_batch_signal_status, summarize_batch_signal_results
+  use ftop_app, only : process_batch_signal_status, select_draw_snapshot, summarize_batch_signal_results
+  use ftop_collector, only : collector_snapshot
   implicit none
 
+  call test_pause_snapshot_selection()
   call test_batch_signal_summary()
   call test_batch_signal_status_text()
 
 contains
+
+  subroutine test_pause_snapshot_selection()
+    type(collector_snapshot) :: current_snapshot
+    type(collector_snapshot) :: last_snapshot
+    type(collector_snapshot) :: selected_snapshot
+    logical :: update_last_snapshot
+
+    last_snapshot%sample_count = 12
+    current_snapshot%sample_count = 87
+
+    selected_snapshot = select_draw_snapshot(.true., last_snapshot, current_snapshot, update_last_snapshot)
+    call require(selected_snapshot%sample_count == 12, "paused draw should reuse frozen snapshot")
+    call require(.not. update_last_snapshot, "paused draw should not replace frozen snapshot")
+
+    selected_snapshot = select_draw_snapshot(.false., last_snapshot, current_snapshot, update_last_snapshot)
+    call require(selected_snapshot%sample_count == 87, "unpaused draw should use current snapshot")
+    call require(update_last_snapshot, "unpaused draw should refresh frozen snapshot cache")
+  end subroutine test_pause_snapshot_selection
 
   subroutine test_batch_signal_summary()
     integer :: failed_count
