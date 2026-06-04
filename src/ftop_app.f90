@@ -22,6 +22,7 @@ module ftop_app
     FGOF_KEY_F7, &
     FGOF_KEY_F8, &
     FGOF_KEY_F9, &
+    FGOF_KEY_F10, &
     FGOF_KEY_HOME, &
     FGOF_KEY_LEFT, &
     FGOF_KEY_PAGEDOWN, &
@@ -98,6 +99,7 @@ module ftop_app
     process_table_state, &
     process_table_status, &
     process_table_toggle_metric_sparklines, &
+    process_table_toggle_command_wrap, &
     process_table_toggle_follow, &
     process_table_toggle_tag, &
     process_table_toggle_selected_node, &
@@ -1363,6 +1365,8 @@ contains
       call begin_tagged_process_signal(session)
       handled = .true.
       return
+    case (FGOF_KEY_F10)
+      call process_table_toggle_command_wrap(session%process_state)
     case default
       return
     end select

@@ -26,7 +26,8 @@ program test_process_table
                                   process_table_status, &
                                   process_fuzzy_best_match, process_fuzzy_next_match, &
                                   process_table_process_tagged, process_table_prune_tags, &
-                                  process_table_toggle_metric_sparklines, process_table_toggle_follow, process_table_toggle_tag, &
+                                  process_table_toggle_metric_sparklines, process_table_toggle_command_wrap, &
+                                  process_table_toggle_follow, process_table_toggle_tag, &
                                  process_table_toggle_selected_node, process_table_toggle_sort_direction, render_process_panel
   use ftop_table, only : TABLE_SORT_ASCENDING, TABLE_SORT_DESCENDING
   use ftop_widgets, only : widget_rect
@@ -67,6 +68,15 @@ program test_process_table
   call require(index(row_text(buffer, 4), "200") > 0, "process table should render child pid")
   call require(index(row_text(buffer, 4), "└") > 0, "process table should render child branch")
   call require(index(row_text(buffer, 4), "child --task") > 0, "process table should render child command")
+
+  buffer = allocate_screen(80, 10)
+  state = process_table_state(tree_view=.false.)
+  call require(process_table_set_columns(state, custom_columns, 4, column_error), &
+               "command wrap test should accept configured columns")
+  call process_table_toggle_command_wrap(state)
+  call render_process_panel(buffer, widget_rect(1, 1, 80, 10), sample_snapshot(), border_style, title_style, dim_style, state)
+  call require(index(row_text(buffer, 3), "parent / --test") > 0, "command wrap should fold spaces in commands")
+  call require(index(process_table_status(state), "command wrap") > 0, "process status should describe command wrap mode")
 
   buffer = allocate_screen(80, 10)
   state = process_table_state(tree_view=.false.)

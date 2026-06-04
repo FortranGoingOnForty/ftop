@@ -144,6 +144,7 @@ module ftop_process_table
     integer :: fuzzy_match_count = 0
     integer :: fuzzy_step_direction = 0
     logical :: metric_sparklines = .true.
+    logical :: command_wrap = .false.
     logical :: tree_view = .true.
     type(tagged_process), allocatable :: tags(:)
     integer :: tag_count = 0
@@ -188,6 +189,7 @@ module ftop_process_table
   public :: process_table_status
   public :: process_table_finish_filter
   public :: process_table_toggle_metric_sparklines
+  public :: process_table_toggle_command_wrap
   public :: process_table_toggle_follow
   public :: process_table_toggle_tag
   public :: process_table_toggle_selected_node
@@ -801,7 +803,7 @@ contains
     case (PROCESS_COLUMN_TIME)
       cell = process_cell(process_time_text(process%cpu_time), row_style)
     case (PROCESS_COLUMN_COMMAND)
-      cell = process_cell(process_tree_display_command(process), row_style)
+      cell = process_cell(process_command_cell_text(process, state%command_wrap), row_style)
     case default
       cell = process_cell(integer_text(process%pid), row_style)
     end select
@@ -909,6 +911,29 @@ contains
       text = process_display_command(process)
     end if
   end function process_tree_display_command
+
+  function process_command_cell_text(process, command_wrap) result(text)
+    type(process_info), intent(in) :: process
+    logical, intent(in) :: command_wrap
+    character(len=:), allocatable :: text
+    character(len=:), allocatable :: command
+    integer :: index_value
+
+    command = process_tree_display_command(process)
+    if (.not. command_wrap) then
+      text = command
+      return
+    end if
+
+    text = ""
+    do index_value = 1, len(command)
+      if (command(index_value:index_value) == " ") then
+        if (len(text) > 0 .and. text(len(text):len(text)) /= " ") text = text // " / "
+      else
+        text = text // command(index_value:index_value)
+      end if
+    end do
+  end function process_command_cell_text
 
   logical function process_table_set_columns(state, names, count, error_message) result(applied)
     type(process_table_state), intent(inout) :: state
@@ -1596,6 +1621,12 @@ contains
     state%metric_sparklines = .not. state%metric_sparklines
   end subroutine process_table_toggle_metric_sparklines
 
+  subroutine process_table_toggle_command_wrap(state)
+    type(process_table_state), intent(inout) :: state
+
+    state%command_wrap = .not. state%command_wrap
+  end subroutine process_table_toggle_command_wrap
+
   logical function process_table_toggle_selected_node(state) result(toggled)
     type(process_table_state), intent(inout) :: state
     integer :: node_index
@@ -1639,6 +1670,7 @@ contains
     else
       text = text // " history numeric"
     end if
+    if (state%command_wrap) text = text // " command wrap"
     if (state%following) then
       text = text // " following PID " // integer_text(max(0, state%follow_pid))
       if (state%follow_filtered) text = text // " filtered"
