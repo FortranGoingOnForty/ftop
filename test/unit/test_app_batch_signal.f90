@@ -32,12 +32,14 @@ contains
   end subroutine test_pause_snapshot_selection
 
   subroutine test_refresh_adjustment()
-    call require(adjusted_refresh_ms(1000, -1) == 900, "plus should reduce refresh interval")
-    call require(adjusted_refresh_ms(1000, 1) == 1100, "minus should increase refresh interval")
-    call require(adjusted_refresh_ms(100, -1) == 100, "faster refresh should clamp to minimum")
-    call require(adjusted_refresh_ms(60000, 1) == 60000, "slower refresh should clamp to maximum")
-    call require(adjusted_refresh_ms(50, 0) == 100, "neutral refresh adjustment should clamp current value")
-    call require(refresh_status_text(900) == "refresh 900 ms", "refresh status should report milliseconds")
+    call require(adjusted_refresh_ms(1000, -1) == 500, "plus should reduce refresh interval to previous preset")
+    call require(adjusted_refresh_ms(1000, 1) == 2000, "minus should increase refresh interval to next preset")
+    call require(adjusted_refresh_ms(900, -1) == 500, "plus should move custom refresh to next faster preset")
+    call require(adjusted_refresh_ms(900, 1) == 1000, "minus should move custom refresh to next slower preset")
+    call require(adjusted_refresh_ms(250, -1) == 250, "faster refresh should clamp to minimum preset")
+    call require(adjusted_refresh_ms(5000, 1) == 5000, "slower refresh should clamp to maximum preset")
+    call require(adjusted_refresh_ms(50, 0) == 250, "neutral refresh adjustment should snap to nearest preset")
+    call require(refresh_status_text(500) == "Refresh: 500ms", "refresh status should report preset milliseconds")
   end subroutine test_refresh_adjustment
 
   subroutine test_vim_navigation_deltas()

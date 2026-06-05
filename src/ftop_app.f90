@@ -133,8 +133,10 @@ module ftop_app
   integer, parameter :: DEFAULT_ROWS = 24
   integer, parameter :: DEFAULT_COLUMNS = 80
   integer, parameter :: DEFAULT_REFRESH_MS = 1000
-  integer, parameter :: MIN_REFRESH_MS = 100
-  integer, parameter :: MAX_REFRESH_MS = 60000
+  integer, parameter :: REFRESH_PRESET_COUNT = 5
+  integer, parameter :: REFRESH_PRESET_MS(REFRESH_PRESET_COUNT) = [250, 500, 1000, 2000, 5000]
+  integer, parameter :: MIN_REFRESH_MS = REFRESH_PRESET_MS(1)
+  integer, parameter :: MAX_REFRESH_MS = REFRESH_PRESET_MS(REFRESH_PRESET_COUNT)
   integer, parameter :: DOUBLE_CLICK_MS = 500
   integer, parameter :: PROCESS_SIGNAL_CHOICE_COUNT = 7
   integer, parameter :: LAYOUT_PRESET_COUNT = 4
@@ -1161,23 +1163,51 @@ contains
   integer function adjusted_refresh_ms(refresh_ms, direction) result(adjusted)
     integer, intent(in) :: refresh_ms
     integer, intent(in) :: direction
-    integer :: step_ms
+    integer :: preset_index
 
-    step_ms = max(100, refresh_ms / 10)
     if (direction < 0) then
-      adjusted = bounded_refresh_ms(refresh_ms - step_ms)
+      adjusted = REFRESH_PRESET_MS(1)
+      do preset_index = REFRESH_PRESET_COUNT, 1, -1
+        if (REFRESH_PRESET_MS(preset_index) < refresh_ms) then
+          adjusted = REFRESH_PRESET_MS(preset_index)
+          return
+        end if
+      end do
     else if (direction > 0) then
-      adjusted = bounded_refresh_ms(refresh_ms + step_ms)
+      adjusted = REFRESH_PRESET_MS(REFRESH_PRESET_COUNT)
+      do preset_index = 1, REFRESH_PRESET_COUNT
+        if (REFRESH_PRESET_MS(preset_index) > refresh_ms) then
+          adjusted = REFRESH_PRESET_MS(preset_index)
+          return
+        end if
+      end do
     else
-      adjusted = bounded_refresh_ms(refresh_ms)
+      adjusted = nearest_refresh_preset_ms(refresh_ms)
     end if
   end function adjusted_refresh_ms
+
+  integer function nearest_refresh_preset_ms(refresh_ms) result(preset_ms)
+    integer, intent(in) :: refresh_ms
+    integer :: best_delta
+    integer :: delta
+    integer :: preset_index
+
+    preset_ms = REFRESH_PRESET_MS(1)
+    best_delta = abs(refresh_ms - preset_ms)
+    do preset_index = 2, REFRESH_PRESET_COUNT
+      delta = abs(refresh_ms - REFRESH_PRESET_MS(preset_index))
+      if (delta < best_delta) then
+        preset_ms = REFRESH_PRESET_MS(preset_index)
+        best_delta = delta
+      end if
+    end do
+  end function nearest_refresh_preset_ms
 
   function refresh_status_text(refresh_ms) result(text)
     integer, intent(in) :: refresh_ms
     character(len=:), allocatable :: text
 
-    text = "refresh " // integer_text(refresh_ms) // " ms"
+    text = "Refresh: " // integer_text(refresh_ms) // "ms"
   end function refresh_status_text
 
   logical function handle_layout_preset_key(session, text) result(handled)
