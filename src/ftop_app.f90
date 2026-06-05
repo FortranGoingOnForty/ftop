@@ -1253,6 +1253,9 @@ contains
       end if
     else if (text == "U") then
       call process_table_clear_tags(session%process_state)
+      handled = .true.
+      call set_status(session, "tags cleared")
+      return
     else if (navigation_delta /= 0) then
       call process_table_select_delta(session%process_state, navigation_delta)
     else

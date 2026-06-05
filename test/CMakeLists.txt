@@ -208,7 +208,12 @@ target_link_libraries(ftop_signal_test PRIVATE ftop_core)
 add_test(NAME ftop_signal COMMAND ftop_signal_test)
 set_tests_properties(ftop_signal PROPERTIES TIMEOUT 5)
 
-file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/test-runtime")
+file(MAKE_DIRECTORY
+  "${CMAKE_BINARY_DIR}/test-runtime"
+  "${CMAKE_BINARY_DIR}/test-runtime/home"
+  "${CMAKE_BINARY_DIR}/test-runtime/xdg-config"
+)
+file(COPY "${CMAKE_SOURCE_DIR}/config" DESTINATION "${CMAKE_BINARY_DIR}/test-runtime")
 
 add_executable(
   ftop_terminal_smoke
@@ -225,4 +230,5 @@ set_tests_properties(
   ftop_terminal_smoke
   PROPERTIES
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/test-runtime"
+    ENVIRONMENT "HOME=${CMAKE_BINARY_DIR}/test-runtime/home;XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-runtime/xdg-config"
 )
