@@ -70,6 +70,7 @@ module ftop_app
     process_table_begin_signal, &
     process_table_begin_tag_signal, &
     process_table_cancel_signal, &
+    process_table_close_command_detail, &
     process_table_clear_filter, &
     process_table_clear_fuzzy, &
     process_table_clear_signal_input, &
@@ -99,7 +100,7 @@ module ftop_app
     process_table_state, &
     process_table_status, &
     process_table_toggle_metric_sparklines, &
-    process_table_toggle_command_wrap, &
+    process_table_toggle_command_detail, &
     process_table_toggle_follow, &
     process_table_toggle_tag, &
     process_table_toggle_selected_node, &
@@ -1318,6 +1319,12 @@ contains
         return
       end if
     end if
+    if (key_name == FGOF_KEY_ESCAPE .and. session%process_state%command_detail_visible) then
+      call process_table_close_command_detail(session%process_state)
+      call set_status(session, "command detail closed")
+      handled = .true.
+      return
+    end if
     if (handle_process_function_key(session, key_name)) then
       handled = .true.
       return
@@ -1396,13 +1403,33 @@ contains
       handled = .true.
       return
     case (FGOF_KEY_F10)
-      call process_table_toggle_command_wrap(session%process_state)
+      call toggle_process_command_detail(session)
+      handled = .true.
+      return
     case default
       return
     end select
     handled = .true.
     call set_status(session, process_table_status(session%process_state))
   end function handle_process_function_key
+
+  subroutine toggle_process_command_detail(session)
+    type(terminal_session), intent(inout) :: session
+    logical :: visible
+
+    if (session%process_state%selected_pid <= 0) then
+      call process_table_close_command_detail(session%process_state)
+      call set_status(session, "no process selected")
+      return
+    end if
+
+    visible = process_table_toggle_command_detail(session%process_state)
+    if (visible) then
+      call set_status(session, "command detail PID " // integer_text(max(0, session%process_state%selected_pid)))
+    else
+      call set_status(session, "command detail closed")
+    end if
+  end subroutine toggle_process_command_detail
 
   subroutine toggle_process_follow(session)
     type(terminal_session), intent(inout) :: session

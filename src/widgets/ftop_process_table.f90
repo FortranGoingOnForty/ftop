@@ -22,6 +22,7 @@ module ftop_process_table
   use ftop_collector, only : collector_snapshot
   use ftop_proc_data, only : &
     PROCESS_SORT_COMMAND, &
+    PROCESS_COMMAND_LEN, &
     PROCESS_SORT_CPU, &
     PROCESS_SORT_MEMORY, &
     PROCESS_SORT_NICE, &
@@ -111,6 +112,8 @@ module ftop_process_table
     integer :: viewport_rows = 0
     integer :: selected_pid = 0
     integer(int64) :: selected_start_time = 0_int64
+    integer :: selected_command_length = 0
+    character(len=PROCESS_COMMAND_LEN) :: selected_command = ""
     logical :: selected_has_children = .false.
     logical :: following = .false.
     logical :: follow_filtered = .false.
@@ -144,7 +147,7 @@ module ftop_process_table
     integer :: fuzzy_match_count = 0
     integer :: fuzzy_step_direction = 0
     logical :: metric_sparklines = .true.
-    logical :: command_wrap = .false.
+    logical :: command_detail_visible = .false.
     logical :: tree_view = .true.
     type(tagged_process), allocatable :: tags(:)
     integer :: tag_count = 0
@@ -161,6 +164,7 @@ module ftop_process_table
   public :: process_table_clear_filter
   public :: process_table_clear_fuzzy
   public :: process_table_clear_signal_input
+  public :: process_table_close_command_detail
   public :: process_table_confirm_signal
   public :: process_table_cycle_sort_key
   public :: process_table_delete_filter_char
@@ -189,7 +193,7 @@ module ftop_process_table
   public :: process_table_status
   public :: process_table_finish_filter
   public :: process_table_toggle_metric_sparklines
-  public :: process_table_toggle_command_wrap
+  public :: process_table_toggle_command_detail
   public :: process_table_toggle_follow
   public :: process_table_toggle_tag
   public :: process_table_toggle_selected_node
@@ -243,6 +247,7 @@ contains
       call render_text(buffer, content_line_rect(table_content, 1), "processes unavailable", dim_style)
       if (present(state)) then
         active_state%total_row_count = 0
+        call clear_selected_process_state(active_state)
         call clear_signal_feedback_state(active_state)
         call normalize_process_table_state(active_state, 0, 0)
         state = active_state
@@ -254,6 +259,7 @@ contains
       call render_text(buffer, content_line_rect(table_content, 1), "no processes", dim_style)
       if (present(state)) then
         active_state%total_row_count = 0
+        call clear_selected_process_state(active_state)
         call clear_signal_feedback_state(active_state)
         call normalize_process_table_state(active_state, 0, 0)
         state = active_state
@@ -289,6 +295,7 @@ contains
         call render_text(buffer, content_line_rect(table_content, 1), "no processes", dim_style)
       end if
       if (present(state)) then
+        call clear_selected_process_state(active_state)
         call normalize_process_table_state(active_state, 0, table_viewport_row_count(table_content, .true.))
         call advance_signal_feedback_state(active_state)
         state = active_state
@@ -306,6 +313,9 @@ contains
                       scroll_row=active_state%scroll_row, selected_row=active_state%selected_row)
     call advance_signal_feedback_state(active_state)
     if (show_filter_bar) call render_process_input_bar(buffer, content, active_state, title_style, dim_style)
+    if (active_state%command_detail_visible) then
+      call render_process_command_detail(buffer, content, active_state, border_style, title_style, dim_style)
+    end if
     if (present(state)) state = active_state
   end subroutine render_process_panel
 
@@ -635,6 +645,8 @@ contains
 
     state%selected_pid = 0
     state%selected_start_time = 0_int64
+    state%selected_command_length = 0
+    state%selected_command = ""
     state%selected_has_children = .false.
     if (state%selected_row <= 0) return
     if (.not. allocated(visible_table%items)) return
@@ -646,10 +658,33 @@ contains
       if (row /= state%selected_row) cycle
       state%selected_pid = visible_table%items(process_index)%pid
       state%selected_start_time = visible_table%items(process_index)%start_time
+      call set_selected_command(state, process_display_command(visible_table%items(process_index)))
       state%selected_has_children = process_has_child(full_tree_table, visible_table%items(process_index))
       return
     end do
   end subroutine update_selected_process_state
+
+  subroutine set_selected_command(state, command)
+    type(process_table_state), intent(inout) :: state
+    character(len=*), intent(in) :: command
+    integer :: command_length
+
+    command_length = min(len_trim(command), len(state%selected_command))
+    state%selected_command = ""
+    state%selected_command_length = command_length
+    if (command_length > 0) state%selected_command(:command_length) = command(:command_length)
+  end subroutine set_selected_command
+
+  subroutine clear_selected_process_state(state)
+    type(process_table_state), intent(inout) :: state
+
+    state%selected_pid = 0
+    state%selected_start_time = 0_int64
+    state%selected_command_length = 0
+    state%selected_command = ""
+    state%selected_has_children = .false.
+    state%command_detail_visible = .false.
+  end subroutine clear_selected_process_state
 
   logical function process_has_child(table, parent) result(has_child)
     type(process_table), intent(in) :: table
@@ -803,7 +838,7 @@ contains
     case (PROCESS_COLUMN_TIME)
       cell = process_cell(process_time_text(process%cpu_time), row_style)
     case (PROCESS_COLUMN_COMMAND)
-      cell = process_cell(process_command_cell_text(process, state%command_wrap), row_style)
+      cell = process_cell(process_tree_display_command(process), row_style)
     case default
       cell = process_cell(integer_text(process%pid), row_style)
     end select
@@ -911,29 +946,6 @@ contains
       text = process_display_command(process)
     end if
   end function process_tree_display_command
-
-  function process_command_cell_text(process, command_wrap) result(text)
-    type(process_info), intent(in) :: process
-    logical, intent(in) :: command_wrap
-    character(len=:), allocatable :: text
-    character(len=:), allocatable :: command
-    integer :: index_value
-
-    command = process_tree_display_command(process)
-    if (.not. command_wrap) then
-      text = command
-      return
-    end if
-
-    text = ""
-    do index_value = 1, len(command)
-      if (command(index_value:index_value) == " ") then
-        if (len(text) > 0 .and. text(len(text):len(text)) /= " ") text = text // " / "
-      else
-        text = text // command(index_value:index_value)
-      end if
-    end do
-  end function process_command_cell_text
 
   logical function process_table_set_columns(state, names, count, error_message) result(applied)
     type(process_table_state), intent(inout) :: state
@@ -1621,11 +1633,22 @@ contains
     state%metric_sparklines = .not. state%metric_sparklines
   end subroutine process_table_toggle_metric_sparklines
 
-  subroutine process_table_toggle_command_wrap(state)
+  logical function process_table_toggle_command_detail(state) result(visible)
     type(process_table_state), intent(inout) :: state
 
-    state%command_wrap = .not. state%command_wrap
-  end subroutine process_table_toggle_command_wrap
+    if (state%selected_pid <= 0) then
+      state%command_detail_visible = .false.
+    else
+      state%command_detail_visible = .not. state%command_detail_visible
+    end if
+    visible = state%command_detail_visible
+  end function process_table_toggle_command_detail
+
+  subroutine process_table_close_command_detail(state)
+    type(process_table_state), intent(inout) :: state
+
+    state%command_detail_visible = .false.
+  end subroutine process_table_close_command_detail
 
   logical function process_table_toggle_selected_node(state) result(toggled)
     type(process_table_state), intent(inout) :: state
@@ -1670,7 +1693,7 @@ contains
     else
       text = text // " history numeric"
     end if
-    if (state%command_wrap) text = text // " command wrap"
+    if (state%command_detail_visible) text = text // " command detail"
     if (state%following) then
       text = text // " following PID " // integer_text(max(0, state%follow_pid))
       if (state%follow_filtered) text = text // " filtered"
@@ -2315,6 +2338,139 @@ contains
       call render_text(buffer, content_line_rect(content, content%height), process_fuzzy_bar_text(state), input_style)
     end if
   end subroutine render_process_input_bar
+
+  subroutine render_process_command_detail(buffer, content, state, border_style, title_style, dim_style)
+    type(screen_buffer), intent(inout) :: buffer
+    type(widget_rect), intent(in) :: content
+    type(process_table_state), intent(in) :: state
+    type(screen_style), intent(in) :: border_style
+    type(screen_style), intent(in) :: title_style
+    type(screen_style), intent(in) :: dim_style
+    type(widget_rect) :: command_rect
+    type(widget_rect) :: detail
+    type(widget_rect) :: footer_rect
+    type(widget_rect) :: inner
+    character(len=:), allocatable :: command
+    integer :: detail_height
+
+    if (state%selected_pid <= 0) return
+    if (content%height < 4 .or. content%width < 20) return
+
+    detail_height = min(content%height, 8)
+    detail = widget_rect(content%row + content%height - detail_height + 1, content%col, content%width, detail_height)
+    call fill_process_rect(buffer, detail, dim_style)
+    call draw_box(buffer, detail, BOX_STYLE_ROUNDED, border_style, &
+                  "Command PID " // integer_text(max(0, state%selected_pid)), title_style)
+
+    inner = box_content_rect(detail)
+    if (inner%height <= 0 .or. inner%width <= 0) return
+    command_rect = inner
+    if (inner%height > 1) command_rect%height = inner%height - 1
+    if (command_rect%width > 2) then
+      command_rect%col = command_rect%col + 1
+      command_rect%width = command_rect%width - 2
+    end if
+
+    command = process_table_selected_command_text(state)
+    call render_wrapped_command(buffer, command_rect, command, title_style)
+
+    if (inner%height > 1) then
+      footer_rect = widget_rect(inner%row + inner%height - 1, inner%col, inner%width, 1)
+      call render_text(buffer, footer_rect, "F10/Esc close", dim_style, TEXT_ALIGN_RIGHT)
+    end if
+  end subroutine render_process_command_detail
+
+  subroutine fill_process_rect(buffer, rect, style)
+    type(screen_buffer), intent(inout) :: buffer
+    type(widget_rect), intent(in) :: rect
+    type(screen_style), intent(in) :: style
+    integer :: row
+
+    if (rect%width <= 0 .or. rect%height <= 0) return
+    do row = max(1, rect%row), min(buffer%size%height, rect%row + rect%height - 1)
+      call render_text(buffer, widget_rect(row, rect%col, rect%width, 1), repeat(" ", rect%width), style)
+    end do
+  end subroutine fill_process_rect
+
+  subroutine render_wrapped_command(buffer, rect, command, style)
+    type(screen_buffer), intent(inout) :: buffer
+    type(widget_rect), intent(in) :: rect
+    character(len=*), intent(in) :: command
+    type(screen_style), intent(in) :: style
+    character(len=:), allocatable :: line_text
+    integer :: command_length
+    integer :: line_index
+    integer :: next_start
+    integer :: start_index
+
+    if (rect%width <= 0 .or. rect%height <= 0) return
+    command_length = len_trim(command)
+    if (command_length <= 0) then
+      call render_text(buffer, widget_rect(rect%row, rect%col, rect%width, 1), "[empty command]", style)
+      return
+    end if
+
+    start_index = 1
+    do line_index = 1, rect%height
+      if (start_index > command_length) exit
+      call command_wrap_line(command, start_index, rect%width, line_text, next_start)
+      if (line_index == rect%height .and. next_start <= command_length .and. rect%width > 3) then
+        if (len(line_text) > rect%width - 3) line_text = line_text(:rect%width - 3)
+        line_text = trim(line_text) // "..."
+      end if
+      call render_text(buffer, widget_rect(rect%row + line_index - 1, rect%col, rect%width, 1), line_text, style)
+      start_index = next_start
+    end do
+  end subroutine render_wrapped_command
+
+  subroutine command_wrap_line(command, start_index, width, line_text, next_start)
+    character(len=*), intent(in) :: command
+    integer, intent(in) :: start_index
+    integer, intent(in) :: width
+    character(len=:), allocatable, intent(out) :: line_text
+    integer, intent(out) :: next_start
+    integer :: break_index
+    integer :: command_length
+    integer :: end_index
+    integer :: scan_index
+
+    command_length = len_trim(command)
+    if (start_index > command_length) then
+      line_text = ""
+      next_start = command_length + 1
+      return
+    end if
+
+    end_index = min(command_length, start_index + max(1, width) - 1)
+    break_index = 0
+    do scan_index = start_index, end_index
+      if (command(scan_index:scan_index) == " ") break_index = scan_index
+    end do
+
+    if (end_index < command_length .and. break_index > start_index) then
+      line_text = command(start_index:break_index - 1)
+      next_start = break_index + 1
+      do while (next_start <= command_length .and. command(next_start:next_start) == " ")
+        next_start = next_start + 1
+      end do
+    else
+      line_text = command(start_index:end_index)
+      next_start = end_index + 1
+    end if
+  end subroutine command_wrap_line
+
+  function process_table_selected_command_text(state) result(text)
+    type(process_table_state), intent(in) :: state
+    character(len=:), allocatable :: text
+    integer :: length
+
+    length = max(0, min(len(state%selected_command), state%selected_command_length))
+    if (length <= 0) then
+      text = "[unknown]"
+    else
+      text = state%selected_command(:length)
+    end if
+  end function process_table_selected_command_text
 
   function process_filter_bar_text(state) result(text)
     type(process_table_state), intent(in) :: state

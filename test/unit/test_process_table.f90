@@ -8,6 +8,7 @@ program test_process_table
   use ftop_process_table, only : process_table_append_filter_text, process_table_begin_filter, &
                                   process_table_begin_signal, process_table_begin_tag_signal, &
                                   process_table_cancel_signal, process_table_clear_filter, &
+                                  process_table_close_command_detail, &
                                   process_table_append_fuzzy_text, process_table_clear_fuzzy, &
                                   process_table_clear_tags, &
                                   process_table_cycle_sort_key, &
@@ -16,7 +17,7 @@ program test_process_table
                                   process_table_move_filter_cursor, process_table_page_delta, &
                                   process_table_finish_filter, &
                                   process_table_append_signal_digit, process_table_confirm_signal, &
-                                   process_table_mark_signal_feedback, process_table_scroll_delta, &
+                                  process_table_mark_signal_feedback, process_table_scroll_delta, &
                                   process_table_select_at, process_table_select_delta, &
                                   process_table_set_columns, &
                                   process_table_set_signal, process_table_signal_status, &
@@ -26,9 +27,9 @@ program test_process_table
                                   process_table_status, &
                                   process_fuzzy_best_match, process_fuzzy_next_match, &
                                   process_table_process_tagged, process_table_prune_tags, &
-                                  process_table_toggle_metric_sparklines, process_table_toggle_command_wrap, &
+                                  process_table_toggle_metric_sparklines, process_table_toggle_command_detail, &
                                   process_table_toggle_follow, process_table_toggle_tag, &
-                                 process_table_toggle_selected_node, process_table_toggle_sort_direction, render_process_panel
+                                  process_table_toggle_selected_node, process_table_toggle_sort_direction, render_process_panel
   use ftop_table, only : TABLE_SORT_ASCENDING, TABLE_SORT_DESCENDING
   use ftop_widgets, only : widget_rect
   implicit none
@@ -70,13 +71,25 @@ program test_process_table
   call require(index(row_text(buffer, 4), "child --task") > 0, "process table should render child command")
 
   buffer = allocate_screen(80, 10)
-  state = process_table_state(tree_view=.false.)
-  call require(process_table_set_columns(state, custom_columns, 4, column_error), &
-               "command wrap test should accept configured columns")
-  call process_table_toggle_command_wrap(state)
-  call render_process_panel(buffer, widget_rect(1, 1, 80, 10), sample_snapshot(), border_style, title_style, dim_style, state)
-  call require(index(row_text(buffer, 3), "parent / --test") > 0, "command wrap should fold spaces in commands")
-  call require(index(process_table_status(state), "command wrap") > 0, "process status should describe command wrap mode")
+  state = process_table_state(tree_view=.false., selected_row=1)
+  call render_process_panel(buffer, widget_rect(1, 1, 80, 10), sample_long_command_snapshot(), border_style, title_style, &
+                            dim_style, state)
+  call require(state%selected_pid == 100, "process table should capture selected command pid")
+  call require(state%selected_command_length > 0, "process table should capture selected command text")
+  call require(process_table_toggle_command_detail(state), "command detail should open for selected process")
+  buffer = allocate_screen(60, 10)
+  call render_process_panel(buffer, widget_rect(1, 1, 60, 10), sample_long_command_snapshot(), border_style, title_style, &
+                            dim_style, state)
+  call require(buffer_contains(buffer, "Command PID 100"), "command detail should render selected pid title")
+  call require(buffer_contains(buffer, "parent --test --alpha"), "command detail should render command start")
+  call require(buffer_contains(buffer, "--epsilon"), "command detail should wrap long command")
+  call require(buffer_contains(buffer, "F10/Esc close"), "command detail should render close hint")
+  call require(index(process_table_status(state), "command detail") > 0, "process status should describe command detail mode")
+  call process_table_close_command_detail(state)
+  buffer = allocate_screen(60, 10)
+  call render_process_panel(buffer, widget_rect(1, 1, 60, 10), sample_long_command_snapshot(), border_style, title_style, &
+                            dim_style, state)
+  call require(.not. buffer_contains(buffer, "Command PID 100"), "command detail should close")
 
   buffer = allocate_screen(80, 10)
   state = process_table_state(tree_view=.false.)
@@ -554,6 +567,14 @@ contains
     snapshot%processes%items(2)%mem_shared_bytes = 4_int64 * 1024_int64 * 1024_int64
   end function sample_snapshot
 
+  function sample_long_command_snapshot() result(snapshot)
+    type(collector_snapshot) :: snapshot
+
+    snapshot = sample_snapshot()
+    snapshot%processes%items(1)%command = &
+      "parent --test --alpha --beta --gamma --delta --epsilon --zeta --eta --theta --iota --kappa"
+  end function sample_long_command_snapshot
+
   function sample_history_snapshot() result(snapshot)
     type(collector_snapshot) :: snapshot
 
@@ -604,6 +625,20 @@ contains
       end if
     end do
   end function row_text
+
+  logical function buffer_contains(buffer, needle) result(found)
+    type(screen_buffer), intent(in) :: buffer
+    character(len=*), intent(in) :: needle
+    integer :: row
+
+    found = .false.
+    do row = 1, buffer%size%height
+      if (index(row_text(buffer, row), needle) > 0) then
+        found = .true.
+        return
+      end if
+    end do
+  end function buffer_contains
 
   logical function row_has_bold(buffer, row) result(found)
     type(screen_buffer), intent(in) :: buffer
