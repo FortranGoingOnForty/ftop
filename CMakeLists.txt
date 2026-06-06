@@ -56,6 +56,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   set(FTOP_PLATFORM "linux")
   set(FTOP_PLATFORM_SOURCES
     src/platform/ftop_platform_types.f90
+    src/platform/linux/ftop_linux_amdgpu.f90
     src/platform/linux/ftop_linux_nvml.f90
     src/platform/linux/ftop_linux.f90
     src/platform/linux/ftop_linux_shim.c

@@ -216,6 +216,11 @@ if(FTOP_PLATFORM STREQUAL "linux")
   target_link_libraries(ftop_linux_nvml_test PRIVATE ftop_core)
 
   add_test(NAME ftop_linux_nvml COMMAND ftop_linux_nvml_test $<TARGET_FILE:ftop_nvml_fixture>)
+
+  add_executable(ftop_linux_amdgpu_test unit/test_linux_amdgpu.f90 unit/ftop_amdgpu_sysfs_fixture.c)
+  target_link_libraries(ftop_linux_amdgpu_test PRIVATE ftop_core)
+
+  add_test(NAME ftop_linux_amdgpu COMMAND ftop_linux_amdgpu_test)
 endif()
 
 if(FTOP_PLATFORM STREQUAL "macos")

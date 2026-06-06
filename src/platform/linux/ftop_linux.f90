@@ -3,7 +3,8 @@ module ftop_platform
   use, intrinsic :: iso_fortran_env, only : int64, real64
   use ftop_cpu_data, only : cpu_core_info, cpu_state_ticks, cpu_state_total_ticks
   use ftop_disk_data, only : DISK_FILESYSTEM_CAPACITY, c_filesystem_info, disk_io_info, disk_table, disk_table_from_c
-  use ftop_gpu_data, only : empty_gpu_table, gpu_table
+  use ftop_gpu_data, only : GPU_CAPACITY, empty_gpu_table, gpu_info, gpu_table
+  use ftop_linux_amdgpu, only : linux_amdgpu_snapshot
   use ftop_linux_diskstats, only : linux_diskstats_filter_whole_devices, linux_diskstats_parse
   use ftop_linux_loadavg, only : linux_loadavg_parse
   use ftop_linux_meminfo, only : linux_meminfo_parse
@@ -548,12 +549,50 @@ contains
   function linux_get_gpu_table(self) result(table)
     class(linux_backend), intent(in) :: self
     type(gpu_table) :: table
+    type(gpu_table) :: backend_table
 
     associate(unused => self)
     end associate
 
-    if (.not. linux_nvml_gpu_snapshot(table)) table = empty_gpu_table()
+    table = empty_gpu_table()
+    if (linux_nvml_gpu_snapshot(backend_table)) call append_gpu_table(table, backend_table)
+    if (linux_amdgpu_snapshot(backend_table)) call append_gpu_table(table, backend_table)
   end function linux_get_gpu_table
+
+  subroutine append_gpu_table(destination, source)
+    type(gpu_table), intent(inout) :: destination
+    type(gpu_table), intent(in) :: source
+    type(gpu_info), allocatable :: combined(:)
+    integer :: append_count
+    integer :: destination_count
+    integer :: source_index
+    integer :: write_index
+
+    if (.not. source%valid) return
+    if (.not. allocated(source%gpus)) return
+
+    destination_count = 0
+    if (allocated(destination%gpus)) destination_count = size(destination%gpus)
+    append_count = 0
+    do source_index = 1, size(source%gpus)
+      if (.not. source%gpus(source_index)%valid) cycle
+      if (destination_count + append_count >= GPU_CAPACITY) exit
+      append_count = append_count + 1
+    end do
+    if (append_count <= 0) return
+
+    allocate(combined(destination_count + append_count))
+    if (destination_count > 0) combined(1:destination_count) = destination%gpus
+    write_index = destination_count
+    do source_index = 1, size(source%gpus)
+      if (.not. source%gpus(source_index)%valid) cycle
+      if (write_index >= size(combined)) exit
+      write_index = write_index + 1
+      combined(write_index) = source%gpus(source_index)
+    end do
+    call move_alloc(combined, destination%gpus)
+    destination%valid = .true.
+  end subroutine append_gpu_table
 
   logical function linux_disk_snapshot(table, error_code) result(success)
     type(disk_table), intent(out) :: table

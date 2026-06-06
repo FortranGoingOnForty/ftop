@@ -29,6 +29,8 @@
 #define FTOP_LINUX_PROCESS_IO_LEN 512
 #define FTOP_LINUX_PROCESS_CGROUP_LEN 1024
 #define FTOP_LINUX_SOCKET_OWNER_PROCESS_NAME_LEN 64
+#define FTOP_LINUX_DRM_CARD_NAME_LEN 32
+#define FTOP_LINUX_DRM_DEVICE_PATH_LEN 512
 #define FTOP_DISK_DEVICE_LEN 64
 #define FTOP_DISK_MOUNTPOINT_LEN 128
 #define FTOP_DISK_FSTYPE_LEN 32
@@ -76,6 +78,11 @@ struct ftop_linux_socket_traffic {
   long long inode;
   long long rx_bytes;
   long long tx_bytes;
+};
+
+struct ftop_linux_drm_card {
+  char name[FTOP_LINUX_DRM_CARD_NAME_LEN];
+  char device_path[FTOP_LINUX_DRM_DEVICE_PATH_LEN];
 };
 
 struct ftop_linux_tcp_info_bytes {
@@ -171,6 +178,10 @@ int ftop_linux_read_proc_net_dev(char *buffer, size_t buffer_len, size_t *value_
 
 int ftop_linux_read_proc_diskstats(char *buffer, size_t buffer_len, size_t *value_len, int *sys_errno) {
   return ftop_read_file_into_buffer("/proc/diskstats", buffer, buffer_len, value_len, sys_errno);
+}
+
+int ftop_linux_read_sysfs_file(const char *path, char *buffer, size_t buffer_len, size_t *value_len, int *sys_errno) {
+  return ftop_read_file_into_buffer(path, buffer, buffer_len, value_len, sys_errno);
 }
 
 int ftop_linux_read_proc_net_tcp(char *buffer, size_t buffer_len, size_t *value_len, int *sys_errno) {
@@ -1070,7 +1081,55 @@ static int ftop_read_hwmon_name(const char *path, char *name, size_t name_len) {
   return 0;
 }
 
-int ftop_linux_hwmon_discover(struct ftop_linux_hwmon_sensor *buffer, size_t capacity, size_t *sensor_count, int *sys_errno) {
+static int ftop_linux_is_drm_card_name(const char *name) {
+  size_t index;
+
+  if (name == NULL || strncmp(name, "card", 4U) != 0) return 0;
+  index = 4U;
+  if (!isdigit((unsigned char)name[index])) return 0;
+  while (isdigit((unsigned char)name[index])) ++index;
+  return name[index] == '\0';
+}
+
+int ftop_linux_drm_card_discover(
+    const char *root, struct ftop_linux_drm_card *buffer, size_t capacity, size_t *card_count, int *sys_errno) {
+  char device_path[FTOP_LINUX_DRM_DEVICE_PATH_LEN];
+  DIR *directory;
+  struct dirent *entry;
+  size_t count;
+  int written;
+
+  if (root == NULL || buffer == NULL || card_count == NULL || sys_errno == NULL || capacity == 0U) return -1;
+
+  *card_count = 0U;
+  *sys_errno = 0;
+  directory = opendir(root);
+  if (directory == NULL) {
+    if (errno == ENOENT) return 0;
+    *sys_errno = errno;
+    return -1;
+  }
+
+  count = 0U;
+  while ((entry = readdir(directory)) != NULL) {
+    if (!ftop_linux_is_drm_card_name(entry->d_name)) continue;
+    written = snprintf(device_path, sizeof(device_path), "%s/%s/device", root, entry->d_name);
+    if (written < 0 || (size_t)written >= sizeof(device_path)) continue;
+    if (access(device_path, F_OK) != 0) continue;
+    if (count < capacity) {
+      ftop_copy_string(buffer[count].name, sizeof(buffer[count].name), entry->d_name);
+      ftop_copy_string(buffer[count].device_path, sizeof(buffer[count].device_path), device_path);
+    }
+    ++count;
+  }
+
+  closedir(directory);
+  *card_count = count < capacity ? count : capacity;
+  return 0;
+}
+
+static int ftop_linux_hwmon_discover_root(
+    const char *root, struct ftop_linux_hwmon_sensor *buffer, size_t capacity, size_t *sensor_count, int *sys_errno) {
   char name_path[512];
   char sensor_path[512];
   DIR *directory;
@@ -1078,11 +1137,11 @@ int ftop_linux_hwmon_discover(struct ftop_linux_hwmon_sensor *buffer, size_t cap
   size_t count;
   int written;
 
-  if (buffer == NULL || sensor_count == NULL || sys_errno == NULL || capacity == 0) return -1;
+  if (root == NULL || buffer == NULL || sensor_count == NULL || sys_errno == NULL || capacity == 0U) return -1;
 
   *sensor_count = 0U;
   *sys_errno = 0;
-  directory = opendir("/sys/class/hwmon");
+  directory = opendir(root);
   if (directory == NULL) {
     if (errno == ENOENT) return 0;
     *sys_errno = errno;
@@ -1092,7 +1151,7 @@ int ftop_linux_hwmon_discover(struct ftop_linux_hwmon_sensor *buffer, size_t cap
   count = 0U;
   while ((entry = readdir(directory)) != NULL) {
     if (strncmp(entry->d_name, "hwmon", 5U) != 0) continue;
-    written = snprintf(sensor_path, sizeof(sensor_path), "/sys/class/hwmon/%s", entry->d_name);
+    written = snprintf(sensor_path, sizeof(sensor_path), "%s/%s", root, entry->d_name);
     if (written < 0 || (size_t)written >= sizeof(sensor_path)) continue;
     written = snprintf(name_path, sizeof(name_path), "%s/name", sensor_path);
     if (written < 0 || (size_t)written >= sizeof(name_path)) continue;
@@ -1108,6 +1167,15 @@ int ftop_linux_hwmon_discover(struct ftop_linux_hwmon_sensor *buffer, size_t cap
   closedir(directory);
   *sensor_count = count < capacity ? count : capacity;
   return 0;
+}
+
+int ftop_linux_hwmon_discover(struct ftop_linux_hwmon_sensor *buffer, size_t capacity, size_t *sensor_count, int *sys_errno) {
+  return ftop_linux_hwmon_discover_root("/sys/class/hwmon", buffer, capacity, sensor_count, sys_errno);
+}
+
+int ftop_linux_hwmon_discover_at(
+    const char *root, struct ftop_linux_hwmon_sensor *buffer, size_t capacity, size_t *sensor_count, int *sys_errno) {
+  return ftop_linux_hwmon_discover_root(root, buffer, capacity, sensor_count, sys_errno);
 }
 
 static int ftop_linux_is_cpu_hwmon_name(const char *name) {
