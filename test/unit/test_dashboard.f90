@@ -48,6 +48,8 @@ contains
     call require(layout%network_panel%col > layout%memory_panel%col, "wide layout network panel should be right of memory")
     call require(layout%disk_panel%row == layout%cpu_panel%row, "wide layout should place disk beside network")
     call require(layout%disk_panel%col > layout%network_panel%col, "wide layout disk panel should be right of network")
+    call require(layout%gpu_panel%row == layout%cpu_panel%row, "wide layout should place gpu beside disk")
+    call require(layout%gpu_panel%col > layout%disk_panel%col, "wide layout gpu panel should be right of disk")
     call require(layout%process_panel%row > layout%cpu_panel%row, "wide layout should place process below metrics")
     call require(layout%process_panel%height >= 8, "wide layout should reserve process table height")
     call require(layout%footer%row == 22, "wide layout footer should stay above bottom border")
@@ -60,7 +62,9 @@ contains
     call require(layout%network_panel%width == layout%cpu_panel%width, "narrow network panel should share width")
     call require(layout%disk_panel%row > layout%network_panel%row, "narrow layout disk panel should follow network")
     call require(layout%disk_panel%width == layout%cpu_panel%width, "narrow disk panel should share width")
-    call require(layout%process_panel%row > layout%disk_panel%row, "narrow layout process panel should follow disk")
+    call require(layout%gpu_panel%row > layout%disk_panel%row, "narrow layout gpu panel should follow disk")
+    call require(layout%gpu_panel%width == layout%cpu_panel%width, "narrow gpu panel should share width")
+    call require(layout%process_panel%row > layout%gpu_panel%row, "narrow layout process panel should follow gpu")
     call require(layout%process_panel%width == layout%cpu_panel%width, "narrow process panel should share width")
     call require(layout%process_panel%row + layout%process_panel%height <= layout%footer%row, &
                  "narrow process panel should stay above footer")
@@ -72,7 +76,7 @@ contains
     character(len=:), allocatable :: text
 
     snapshot = sample_snapshot()
-    buffer = allocate_screen(160, 24)
+    buffer = allocate_screen(200, 24)
     call render_dashboard(buffer, snapshot, 1000, 7, "ready")
     text = buffer_text(buffer)
 
@@ -80,6 +84,7 @@ contains
     call require(index(text, "Memory") > 0, "dashboard should render memory panel")
     call require(index(text, "Network") > 0, "dashboard should render network panel")
     call require(index(text, "Disk") > 0, "dashboard should render disk panel")
+    call require(index(text, "GPU") > 0, "dashboard should render gpu panel")
     call require(index(text, "Processes") > 0, "dashboard should render process panel by default")
     call require(index(text, "42.5%") > 0, "dashboard should render cpu usage")
     call require(index(text, "50.0%") > 0, "dashboard should render memory usage")
@@ -97,6 +102,9 @@ contains
     call require(index(text, "Connections 1") > 0, "dashboard should render network connection count")
     call require(index(text, "127.0.0.1:8080") > 0, "dashboard should render network endpoint")
     call require(index(text, "8080(web)") > 0, "dashboard should render service names")
+    call require(index(text, "GPUs 1") > 0, "dashboard should render gpu count")
+    call require(index(text, "nvidia Test RTX") > 0, "dashboard should render gpu name")
+    call require(index(text, "GPU 72.5%") > 0, "dashboard should render gpu utilization")
     call require(index(text, "KEYS") > 0, "dashboard should render footer keybar")
     call require(index(text, "STAT ready") > 0, "dashboard should render footer status")
     call require(index(text, "1000ms | samples 3") > 0, "dashboard should render compact timing")
@@ -472,6 +480,22 @@ contains
     snapshot%disk%filesystems(2)%total_bytes = 200_int64 * GIB
     snapshot%disk%filesystems(2)%used_bytes = 90_int64 * GIB
     snapshot%disk%filesystems(2)%available_bytes = 110_int64 * GIB
+
+    snapshot%gpu%valid = .true.
+    allocate(snapshot%gpu%gpus(1))
+    snapshot%gpu%gpus(1)%valid = .true.
+    snapshot%gpu%gpus(1)%vendor = "nvidia"
+    snapshot%gpu%gpus(1)%name = "Test RTX"
+    snapshot%gpu%gpus(1)%utilization_valid = .true.
+    snapshot%gpu%gpus(1)%utilization_percent = 72.5_real64
+    snapshot%gpu%gpus(1)%memory_valid = .true.
+    snapshot%gpu%gpus(1)%memory_used_bytes = 6_int64 * GIB
+    snapshot%gpu%gpus(1)%memory_total_bytes = 12_int64 * GIB
+    snapshot%gpu%gpus(1)%temperature_valid = .true.
+    snapshot%gpu%gpus(1)%temp_celsius = 63.5_real64
+    snapshot%gpu%gpus(1)%power_valid = .true.
+    snapshot%gpu%gpus(1)%power_watts = 120.0_real64
+    snapshot%gpu%gpus(1)%power_limit_watts = 250.0_real64
   end function sample_snapshot
 
   function large_cpu_snapshot(core_count) result(snapshot)

@@ -112,6 +112,7 @@ add_library(
   src/widgets/ftop_graph.f90
   src/widgets/ftop_cpu.f90
   src/widgets/ftop_disk.f90
+  src/widgets/ftop_gpu.f90
   src/widgets/ftop_memory.f90
   src/widgets/ftop_network.f90
   src/widgets/ftop_process_table.f90

@@ -11,6 +11,7 @@ module ftop_dashboard
     style_from_rgb
   use ftop_cpu, only : render_cpu_panel
   use ftop_disk, only : disk_table_state, render_disk_panel
+  use ftop_gpu, only : render_gpu_panel
   use ftop_layout, only : dashboard_layout, dashboard_layout_from_grid, default_dashboard_layout, layout_grid
   use ftop_memory, only : render_memory_panel
   use ftop_network, only : &
@@ -63,6 +64,7 @@ contains
     type(screen_style) :: title_style
     type(screen_style) :: dim_style
     type(screen_style) :: focus_style
+    type(screen_style) :: gpu_border_style
     type(screen_style) :: memory_border_style
     type(screen_style) :: network_border_style
     type(screen_style) :: process_border_style
@@ -132,11 +134,13 @@ contains
     else
       cpu_border_style = border_style
       disk_border_style = border_style
+      gpu_border_style = border_style
       memory_border_style = border_style
       network_border_style = border_style
       process_border_style = border_style
       if (focus == "cpu") cpu_border_style = focus_style
       if (focus == "disk") disk_border_style = focus_style
+      if (focus == "gpu") gpu_border_style = focus_style
       if (focus == "memory") memory_border_style = focus_style
       if (focus == "network") network_border_style = focus_style
       if (focus == "process") process_border_style = focus_style
@@ -161,6 +165,9 @@ contains
         call render_disk_panel(buffer, layout%disk_panel, snapshot, disk_border_style, title_style, dim_style, &
                                state=disk_state, expanded=.false.)
       end if
+      if (layout%gpu_panel%height >= 3) then
+        call render_gpu_panel(buffer, layout%gpu_panel, snapshot, gpu_border_style, title_style, dim_style, expanded=.false.)
+      end if
       if (layout%process_panel%height >= 3) then
         if (present(process_state)) then
           call render_process_panel(buffer, layout%process_panel, snapshot, process_border_style, title_style, dim_style, &
@@ -172,10 +179,11 @@ contains
     end if
 
     if (.not. is_zoomed .and. layout%cpu_panel%height < 3 .and. layout%memory_panel%height < 3 .and. &
-        layout%network_panel%height < 3 .and. layout%disk_panel%height < 3 .and. layout%process_panel%height < 3) then
-      title_col = max(2, (width - len_trim("CPU / Memory / Network / Disk / Processes")) / 2 + 1)
+        layout%network_panel%height < 3 .and. layout%disk_panel%height < 3 .and. layout%gpu_panel%height < 3 .and. &
+        layout%process_panel%height < 3) then
+      title_col = max(2, (width - len_trim("CPU / Memory / Network / Disk / GPU / Processes")) / 2 + 1)
       title_rect = widget_rect(max(2, height / 2), title_col, width - title_col, 1)
-      call render_text(buffer, title_rect, "CPU / Memory / Network / Disk / Processes", title_style)
+      call render_text(buffer, title_rect, "CPU / Memory / Network / Disk / GPU / Processes", title_style)
     end if
 
     call render_footer(buffer, layout%footer, snapshot, refresh_ms, frame_count, status_text, &
@@ -215,6 +223,8 @@ contains
       end if
     case ("disk")
       call render_disk_panel(buffer, rect, snapshot, border_style, title_style, dim_style, state=disk_state, expanded=expanded)
+    case ("gpu")
+      call render_gpu_panel(buffer, rect, snapshot, border_style, title_style, dim_style, expanded=expanded)
     case ("process")
       if (present(process_state)) then
         call render_process_panel(buffer, rect, snapshot, border_style, title_style, dim_style, process_state)
@@ -370,6 +380,12 @@ contains
       else
         text = "Enter table  z zoom  arrows panes  Tab focus  q quit"
       end if
+    case ("gpu")
+      if (zoomed) then
+        text = "Esc grid  Enter grid  q quit"
+      else
+        text = "z/Enter zoom  arrows panes  Tab focus  q quit"
+      end if
     case default
       text = "Tab focus  arrows panes  z/Enter zoom  P layout  ? help  q quit"
     end select
@@ -504,6 +520,12 @@ contains
         text = "disk table"
       else
         text = "disk focus"
+      end if
+    case ("gpu")
+      if (zoomed) then
+        text = "gpu zoom"
+      else
+        text = "gpu focus"
       end if
     case default
       if (zoomed) then

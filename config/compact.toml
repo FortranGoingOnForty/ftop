@@ -33,6 +33,12 @@ weight = 1
 min_width = 24
 min_height = 5
 
+[[row.column]]
+widget = "gpu"
+weight = 1
+min_width = 24
+min_height = 5
+
 [[row]]
 weight = 1
 

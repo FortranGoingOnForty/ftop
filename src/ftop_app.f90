@@ -1503,7 +1503,7 @@ contains
     case ("d")
       call jump_to_widget(session, "disk", "Disk")
     case ("g")
-      call set_status(session, "GPU panel not yet available")
+      call jump_to_widget(session, "gpu", "GPU")
     case default
       return
     end select

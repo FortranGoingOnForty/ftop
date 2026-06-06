@@ -2,6 +2,7 @@ program test_layout
   use ftop_layout, only : &
     LAYOUT_WIDGET_CPU, &
     LAYOUT_WIDGET_DISK, &
+    LAYOUT_WIDGET_GPU, &
     LAYOUT_WIDGET_MEMORY, &
     LAYOUT_WIDGET_NETWORK, &
     LAYOUT_WIDGET_PROCESS, &
@@ -56,11 +57,13 @@ contains
     call require(layout_widget_registered(LAYOUT_WIDGET_MEMORY), "memory should be registered")
     call require(layout_widget_registered(LAYOUT_WIDGET_NETWORK), "network should be registered")
     call require(layout_widget_registered(LAYOUT_WIDGET_DISK), "disk should be registered")
+    call require(layout_widget_registered(LAYOUT_WIDGET_GPU), "gpu should be registered")
     call require(layout_widget_registered(LAYOUT_WIDGET_PROCESS), "process should be registered")
     call require(layout_widget_renderable(LAYOUT_WIDGET_CPU), "cpu should be renderable")
     call require(layout_widget_renderable(LAYOUT_WIDGET_MEMORY), "memory should be renderable")
     call require(layout_widget_renderable(LAYOUT_WIDGET_NETWORK), "network should be renderable")
     call require(layout_widget_renderable(LAYOUT_WIDGET_DISK), "disk should be renderable")
+    call require(layout_widget_renderable(LAYOUT_WIDGET_GPU), "gpu should be renderable")
     call require(layout_widget_renderable(LAYOUT_WIDGET_PROCESS), "process should be renderable")
     call require(.not. layout_widget_registered("unknown"), "unknown widget should not be registered")
   end subroutine test_widget_registry
@@ -186,6 +189,8 @@ contains
     call require(layout%network_panel%col > layout%memory_panel%col, "wide dashboard should place network right")
     call require(layout%disk_panel%row == layout%cpu_panel%row, "wide dashboard should place disk in row")
     call require(layout%disk_panel%col > layout%network_panel%col, "wide dashboard should place disk right")
+    call require(layout%gpu_panel%row == layout%cpu_panel%row, "wide dashboard should place gpu in row")
+    call require(layout%gpu_panel%col > layout%disk_panel%col, "wide dashboard should place gpu right")
     call require(layout%process_panel%row > layout%cpu_panel%row, "wide dashboard should place process below metrics")
     call require(layout%process_panel%height >= 8, "wide dashboard should give process table usable height")
 
@@ -196,7 +201,9 @@ contains
     call require(layout%network_panel%col == layout%cpu_panel%col, "stacked network should align")
     call require(layout%disk_panel%row > layout%network_panel%row, "narrow dashboard should stack disk")
     call require(layout%disk_panel%col == layout%cpu_panel%col, "stacked disk should align")
-    call require(layout%process_panel%row > layout%disk_panel%row, "narrow dashboard should stack process")
+    call require(layout%gpu_panel%row > layout%disk_panel%row, "narrow dashboard should stack gpu")
+    call require(layout%gpu_panel%col == layout%cpu_panel%col, "stacked gpu should align")
+    call require(layout%process_panel%row > layout%gpu_panel%row, "narrow dashboard should stack process")
     call require(layout%process_panel%col == layout%cpu_panel%col, "stacked process should align")
     call require(layout%process_panel%row + layout%process_panel%height <= layout%footer%row, &
                  "stacked process should stay above footer")
@@ -215,6 +222,10 @@ contains
                  LAYOUT_WIDGET_NETWORK, "default memory right should focus network")
     call require(layout_directional_focus_widget(grid, viewport, LAYOUT_WIDGET_NETWORK, LAYOUT_DIRECTION_RIGHT) == &
                  LAYOUT_WIDGET_DISK, "default network right should focus disk")
+    call require(layout_directional_focus_widget(grid, viewport, LAYOUT_WIDGET_DISK, LAYOUT_DIRECTION_RIGHT) == &
+                 LAYOUT_WIDGET_GPU, "default disk right should focus gpu")
+    call require(layout_directional_focus_widget(grid, viewport, LAYOUT_WIDGET_GPU, LAYOUT_DIRECTION_LEFT) == &
+                 LAYOUT_WIDGET_DISK, "default gpu left should focus disk")
     call require(layout_directional_focus_widget(grid, viewport, LAYOUT_WIDGET_DISK, LAYOUT_DIRECTION_LEFT) == &
                  LAYOUT_WIDGET_NETWORK, "default disk left should focus network")
     call require(layout_directional_focus_widget(grid, viewport, LAYOUT_WIDGET_NETWORK, LAYOUT_DIRECTION_LEFT) == &
@@ -222,7 +233,7 @@ contains
     call require(layout_directional_focus_widget(grid, viewport, LAYOUT_WIDGET_CPU, LAYOUT_DIRECTION_DOWN) == &
                  LAYOUT_WIDGET_PROCESS, "default cpu down should focus process")
     call require(layout_directional_focus_widget(grid, viewport, LAYOUT_WIDGET_PROCESS, LAYOUT_DIRECTION_UP) == &
-                 LAYOUT_WIDGET_MEMORY, "default process up should focus centered metric")
+                 LAYOUT_WIDGET_NETWORK, "default process up should focus centered metric")
   end subroutine test_directional_focus_for_default_grid
 
   subroutine test_directional_focus_for_stacked_grid()
@@ -241,7 +252,9 @@ contains
     call require(layout_directional_focus_widget(grid, viewport, LAYOUT_WIDGET_NETWORK, LAYOUT_DIRECTION_DOWN) == &
                  LAYOUT_WIDGET_DISK, "stacked network down should focus disk")
     call require(layout_directional_focus_widget(grid, viewport, LAYOUT_WIDGET_DISK, LAYOUT_DIRECTION_DOWN) == &
-                 LAYOUT_WIDGET_PROCESS, "stacked disk down should focus process")
+                 LAYOUT_WIDGET_GPU, "stacked disk down should focus gpu")
+    call require(layout_directional_focus_widget(grid, viewport, LAYOUT_WIDGET_GPU, LAYOUT_DIRECTION_DOWN) == &
+                 LAYOUT_WIDGET_PROCESS, "stacked gpu down should focus process")
     call require(len(layout_directional_focus_widget(grid, viewport, LAYOUT_WIDGET_CPU, LAYOUT_DIRECTION_RIGHT)) == 0, &
                  "stacked cpu right should have no neighbor")
   end subroutine test_directional_focus_for_stacked_grid
@@ -280,6 +293,7 @@ contains
     call require(layout_has_widget(grid, LAYOUT_WIDGET_MEMORY), "default preset should include memory")
     call require(layout_has_widget(grid, LAYOUT_WIDGET_NETWORK), "default preset should include network")
     call require(layout_has_widget(grid, LAYOUT_WIDGET_DISK), "default preset should include disk")
+    call require(layout_has_widget(grid, LAYOUT_WIDGET_GPU), "default preset should include gpu")
     call require(layout_has_widget(grid, LAYOUT_WIDGET_PROCESS), "default preset should include process")
 
     call parse_layout_file(trim(config_root) // "/compact.toml", grid, error)
@@ -288,6 +302,7 @@ contains
     call require(layout_has_widget(grid, LAYOUT_WIDGET_MEMORY), "compact preset should include memory")
     call require(layout_has_widget(grid, LAYOUT_WIDGET_NETWORK), "compact preset should include network")
     call require(layout_has_widget(grid, LAYOUT_WIDGET_DISK), "compact preset should include disk")
+    call require(layout_has_widget(grid, LAYOUT_WIDGET_GPU), "compact preset should include gpu")
     call require(layout_has_widget(grid, LAYOUT_WIDGET_PROCESS), "compact preset should include process")
 
     call parse_layout_file(trim(config_root) // "/process-focused.toml", grid, error)

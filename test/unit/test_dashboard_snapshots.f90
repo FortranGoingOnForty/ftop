@@ -11,6 +11,7 @@ program test_dashboard_snapshots
     style_from_rgb
   use ftop_cpu, only : render_cpu_panel
   use ftop_dashboard, only : render_dashboard
+  use ftop_gpu, only : render_gpu_panel
   use ftop_memory, only : render_memory_panel
   use ftop_network, only : render_network_panel
   use ftop_services, only : load_service_cache_from_text
@@ -20,8 +21,9 @@ program test_dashboard_snapshots
   integer, parameter :: CPU_PANEL_HEIGHT = 14
   integer, parameter :: MEMORY_PANEL_HEIGHT = 12
   integer, parameter :: NETWORK_PANEL_HEIGHT = 10
+  integer, parameter :: GPU_PANEL_HEIGHT = 8
   integer, parameter :: PANEL_WIDTH = 44
-  integer, parameter :: GRID_HEIGHT = 20
+  integer, parameter :: GRID_HEIGHT = 24
   integer, parameter :: GRID_WIDTH = 72
   integer(int64), parameter :: GIB = 1024_int64 * 1024_int64 * 1024_int64
 
@@ -41,6 +43,8 @@ program test_dashboard_snapshots
                         MEMORY_PANEL_HEIGHT, print_snapshots)
   call compare_snapshot("network_panel", render_network_snapshot(), golden_file(golden_root, "dashboard_network_panel.txt"), &
                         NETWORK_PANEL_HEIGHT, print_snapshots)
+  call compare_snapshot("gpu_panel", render_gpu_snapshot(), golden_file(golden_root, "dashboard_gpu_panel.txt"), &
+                        GPU_PANEL_HEIGHT, print_snapshots)
   call compare_snapshot("grid", render_grid_snapshot(), golden_file(golden_root, "dashboard_grid.txt"), &
                         GRID_HEIGHT, print_snapshots)
 
@@ -81,6 +85,18 @@ contains
     call render_network_panel(buffer, widget_rect(1, 1, PANEL_WIDTH, NETWORK_PANEL_HEIGHT), sample_snapshot(), &
                               border_style, title_style, dim_style)
   end function render_network_snapshot
+
+  function render_gpu_snapshot() result(buffer)
+    type(screen_buffer) :: buffer
+    type(screen_style) :: border_style
+    type(screen_style) :: dim_style
+    type(screen_style) :: title_style
+
+    call dashboard_styles(border_style, title_style, dim_style)
+    buffer = allocate_screen(PANEL_WIDTH, GPU_PANEL_HEIGHT)
+    call render_gpu_panel(buffer, widget_rect(1, 1, PANEL_WIDTH, GPU_PANEL_HEIGHT), sample_snapshot(), &
+                          border_style, title_style, dim_style)
+  end function render_gpu_snapshot
 
   function render_grid_snapshot() result(buffer)
     type(screen_buffer) :: buffer
@@ -196,6 +212,22 @@ contains
     snapshot%disk%filesystems(2)%total_bytes = 200_int64 * GIB
     snapshot%disk%filesystems(2)%used_bytes = 90_int64 * GIB
     snapshot%disk%filesystems(2)%available_bytes = 110_int64 * GIB
+
+    snapshot%gpu%valid = .true.
+    allocate(snapshot%gpu%gpus(1))
+    snapshot%gpu%gpus(1)%valid = .true.
+    snapshot%gpu%gpus(1)%vendor = "nvidia"
+    snapshot%gpu%gpus(1)%name = "Test RTX"
+    snapshot%gpu%gpus(1)%utilization_valid = .true.
+    snapshot%gpu%gpus(1)%utilization_percent = 72.5_real64
+    snapshot%gpu%gpus(1)%memory_valid = .true.
+    snapshot%gpu%gpus(1)%memory_used_bytes = 6_int64 * GIB
+    snapshot%gpu%gpus(1)%memory_total_bytes = 12_int64 * GIB
+    snapshot%gpu%gpus(1)%temperature_valid = .true.
+    snapshot%gpu%gpus(1)%temp_celsius = 63.5_real64
+    snapshot%gpu%gpus(1)%power_valid = .true.
+    snapshot%gpu%gpus(1)%power_watts = 120.0_real64
+    snapshot%gpu%gpus(1)%power_limit_watts = 250.0_real64
   end function sample_snapshot
 
   function golden_file(root, name) result(path)
