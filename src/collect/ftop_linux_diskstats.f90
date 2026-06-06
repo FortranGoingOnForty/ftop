@@ -6,6 +6,7 @@ module ftop_linux_diskstats
 
   public :: linux_diskstats_parse
   public :: linux_diskstats_parse_line
+  public :: linux_diskstats_filter_whole_devices
 
 contains
 
@@ -87,6 +88,77 @@ contains
     device%sector_size_bytes = sector_size
     success = .true.
   end function linux_diskstats_parse_line
+
+  subroutine linux_diskstats_filter_whole_devices(devices, filtered)
+    type(disk_io_info), intent(in) :: devices(:)
+    type(disk_io_info), allocatable, intent(out) :: filtered(:)
+    integer :: device_index
+    integer :: output_index
+    integer :: visible_count
+
+    visible_count = 0
+    do device_index = 1, size(devices)
+      if (diskstats_device_visible(devices, device_index)) visible_count = visible_count + 1
+    end do
+
+    allocate(filtered(visible_count))
+    output_index = 0
+    do device_index = 1, size(devices)
+      if (.not. diskstats_device_visible(devices, device_index)) cycle
+      output_index = output_index + 1
+      filtered(output_index) = devices(device_index)
+    end do
+  end subroutine linux_diskstats_filter_whole_devices
+
+  logical function diskstats_device_visible(devices, device_index) result(visible)
+    type(disk_io_info), intent(in) :: devices(:)
+    integer, intent(in) :: device_index
+    character(len=:), allocatable :: parent
+
+    visible = .false.
+    if (device_index < 1 .or. device_index > size(devices)) return
+    if (.not. devices(device_index)%valid) return
+    parent = partition_parent_name(trim(devices(device_index)%device))
+    visible = len_trim(parent) <= 0 .or. .not. device_name_present(devices, parent)
+  end function diskstats_device_visible
+
+  logical function device_name_present(devices, name) result(present)
+    type(disk_io_info), intent(in) :: devices(:)
+    character(len=*), intent(in) :: name
+    integer :: device_index
+
+    present = .false.
+    if (len_trim(name) <= 0) return
+    do device_index = 1, size(devices)
+      if (devices(device_index)%valid .and. trim(devices(device_index)%device) == trim(name)) then
+        present = .true.
+        return
+      end if
+    end do
+  end function device_name_present
+
+  function partition_parent_name(name) result(parent)
+    character(len=*), intent(in) :: name
+    character(len=:), allocatable :: parent
+    integer :: digit_start
+    integer :: index_value
+
+    parent = ""
+    if (len_trim(name) <= 1) return
+    digit_start = len_trim(name) + 1
+    do index_value = len_trim(name), 1, -1
+      if (.not. decimal_digit(name(index_value:index_value))) exit
+      digit_start = index_value
+    end do
+    if (digit_start > len_trim(name)) return
+
+    if (digit_start > 2 .and. name(digit_start - 1:digit_start - 1) == "p" .and. &
+        decimal_digit(name(digit_start - 2:digit_start - 2))) then
+      parent = name(:digit_start - 2)
+    else if (digit_start > 1 .and. .not. decimal_digit(name(digit_start - 1:digit_start - 1))) then
+      parent = name(:digit_start - 1)
+    end if
+  end function partition_parent_name
 
   subroutine next_line(buffer, start_index, line, next_start)
     character(len=*), intent(in) :: buffer
@@ -185,5 +257,11 @@ contains
 
     is_space = character_value == " " .or. character_value == achar(9) .or. character_value == achar(13)
   end function is_whitespace
+
+  logical function decimal_digit(character_value) result(is_digit)
+    character(len=1), intent(in) :: character_value
+
+    is_digit = character_value >= "0" .and. character_value <= "9"
+  end function decimal_digit
 
 end module ftop_linux_diskstats

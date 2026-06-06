@@ -1,12 +1,13 @@
 program test_linux_diskstats
   use, intrinsic :: iso_fortran_env, only : int64
   use ftop_disk_data, only : disk_io_info
-  use ftop_linux_diskstats, only : linux_diskstats_parse, linux_diskstats_parse_line
+  use ftop_linux_diskstats, only : linux_diskstats_filter_whole_devices, linux_diskstats_parse, linux_diskstats_parse_line
   implicit none
 
   call test_parse_line()
   call test_parse_buffer()
   call test_parse_custom_sector_size()
+  call test_filter_partitions_when_parent_exists()
   call test_rejects_malformed_lines()
 
 contains
@@ -59,6 +60,27 @@ contains
     call require(device%read_bytes == 2_int64 * 4096_int64, "diskstats custom read bytes mismatch")
     call require(device%write_bytes == 5_int64 * 4096_int64, "diskstats custom write bytes mismatch")
   end subroutine test_parse_custom_sector_size
+
+  subroutine test_filter_partitions_when_parent_exists()
+    type(disk_io_info), allocatable :: devices(:)
+    type(disk_io_info), allocatable :: filtered(:)
+    character(len=:), allocatable :: buffer
+    logical :: success
+
+    buffer = "8 0 sda 1 0 2 3 4 0 5 6 0 7 8" // new_line("a") // &
+             "8 1 sda1 1 0 2 3 4 0 5 6 0 7 8" // new_line("a") // &
+             "259 0 nvme0n1 1 0 2 3 4 0 5 6 0 7 8" // new_line("a") // &
+             "259 1 nvme0n1p1 1 0 2 3 4 0 5 6 0 7 8" // new_line("a") // &
+             "252 0 dm-0 1 0 2 3 4 0 5 6 0 7 8" // new_line("a")
+    success = linux_diskstats_parse(buffer, devices)
+    call require(success .and. size(devices) == 5, "diskstats partition fixture should parse")
+
+    call linux_diskstats_filter_whole_devices(devices, filtered)
+    call require(size(filtered) == 3, "diskstats partition filter count mismatch")
+    call require(trim(filtered(1)%device) == "sda", "diskstats filter should keep sda")
+    call require(trim(filtered(2)%device) == "nvme0n1", "diskstats filter should keep nvme parent")
+    call require(trim(filtered(3)%device) == "dm-0", "diskstats filter should keep device mapper disk")
+  end subroutine test_filter_partitions_when_parent_exists
 
   subroutine test_rejects_malformed_lines()
     type(disk_io_info) :: device
