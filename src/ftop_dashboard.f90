@@ -350,11 +350,11 @@ contains
       if (present(network_state)) then
         text = network_footer_actions(zoomed, network_table_active, network_state)
       else if (zoomed) then
-        text = "Up/Down rows  Left/Right sort  s flip  f state  Esc grid"
+        text = "Up/Down rows  :port/ip jump  Left/Right sort  f state  Esc grid"
       else if (network_table_active) then
-        text = "Up/Down rows  Left/Right column  s flip sort  Enter zoom  Esc focus"
+        text = "Up/Down rows  :port/ip jump  Left/Right sort  Enter zoom  Esc focus"
       else
-        text = "f state  s flip sort  z zoom  arrows panes  q quit"
+        text = "f state  s sort  z zoom  arrows panes  q quit"
       end if
     case ("memory")
       if (zoomed) then
@@ -405,11 +405,11 @@ contains
     associate(unused_state => state)
     end associate
     if (zoomed) then
-      text = "Up/Down rows  Left/Right column  s flip sort  f filter  Esc grid"
+      text = "Up/Down rows  :port/ip jump  Left/Right sort  f filter  Esc grid"
     else if (network_table_active) then
-      text = "Up/Down rows  Left/Right column  s flip sort  Enter zoom  Esc focus"
+      text = "Up/Down rows  :port/ip jump  Left/Right sort  Enter zoom  Esc focus"
     else
-      text = "Enter table  z zoom  s flip sort  f filter  arrows panes  q quit"
+      text = "Enter table  z zoom  s sort  f filter  arrows panes  q quit"
     end if
   end function network_footer_actions
 

@@ -6,8 +6,10 @@ program test_dashboard
   use ftop_color, only : rgb, style_from_rgb
   use ftop_dashboard, only : dashboard_layout, default_dashboard_layout, render_dashboard
   use ftop_disk, only : disk_table_state
-  use ftop_network, only : NETWORK_SORT_PID, NETWORK_SORT_PROCESS, NETWORK_SORT_PROTOCOL, network_table_state, &
-    network_table_toggle_sort_direction, render_network_panel
+  use ftop_net_data, only : net_connection
+  use ftop_network, only : NETWORK_SORT_LOCAL, NETWORK_SORT_PID, NETWORK_SORT_PROCESS, NETWORK_SORT_PROTOCOL, &
+    network_table_quick_clear, network_table_quick_input, network_table_state, network_table_toggle_sort_direction, &
+    render_network_panel
   use ftop_services, only : load_service_cache_from_text
   use ftop_table, only : TABLE_SORT_ASCENDING, table_sort_indicator
   use ftop_widgets, only : widget_rect
@@ -26,6 +28,7 @@ program test_dashboard
   call test_dashboard_renders_zoomed_network_table()
   call test_network_table_column_sizing()
   call test_network_preview_uses_sort_state()
+  call test_network_quick_jumps()
   call test_dashboard_handles_large_network_table()
   call test_dashboard_renders_network_process_bandwidth()
   call test_tiny_dashboard()
@@ -273,6 +276,38 @@ contains
     call require(text_cell_has_fg(buffer, "proc4"), "network preview should highlight selected row")
   end subroutine test_network_preview_uses_sort_state
 
+  subroutine test_network_quick_jumps()
+    type(collector_snapshot) :: snapshot
+    type(network_table_state) :: network_state
+    character(len=:), allocatable :: status
+    logical :: handled
+
+    snapshot = network_table_snapshot()
+    call add_ipv6_connection(snapshot)
+    network_state%sort_key = NETWORK_SORT_LOCAL
+
+    handled = network_table_quick_input(snapshot, network_state, ":", status)
+    call require(handled .and. index(status, "network port :") > 0, "network quick port should start on colon")
+    handled = network_table_quick_input(snapshot, network_state, "8", status)
+    call require(handled .and. network_state%selected_row == 2, "network quick port should match first digit")
+    handled = network_table_quick_input(snapshot, network_state, "0", status)
+    call require(handled .and. network_state%selected_row == 2, "network quick port should greedily refine digits")
+
+    call network_table_quick_clear(network_state)
+    handled = network_table_quick_input(snapshot, network_state, "1", status)
+    call require(handled, "network quick ip should start on digit")
+    handled = network_table_quick_input(snapshot, network_state, "9", status)
+    handled = network_table_quick_input(snapshot, network_state, "2", status)
+    handled = network_table_quick_input(snapshot, network_state, ".", status)
+    call require(handled .and. network_state%selected_row == 3, "network quick ip should match IPv4 prefix")
+
+    call network_table_quick_clear(network_state)
+    handled = network_table_quick_input(snapshot, network_state, ":", status)
+    handled = network_table_quick_input(snapshot, network_state, ":", status)
+    handled = network_table_quick_input(snapshot, network_state, "1", status)
+    call require(handled .and. network_state%selected_row == 4, "network quick ip should match IPv6 loopback")
+  end subroutine test_network_quick_jumps
+
   subroutine test_dashboard_handles_large_network_table()
     integer, parameter :: connection_count = 2048
     type(screen_buffer) :: buffer
@@ -495,6 +530,27 @@ contains
     snapshot%network%connections(3)%pid = 5353
     snapshot%network%connections(3)%process_name = "dnsmasq"
   end function network_table_snapshot
+
+  subroutine add_ipv6_connection(snapshot)
+    type(collector_snapshot), intent(inout) :: snapshot
+    type(net_connection), allocatable :: connections(:)
+    integer :: old_count
+
+    old_count = 0
+    if (allocated(snapshot%network%connections)) old_count = size(snapshot%network%connections)
+    allocate(connections(old_count + 1))
+    if (old_count > 0) connections(:old_count) = snapshot%network%connections
+    connections(old_count + 1)%valid = .true.
+    connections(old_count + 1)%protocol = "tcp"
+    connections(old_count + 1)%local_addr = "2001:db8::1"
+    connections(old_count + 1)%local_port = 8443
+    connections(old_count + 1)%remote_addr = "::1"
+    connections(old_count + 1)%remote_port = 443
+    connections(old_count + 1)%state = "ESTABLISHED"
+    connections(old_count + 1)%pid = 8443
+    connections(old_count + 1)%process_name = "ipv6d"
+    call move_alloc(connections, snapshot%network%connections)
+  end subroutine add_ipv6_connection
 
   function large_network_table_snapshot(connection_count) result(snapshot)
     integer, intent(in) :: connection_count

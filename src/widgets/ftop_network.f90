@@ -8,7 +8,7 @@ module ftop_network
     color_gradient, &
     gradient_blue_cyan, &
     style_from_rgb
-  use ftop_net_data, only : NET_STATE_LEN, format_byte_rate, net_connection, process_bandwidth
+  use ftop_net_data, only : NET_ADDRESS_LEN, NET_STATE_LEN, format_byte_rate, net_connection, process_bandwidth
   use ftop_services, only : cached_service_name
   use ftop_sparkline, only : render_sparkline
   use ftop_table, only : &
@@ -40,6 +40,10 @@ module ftop_network
   integer, parameter :: NETWORK_PROCESS_BANDWIDTH_MAX_ROWS = 5
   integer, parameter :: NETWORK_PROTOCOL_WIDTH = 5
   integer, parameter :: NETWORK_PROTOCOL_SORT_WIDTH = 7
+  integer, parameter :: NETWORK_QUICK_NONE = 0
+  integer, parameter :: NETWORK_QUICK_PORT = 1
+  integer, parameter :: NETWORK_QUICK_ADDRESS = 2
+  integer, parameter :: NETWORK_QUICK_QUERY_LEN = NET_ADDRESS_LEN
   character(len=NET_STATE_LEN), parameter :: NETWORK_FILTERS(NETWORK_FILTER_COUNT) = [ &
     character(len=NET_STATE_LEN) :: "", "ESTABLISHED", "LISTEN", "OPEN", "TIME_WAIT", "CLOSE_WAIT" &
   ]
@@ -52,7 +56,9 @@ module ftop_network
     integer :: row_count = 0
     integer :: total_row_count = 0
     integer :: viewport_rows = 0
+    integer :: quick_mode = NETWORK_QUICK_NONE
     character(len=NET_STATE_LEN) :: state_filter = ""
+    character(len=NETWORK_QUICK_QUERY_LEN) :: quick_query = ""
   end type network_table_state
 
   public :: network_panel_min_size
@@ -60,6 +66,10 @@ module ftop_network
   public :: network_table_cycle_sort_key
   public :: network_table_cycle_state_filter
   public :: network_table_page_delta
+  public :: network_table_quick_active
+  public :: network_table_quick_backspace
+  public :: network_table_quick_clear
+  public :: network_table_quick_input
   public :: network_table_select_delta
   public :: network_table_sort_direction_label
   public :: network_table_sort_key_label
@@ -761,6 +771,245 @@ contains
     step = max(1, state%viewport_rows)
     call network_table_select_delta(state, delta_pages * step)
   end subroutine network_table_page_delta
+
+  logical function network_table_quick_input(snapshot, state, text, status) result(handled)
+    type(collector_snapshot), intent(in) :: snapshot
+    type(network_table_state), intent(inout) :: state
+    character(len=*), intent(in) :: text
+    character(len=:), allocatable, intent(out) :: status
+    character(len=1) :: key
+
+    handled = .false.
+    status = ""
+    if (len(text) /= 1) return
+    key = text(1:1)
+
+    if (state%quick_mode == NETWORK_QUICK_NONE) then
+      if (key == ":") then
+        state%quick_mode = NETWORK_QUICK_PORT
+        state%quick_query = ""
+        call update_quick_jump_status(snapshot, state, status)
+        handled = .true.
+      else if (key == "[" .or. decimal_digit(key)) then
+        state%quick_mode = NETWORK_QUICK_ADDRESS
+        state%quick_query = ""
+        if (key /= "[") state%quick_query = key
+        call update_quick_jump_status(snapshot, state, status)
+        handled = .true.
+      end if
+      return
+    end if
+
+    select case (state%quick_mode)
+    case (NETWORK_QUICK_PORT)
+      if (key == ":" .and. len_trim(state%quick_query) == 0) then
+        state%quick_mode = NETWORK_QUICK_ADDRESS
+        state%quick_query = "::"
+        call update_quick_jump_status(snapshot, state, status)
+        handled = .true.
+      else if (decimal_digit(key)) then
+        if (len_trim(state%quick_query) < 5) state%quick_query = trim(state%quick_query) // key
+        call update_quick_jump_status(snapshot, state, status)
+        handled = .true.
+      else
+        call network_table_quick_clear(state)
+      end if
+    case (NETWORK_QUICK_ADDRESS)
+      if (address_query_char(key)) then
+        if (len_trim(state%quick_query) < len(state%quick_query)) then
+          state%quick_query = trim(state%quick_query) // lowercase_text(key)
+        end if
+        call update_quick_jump_status(snapshot, state, status)
+        handled = .true.
+      else if (key == "]") then
+        call update_quick_jump_status(snapshot, state, status)
+        handled = .true.
+      else
+        call network_table_quick_clear(state)
+      end if
+    case default
+      call network_table_quick_clear(state)
+    end select
+  end function network_table_quick_input
+
+  logical function network_table_quick_backspace(snapshot, state, status) result(handled)
+    type(collector_snapshot), intent(in) :: snapshot
+    type(network_table_state), intent(inout) :: state
+    character(len=:), allocatable, intent(out) :: status
+    integer :: query_length
+
+    handled = .false.
+    status = ""
+    if (.not. network_table_quick_active(state)) return
+    query_length = len_trim(state%quick_query)
+    if (query_length <= 1) then
+      call network_table_quick_clear(state)
+      status = network_table_status(state)
+    else
+      state%quick_query = state%quick_query(:query_length - 1)
+      call update_quick_jump_status(snapshot, state, status)
+    end if
+    handled = .true.
+  end function network_table_quick_backspace
+
+  logical function network_table_quick_active(state) result(active)
+    type(network_table_state), intent(in) :: state
+
+    active = state%quick_mode /= NETWORK_QUICK_NONE
+  end function network_table_quick_active
+
+  subroutine network_table_quick_clear(state)
+    type(network_table_state), intent(inout) :: state
+
+    state%quick_mode = NETWORK_QUICK_NONE
+    state%quick_query = ""
+  end subroutine network_table_quick_clear
+
+  subroutine update_quick_jump_status(snapshot, state, status)
+    type(collector_snapshot), intent(in) :: snapshot
+    type(network_table_state), intent(inout) :: state
+    character(len=:), allocatable, intent(out) :: status
+    type(net_connection), allocatable :: connections(:)
+    integer :: match_row
+
+    call collect_quick_visible_connections(snapshot, state, connections)
+    state%total_row_count = valid_connection_count(snapshot)
+    match_row = 0
+    select case (state%quick_mode)
+    case (NETWORK_QUICK_PORT)
+      if (len_trim(state%quick_query) > 0) match_row = quick_port_match_row(connections, trim(state%quick_query))
+    case (NETWORK_QUICK_ADDRESS)
+      if (len_trim(state%quick_query) > 0) match_row = quick_address_match_row(connections, trim(state%quick_query))
+    end select
+    if (match_row > 0) state%selected_row = match_row
+    call normalize_network_table_state(state, size(connections), state%viewport_rows)
+    status = network_table_quick_status(state, match_row > 0)
+  end subroutine update_quick_jump_status
+
+  subroutine collect_quick_visible_connections(snapshot, state, connections)
+    type(collector_snapshot), intent(in) :: snapshot
+    type(network_table_state), intent(in) :: state
+    type(net_connection), allocatable, intent(out) :: connections(:)
+    type(network_table_state) :: match_state
+
+    match_state = state
+    connections = visible_connections(snapshot, match_state)
+    call sort_connections(connections, match_state)
+  end subroutine collect_quick_visible_connections
+
+  integer function quick_port_match_row(connections, query) result(row)
+    type(net_connection), intent(in) :: connections(:)
+    character(len=*), intent(in) :: query
+    integer :: connection_index
+
+    row = 0
+    do connection_index = 1, size(connections)
+      if (port_prefix_matches(connections(connection_index)%local_port, query) .or. &
+          port_prefix_matches(connections(connection_index)%remote_port, query)) then
+        row = connection_index
+        return
+      end if
+    end do
+  end function quick_port_match_row
+
+  integer function quick_address_match_row(connections, query) result(row)
+    type(net_connection), intent(in) :: connections(:)
+    character(len=*), intent(in) :: query
+    integer :: connection_index
+
+    row = 0
+    do connection_index = 1, size(connections)
+      if (address_prefix_matches(connections(connection_index)%local_addr, query) .or. &
+          address_prefix_matches(connections(connection_index)%remote_addr, query)) then
+        row = connection_index
+        return
+      end if
+    end do
+  end function quick_address_match_row
+
+  logical function port_prefix_matches(port, query) result(matches)
+    integer, intent(in) :: port
+    character(len=*), intent(in) :: query
+    character(len=16) :: port_text_value
+
+    matches = .false.
+    if (port <= 0 .or. len_trim(query) <= 0) return
+    write(port_text_value, '(i0)') port
+    matches = starts_with(trim(port_text_value), trim(query))
+  end function port_prefix_matches
+
+  logical function address_prefix_matches(address, query) result(matches)
+    character(len=*), intent(in) :: address
+    character(len=*), intent(in) :: query
+
+    matches = starts_with(lowercase_text(trim(address)), lowercase_text(trim(query)))
+  end function address_prefix_matches
+
+  logical function starts_with(value, prefix) result(matches)
+    character(len=*), intent(in) :: value
+    character(len=*), intent(in) :: prefix
+
+    matches = len_trim(prefix) > 0 .and. len_trim(value) >= len_trim(prefix)
+    if (matches) matches = value(:len_trim(prefix)) == prefix(:len_trim(prefix))
+  end function starts_with
+
+  function network_table_quick_status(state, matched) result(text)
+    type(network_table_state), intent(in) :: state
+    logical, intent(in) :: matched
+    character(len=:), allocatable :: text
+
+    select case (state%quick_mode)
+    case (NETWORK_QUICK_PORT)
+      text = "network port :" // trim(state%quick_query)
+      if (len_trim(state%quick_query) <= 0) text = "network port :"
+    case (NETWORK_QUICK_ADDRESS)
+      text = "network ip " // trim(state%quick_query)
+    case default
+      text = network_table_status(state)
+      return
+    end select
+    if (matched) then
+      text = text // " | row " // integer_text(max(0, state%selected_row)) // "/" // integer_text(max(0, state%row_count))
+    else if (len_trim(state%quick_query) > 0) then
+      text = text // " | no match"
+    end if
+  end function network_table_quick_status
+
+  logical function decimal_digit(text) result(digit)
+    character(len=*), intent(in) :: text
+    integer :: code
+
+    digit = .false.
+    if (len(text) /= 1) return
+    code = iachar(text(1:1))
+    digit = code >= iachar("0") .and. code <= iachar("9")
+  end function decimal_digit
+
+  logical function address_query_char(text) result(valid)
+    character(len=*), intent(in) :: text
+    character(len=1) :: lower
+
+    valid = .false.
+    if (len(text) /= 1) return
+    lower = lowercase_text(text)
+    valid = decimal_digit(lower) .or. lower == "." .or. lower == ":" .or. &
+            (lower >= "a" .and. lower <= "f")
+  end function address_query_char
+
+  function lowercase_text(text) result(lower)
+    character(len=*), intent(in) :: text
+    character(len=len(text)) :: lower
+    integer :: code
+    integer :: index_value
+
+    lower = text
+    do index_value = 1, len(text)
+      code = iachar(text(index_value:index_value))
+      if (code >= iachar("A") .and. code <= iachar("Z")) then
+        lower(index_value:index_value) = achar(code + iachar("a") - iachar("A"))
+      end if
+    end do
+  end function lowercase_text
 
   subroutine network_table_cycle_sort_key(state, direction)
     type(network_table_state), intent(inout) :: state

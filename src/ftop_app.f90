@@ -78,6 +78,10 @@ module ftop_app
     network_table_cycle_sort_key, &
     network_table_cycle_state_filter, &
     network_table_page_delta, &
+    network_table_quick_active, &
+    network_table_quick_backspace, &
+    network_table_quick_clear, &
+    network_table_quick_input, &
     network_table_select_delta, &
     network_table_sort_direction_label, &
     network_table_sort_key_label, &
@@ -597,6 +601,7 @@ contains
     session%last_focus_index = 0
     session%cpu_core_active = .false.
     session%network_table_active = .false.
+    call network_table_quick_clear(session%network_state)
     session%disk_table_active = .false.
     session%process_tree_active = .false.
     if (old_zoomed .and. layout_contains_widget(session%layout, old_focus)) then
@@ -869,6 +874,7 @@ contains
       session%last_focus_index = session%focus_index
       session%cpu_core_active = .false.
       session%network_table_active = .false.
+      call network_table_quick_clear(session%network_state)
       session%disk_table_active = .false.
       session%process_tree_active = .false.
     end if
@@ -926,6 +932,7 @@ contains
     session%zoomed = .not. session%zoomed
     session%cpu_core_active = .false.
     session%network_table_active = .false.
+    call network_table_quick_clear(session%network_state)
     session%disk_table_active = .false.
     session%process_tree_active = .false.
     session%needs_full_render = .true.
@@ -1104,6 +1111,8 @@ contains
         session%running = .false.
       else if (handle_process_printable_key(session, text)) then
         continue
+      else if (handle_network_quick_printable_key(session, text)) then
+        continue
       else if (handle_global_printable_key(session, text)) then
         continue
       else if (handle_network_printable_key(session, text)) then
@@ -1127,6 +1136,7 @@ contains
       call toggle_pause(session)
       return
     end if
+    if (handle_network_quick_named_key(session, event%key_name)) return
     if (handle_zoom_escape_key(session, event%key_name)) return
     if (handle_cpu_core_mode_key(session, event%key_name)) return
     if (handle_process_tree_mode_key(session, event%key_name)) return
@@ -2013,6 +2023,41 @@ contains
       delta = 0
     end select
   end function vim_navigation_delta
+
+  logical function handle_network_quick_printable_key(session, text) result(handled)
+    type(terminal_session), intent(inout) :: session
+    character(len=*), intent(in) :: text
+    character(len=:), allocatable :: status
+
+    handled = .false.
+    if (.not. network_widget_focused(session)) return
+    if (.not. session%zoomed .and. .not. session%network_table_active) return
+    if (text_input_active(session)) return
+    handled = network_table_quick_input(session%last_snapshot, session%network_state, text, status)
+    if (handled) call set_status(session, status)
+  end function handle_network_quick_printable_key
+
+  logical function handle_network_quick_named_key(session, key_name) result(handled)
+    type(terminal_session), intent(inout) :: session
+    character(len=*), intent(in) :: key_name
+    character(len=:), allocatable :: status
+
+    handled = .false.
+    if (.not. network_widget_focused(session)) return
+    if (.not. session%zoomed .and. .not. session%network_table_active) return
+    if (.not. network_table_quick_active(session%network_state)) return
+    select case (key_name)
+    case (FGOF_KEY_BACKSPACE, FGOF_KEY_DELETE)
+      handled = network_table_quick_backspace(session%last_snapshot, session%network_state, status)
+      if (handled) call set_status(session, status)
+    case (FGOF_KEY_ESCAPE)
+      call network_table_quick_clear(session%network_state)
+      call set_status(session, network_table_status(session%network_state))
+      handled = .true.
+    case default
+      call network_table_quick_clear(session%network_state)
+    end select
+  end function handle_network_quick_named_key
 
   logical function handle_network_printable_key(session, text) result(handled)
     type(terminal_session), intent(inout) :: session
