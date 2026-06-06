@@ -56,6 +56,7 @@ contains
     type(collector_snapshot) :: snapshot
     type(disk_table_state) :: state
     type(screen_style) :: style
+    character(len=:), allocatable :: compact_row
     character(len=:), allocatable :: text
 
     call fill_disk_snapshot(snapshot)
@@ -67,6 +68,12 @@ contains
     call require(index(text, "Filesystems 2") > 0, "disk panel should summarize filesystems")
     call require(index(text, "/var") > 0, "disk compact panel should sort hottest filesystem first")
     call require(index(text, "/var") < index(text, "/home"), "disk compact rows should sort by usage")
+    compact_row = row_text(buffer, 4)
+    call require(index(compact_row, "/var") > 0, "disk compact row should render mountpoint")
+    call require(index(compact_row, "90.0%") > 0, "disk compact row should render usage percent")
+    call require(index(compact_row, "90.0%") - index(compact_row, "/var") >= 8, &
+                 "disk compact row should separate mountpoint and percent")
+    call require(index(compact_row, "GiB") == 0, "disk compact row should omit byte totals")
     call require(index(disk_table_status(state), "disk row") > 0, "disk table state should produce status")
 
     buffer = allocate_screen(80, 12)

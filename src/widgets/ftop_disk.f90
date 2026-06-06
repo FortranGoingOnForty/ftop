@@ -22,6 +22,8 @@ module ftop_disk
   private
 
   integer, parameter :: DISK_TABLE_COLUMNS = 5
+  integer, parameter :: COMPACT_ROW_GAP_WIDTH = 4
+  integer, parameter :: COMPACT_PERCENT_WIDTH = 6
 
   type, public :: disk_table_state
     integer :: selected_row = 1
@@ -136,8 +138,8 @@ contains
       if (actual_index > size(filesystems)) exit
       row_style = dim_style
       if (stateful .and. actual_index == state%selected_row) row_style = selected_style
-      call render_text(buffer, content_line_rect(content, line_index), &
-                       compact_filesystem_text(filesystems(actual_index)), row_style)
+      call render_compact_filesystem_row(buffer, content_line_rect(content, line_index), &
+                                         filesystems(actual_index), row_style)
       line_index = line_index + 1
     end do
   end subroutine render_disk_compact_panel
@@ -242,13 +244,31 @@ contains
     end if
   end function disk_summary_text
 
-  function compact_filesystem_text(filesystem) result(text)
+  subroutine render_compact_filesystem_row(buffer, rect, filesystem, style)
+    type(screen_buffer), intent(inout) :: buffer
+    type(widget_rect), intent(in) :: rect
     type(filesystem_info), intent(in) :: filesystem
-    character(len=:), allocatable :: text
+    type(screen_style), intent(in) :: style
+    type(widget_rect) :: mount_rect
+    type(widget_rect) :: percent_rect
+    character(len=:), allocatable :: percent_text
+    integer :: gap_width
+    integer :: mount_width
+    integer :: percent_width
 
-    text = trim(filesystem%mountpoint) // " " // format_percent(real(filesystem_usage_percent(filesystem))) // &
-           " " // format_bytes(filesystem%used_bytes) // "/" // format_bytes(filesystem%total_bytes)
-  end function compact_filesystem_text
+    if (rect%width <= 0 .or. rect%height <= 0) return
+    percent_text = format_percent(real(filesystem_usage_percent(filesystem)))
+    percent_width = min(rect%width, max(COMPACT_PERCENT_WIDTH, len_trim(percent_text)))
+    gap_width = min(COMPACT_ROW_GAP_WIDTH, max(0, rect%width - percent_width))
+    mount_width = max(0, rect%width - percent_width - gap_width)
+
+    if (mount_width > 0) then
+      mount_rect = widget_rect(rect%row, rect%col, mount_width, 1)
+      call render_text(buffer, mount_rect, trim(filesystem%mountpoint), style)
+    end if
+    percent_rect = widget_rect(rect%row, rect%col + rect%width - percent_width, percent_width, 1)
+    call render_text(buffer, percent_rect, percent_text, style, TEXT_ALIGN_RIGHT)
+  end subroutine render_compact_filesystem_row
 
   function sorted_filesystems(table) result(filesystems)
     type(disk_table), intent(in) :: table
