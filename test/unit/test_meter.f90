@@ -1,7 +1,7 @@
 program test_meter
   use fgof_screen, only : allocate_screen, clear_screen_style
   use fgof_screen_types, only : screen_buffer, screen_style
-  use ftop_color, only : gradient_green_yellow_red
+  use ftop_color, only : gradient_green_yellow_red, rgb, style_from_rgb
   use ftop_meter, only : &
     METER_FILL_BLOCK, &
     METER_FILL_SHADED, &
@@ -16,6 +16,7 @@ program test_meter
   call test_block_meter_rendering()
   call test_shaded_meter_rendering()
   call test_label_overlay()
+  call test_embedded_label_backgrounds()
   call test_tiny_meter_edges()
   call test_meter_widget_type()
 
@@ -85,6 +86,37 @@ contains
     call require_glyph(buffer, 1, 5, "%", "meter label third glyph mismatch")
     call require(buffer%cells(1, 3)%style%underline, "meter label style must be applied")
   end subroutine test_label_overlay
+
+  subroutine test_embedded_label_backgrounds()
+    type(screen_buffer) :: buffer
+    type(screen_style) :: empty_style
+    type(screen_style) :: fill_style
+    type(screen_style) :: label_style
+
+    buffer = allocate_screen(10, 1)
+    fill_style = style_from_rgb(fg=rgb(200, 200, 200))
+    empty_style = style_from_rgb(fg=rgb(100, 120, 140))
+    label_style = clear_screen_style()
+    label_style%underline = .true.
+
+    call render_meter(buffer, widget_rect(row=1, col=1, width=10, height=1), 0.50, &
+                      fill_mode=METER_FILL_BLOCK, fill_style=fill_style, empty_style=empty_style, &
+                      label="1234", label_style=label_style)
+
+    call require_glyph(buffer, 1, 4, "1", "embedded label first glyph mismatch")
+    call require_glyph(buffer, 1, 7, "4", "embedded label final glyph mismatch")
+    call require(all(buffer%cells(1, 4)%style%bg_rgb == [200, 200, 200]), &
+                 "filled label background should use fill color")
+    call require(all(buffer%cells(1, 4)%style%fg_rgb == [0, 0, 0]), &
+                 "bright filled label background should use dark text")
+    call require(all(buffer%cells(1, 6)%style%bg_rgb == [25, 30, 35]), &
+                 "empty label background should use muted empty color")
+    call require(all(buffer%cells(1, 6)%style%fg_rgb == [255, 255, 255]), &
+                 "muted empty label background should use light text")
+    call require(buffer%cells(1, 4)%style%bg_truecolor, "filled label background should be truecolor")
+    call require(buffer%cells(1, 6)%style%bg_truecolor, "empty label background should be truecolor")
+    call require(buffer%cells(1, 4)%style%underline, "embedded label should preserve label style")
+  end subroutine test_embedded_label_backgrounds
 
   subroutine test_tiny_meter_edges()
     type(screen_buffer) :: buffer

@@ -23,6 +23,7 @@ module ftop_text
   public :: render_text
   public :: text_cell_width
   public :: truncated_text
+  public :: utf8_glyph_bytes
 
 contains
 

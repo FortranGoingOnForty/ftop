@@ -62,6 +62,11 @@ target_link_libraries(ftop_meter_test PRIVATE ftop_core)
 
 add_test(NAME ftop_meter COMMAND ftop_meter_test)
 
+add_executable(ftop_memory_test unit/test_memory.f90)
+target_link_libraries(ftop_memory_test PRIVATE ftop_core)
+
+add_test(NAME ftop_memory COMMAND ftop_memory_test)
+
 add_executable(ftop_sparkline_test unit/test_sparkline.f90)
 target_link_libraries(ftop_sparkline_test PRIVATE ftop_core)
 

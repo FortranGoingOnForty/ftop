@@ -13,8 +13,15 @@ module ftop_memory
     style_from_rgb
   use ftop_graph, only : render_graph
   use ftop_mem_data, only : memory_info, memory_usage_percent
-  use ftop_meter, only : METER_FILL_SHADED, render_meter
-  use ftop_text, only : TEXT_ALIGN_CENTER, format_bytes, format_percent, render_text
+  use ftop_meter, only : METER_FILL_SHADED, meter_label_cell_style, render_meter
+  use ftop_text, only : &
+    TEXT_ALIGN_CENTER, &
+    format_bytes, &
+    format_percent, &
+    render_text, &
+    text_cell_width, &
+    truncated_text, &
+    utf8_glyph_bytes
   use ftop_widgets, only : widget_rect, widget_size
   implicit none
   private
@@ -95,8 +102,56 @@ contains
       call put_glyph(buffer, rect%row, rect%col + col - 1, "█", &
                      memory_segment_style(position, used_bytes, buffer_bytes, cached_bytes))
     end do
-    call render_text(buffer, rect, format_percent(real(memory_usage_percent(info))), label_style, TEXT_ALIGN_CENTER)
+    call render_memory_bar_label(buffer, rect, format_percent(real(memory_usage_percent(info))), label_style, &
+                                 info%total_bytes, used_bytes, buffer_bytes, cached_bytes)
   end subroutine render_memory_bar
+
+  subroutine render_memory_bar_label(buffer, rect, label, label_style, total_bytes, used_bytes, buffer_bytes, cached_bytes)
+    type(screen_buffer), intent(inout) :: buffer
+    type(widget_rect), intent(in) :: rect
+    character(len=*), intent(in) :: label
+    type(screen_style), intent(in) :: label_style
+    integer(int64), intent(in) :: total_bytes
+    integer(int64), intent(in) :: used_bytes
+    integer(int64), intent(in) :: buffer_bytes
+    integer(int64), intent(in) :: cached_bytes
+    character(len=:), allocatable :: clipped
+    type(screen_style) :: segment_style
+    integer :: draw_col
+    integer :: glyph_bytes
+    integer :: glyph_index
+    integer :: i
+    integer :: label_width
+    integer :: segment_col
+    integer :: target_col
+    real(real64) :: position
+
+    if (rect%width <= 0 .or. total_bytes <= 0_int64) return
+
+    clipped = truncated_text(label, rect%width)
+    label_width = text_cell_width(clipped)
+    if (label_width <= 0) return
+
+    draw_col = rect%col + max(0, (rect%width - label_width) / 2)
+    i = 1
+    glyph_index = 0
+    do while (i <= len(clipped))
+      glyph_bytes = utf8_glyph_bytes(clipped, i)
+      target_col = draw_col + glyph_index
+      if (target_col > rect%col + rect%width - 1) exit
+      if (target_col >= rect%col) then
+        segment_col = target_col - rect%col + 1
+        position = real(total_bytes, real64) * (real(segment_col, real64) - 0.5_real64) / real(rect%width, real64)
+        segment_style = memory_segment_style(position, used_bytes, buffer_bytes, cached_bytes)
+        call put_glyph(buffer, rect%row, target_col, clipped(i:i + glyph_bytes - 1), &
+                       meter_label_cell_style(label_style, segment_style, &
+                                              muted_background=memory_position_is_free(position, used_bytes, &
+                                                                                      buffer_bytes, cached_bytes)))
+      end if
+      i = i + glyph_bytes
+      glyph_index = glyph_index + 1
+    end do
+  end subroutine render_memory_bar_label
 
   function memory_segment_style(position, used_bytes, buffer_bytes, cached_bytes) result(style)
     real(real64), intent(in) :: position
@@ -121,6 +176,17 @@ contains
       style = style_from_rgb(fg=COLOR_UI_DIM)
     end if
   end function memory_segment_style
+
+  logical function memory_position_is_free(position, used_bytes, buffer_bytes, cached_bytes) result(is_free)
+    real(real64), intent(in) :: position
+    integer(int64), intent(in) :: used_bytes
+    integer(int64), intent(in) :: buffer_bytes
+    integer(int64), intent(in) :: cached_bytes
+    real(real64) :: cached_limit
+
+    cached_limit = real(used_bytes + buffer_bytes + cached_bytes, real64)
+    is_free = position > cached_limit
+  end function memory_position_is_free
 
   subroutine render_swap_line(buffer, rect, snapshot, memory_gradient, dim_style, text_style)
     type(screen_buffer), intent(inout) :: buffer
