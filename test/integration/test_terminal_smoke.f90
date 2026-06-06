@@ -74,6 +74,54 @@ program test_terminal_smoke
   match = wait_for_string(session, "Resumed", SMOKE_TIMEOUT_MS)
   if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not resume from pause"
 
+  if (.not. send_text(session, "1")) error stop "failed to send full layout key"
+  match = wait_for_string(session, "layout full", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not jump to full layout preset"
+
+  if (.not. send_text(session, "c")) error stop "failed to send CPU focus key before arrow right"
+  match = wait_for_string(session, "focus CPU", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not focus CPU before arrow right"
+
+  if (.not. send_text(session, achar(27) // "[C")) error stop "failed to send arrow right"
+  match = wait_for_string(session, "focus memory", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop arrow right did not focus memory"
+
+  if (.not. send_text(session, "c")) error stop "failed to send CPU focus key before arrow down"
+  match = wait_for_string(session, "focus CPU", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not focus CPU before arrow down"
+
+  if (.not. send_text(session, achar(27) // "[B")) error stop "failed to send arrow down"
+  match = wait_for_string(session, "focus process", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop arrow down did not focus process"
+
+  if (.not. send_text(session, achar(27) // "[A")) error stop "failed to send inactive process arrow up"
+  match = wait_for_string(session, "focus memory", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "inactive process arrow up did not focus memory"
+
+  if (.not. send_text(session, "p")) error stop "failed to refocus process before tree active mode"
+  match = wait_for_string(session, "focus Process", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not refocus process before tree active mode"
+
+  if (.not. send_text(session, achar(13))) error stop "failed to activate process tree"
+  match = wait_for_string(session, "process tree active", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "enter did not activate process tree mode"
+
+  if (.not. send_text(session, achar(27) // "[A")) error stop "failed to send active process arrow up"
+  match = wait_for_string(session, "navigate", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "active process arrow up did not navigate process tree"
+
+  if (.not. send_text(session, achar(13))) error stop "failed to zoom active process tree"
+  match = wait_for_string(session, "zoom process", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "second enter did not zoom process tree"
+
+  if (.not. send_text(session, achar(13))) error stop "failed to unzoom process tree"
+  match = wait_for_string(session, "grid process", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "enter did not return from process zoom"
+
+  if (.not. send_text(session, achar(27) // "[Z")) error stop "failed to send Shift+Tab after arrow down"
+  match = wait_for_string(session, "focus memory", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not leave process focus after arrow down"
+
   if (.not. send_text(session, "3")) error stop "failed to send direct layout key"
   match = wait_for_string(session, "layout process", SMOKE_TIMEOUT_MS)
   if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not jump to layout preset"

@@ -4,9 +4,15 @@ program test_layout
     LAYOUT_WIDGET_MEMORY, &
     LAYOUT_WIDGET_NETWORK, &
     LAYOUT_WIDGET_PROCESS, &
+    LAYOUT_DIRECTION_DOWN, &
+    LAYOUT_DIRECTION_LEFT, &
+    LAYOUT_DIRECTION_RIGHT, &
+    LAYOUT_DIRECTION_UP, &
     default_dashboard_layout, &
+    default_dashboard_grid, &
     distribute_weighted_space, &
     layout_assignment, &
+    layout_directional_focus_widget, &
     layout_error, &
     layout_grid, &
     make_layout_column, &
@@ -25,6 +31,9 @@ program test_layout
   call test_reject_invalid_layout_toml()
   call test_grid_resolution()
   call test_dashboard_fallback_layout()
+  call test_directional_focus_for_default_grid()
+  call test_directional_focus_for_stacked_grid()
+  call test_directional_focus_for_custom_grid()
   call test_preset_config_files()
 
 contains
@@ -185,6 +194,64 @@ contains
     call require(layout%process_panel%row + layout%process_panel%height <= layout%footer%row, &
                  "stacked process should stay above footer")
   end subroutine test_dashboard_fallback_layout
+
+  subroutine test_directional_focus_for_default_grid()
+    type(layout_grid) :: grid
+    type(widget_rect) :: viewport
+
+    grid = default_dashboard_grid(stacked=.false.)
+    viewport = widget_rect(3, 3, 116, 19)
+
+    call require(layout_directional_focus_widget(grid, viewport, LAYOUT_WIDGET_CPU, LAYOUT_DIRECTION_RIGHT) == &
+                 LAYOUT_WIDGET_MEMORY, "default cpu right should focus memory")
+    call require(layout_directional_focus_widget(grid, viewport, LAYOUT_WIDGET_MEMORY, LAYOUT_DIRECTION_RIGHT) == &
+                 LAYOUT_WIDGET_NETWORK, "default memory right should focus network")
+    call require(layout_directional_focus_widget(grid, viewport, LAYOUT_WIDGET_NETWORK, LAYOUT_DIRECTION_LEFT) == &
+                 LAYOUT_WIDGET_MEMORY, "default network left should focus memory")
+    call require(layout_directional_focus_widget(grid, viewport, LAYOUT_WIDGET_CPU, LAYOUT_DIRECTION_DOWN) == &
+                 LAYOUT_WIDGET_PROCESS, "default cpu down should focus process")
+    call require(layout_directional_focus_widget(grid, viewport, LAYOUT_WIDGET_PROCESS, LAYOUT_DIRECTION_UP) == &
+                 LAYOUT_WIDGET_MEMORY, "default process up should focus centered metric")
+  end subroutine test_directional_focus_for_default_grid
+
+  subroutine test_directional_focus_for_stacked_grid()
+    type(layout_grid) :: grid
+    type(widget_rect) :: viewport
+
+    grid = default_dashboard_grid(stacked=.true.)
+    viewport = widget_rect(3, 3, 76, 19)
+
+    call require(layout_directional_focus_widget(grid, viewport, LAYOUT_WIDGET_CPU, LAYOUT_DIRECTION_DOWN) == &
+                 LAYOUT_WIDGET_MEMORY, "stacked cpu down should focus memory")
+    call require(layout_directional_focus_widget(grid, viewport, LAYOUT_WIDGET_MEMORY, LAYOUT_DIRECTION_UP) == &
+                 LAYOUT_WIDGET_CPU, "stacked memory up should focus cpu")
+    call require(layout_directional_focus_widget(grid, viewport, LAYOUT_WIDGET_MEMORY, LAYOUT_DIRECTION_DOWN) == &
+                 LAYOUT_WIDGET_NETWORK, "stacked memory down should focus network")
+    call require(layout_directional_focus_widget(grid, viewport, LAYOUT_WIDGET_NETWORK, LAYOUT_DIRECTION_DOWN) == &
+                 LAYOUT_WIDGET_PROCESS, "stacked network down should focus process")
+    call require(len(layout_directional_focus_widget(grid, viewport, LAYOUT_WIDGET_CPU, LAYOUT_DIRECTION_RIGHT)) == 0, &
+                 "stacked cpu right should have no neighbor")
+  end subroutine test_directional_focus_for_stacked_grid
+
+  subroutine test_directional_focus_for_custom_grid()
+    type(layout_grid) :: grid
+    type(widget_rect) :: viewport
+
+    allocate(grid%rows(2))
+    grid%rows(1) = make_layout_row(1, [ &
+      make_layout_column(LAYOUT_WIDGET_CPU, 1, 10, 4), &
+      make_layout_column(LAYOUT_WIDGET_MEMORY, 1, 10, 4) &
+    ])
+    grid%rows(2) = make_layout_row(1, [make_layout_column(LAYOUT_WIDGET_NETWORK, 1, 20, 4)])
+    viewport = widget_rect(1, 1, 40, 12)
+
+    call require(layout_directional_focus_widget(grid, viewport, LAYOUT_WIDGET_CPU, LAYOUT_DIRECTION_RIGHT) == &
+                 LAYOUT_WIDGET_MEMORY, "custom cpu right should focus memory")
+    call require(layout_directional_focus_widget(grid, viewport, LAYOUT_WIDGET_MEMORY, LAYOUT_DIRECTION_DOWN) == &
+                 LAYOUT_WIDGET_NETWORK, "custom memory down should focus spanning network")
+    call require(layout_directional_focus_widget(grid, viewport, LAYOUT_WIDGET_NETWORK, LAYOUT_DIRECTION_UP) == &
+                 LAYOUT_WIDGET_CPU, "custom tie should keep row-order focus")
+  end subroutine test_directional_focus_for_custom_grid
 
   subroutine test_preset_config_files()
     character(len=512) :: config_root

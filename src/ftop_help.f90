@@ -22,27 +22,27 @@ module ftop_help
   end type help_section
 
   type(help_section), parameter :: HELP_SECTIONS(3) = [ &
-    help_section("Global", "", 7, [character(len=HELP_LINE_LEN) :: &
+    help_section("Global", "", 8, [character(len=HELP_LINE_LEN) :: &
       "c/m/n/p: focus CPU/Memory/Network/Process", &
       "d/g: disk/GPU placeholder status", &
       "P: cycle layout   1-4: jump layouts", &
+      "arrows: focus panes; process Enter activates tree", &
       "Tab: next focus   Shift+Tab: last focus", &
-      "z/Enter: zoom   +/-: refresh rate", &
+      "z: zoom   Enter: activate/zoom focus", &
       "Ctrl+L: redraw   Ctrl+R: refresh", &
-      "?/F1: help", &
-      ""]), &
+      "?/F1: help"]), &
     help_section("Process", "process", 5, [character(len=HELP_LINE_LEN) :: &
       "F2: signal   F3: tree   F4: filter   F5: sort dir", &
       "F6: sparklines   F7: pause   F8: follow", &
       "F9: signal tags   F10: command detail", &
       "Space: tag   U: clear tags", &
-      "type: fuzzy find   arrows/Page/Home/End/j/k/g/G: navigate", &
+      "Enter: tree active/zoom   Page/Home/End/j/k/g/G: navigate", &
       "", &
       "", &
       ""]), &
     help_section("Network", "network", 2, [character(len=HELP_LINE_LEN) :: &
       "f: state filter   s: sort direction", &
-      "arrows/Page/Home/End/j/k/g/G: navigate connections", &
+      "Page/Home/End/j/k/g/G: navigate connections", &
       "", &
       "", &
       "", &

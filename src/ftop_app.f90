@@ -47,7 +47,12 @@ module ftop_app
     dashboard_layout_from_grid, &
     default_dashboard_grid, &
     default_dashboard_layout, &
+    LAYOUT_DIRECTION_DOWN, &
+    LAYOUT_DIRECTION_LEFT, &
+    LAYOUT_DIRECTION_RIGHT, &
+    LAYOUT_DIRECTION_UP, &
     layout_error, &
+    layout_directional_focus_widget, &
     layout_focus_count, &
     layout_focus_widget, &
     layout_grid, &
@@ -199,6 +204,7 @@ module ftop_app
     logical :: layout_loaded = .false.
     logical :: zoomed = .false.
     logical :: help_visible = .false.
+    logical :: process_tree_active = .false.
     logical :: paused = .false.
     logical :: running = .true.
     logical :: needs_full_render = .true.
@@ -565,6 +571,7 @@ contains
 
     session%focus_index = 1
     session%last_focus_index = 0
+    session%process_tree_active = .false.
     if (old_zoomed .and. layout_contains_widget(session%layout, old_focus)) then
       session%zoomed = .false.
       ignored_focus = focus_widget_named(session, old_focus)
@@ -804,7 +811,10 @@ contains
     count = current_focus_count(session)
     if (count <= 0) return
     bounded = max(1, min(count, index))
-    if (bounded /= session%focus_index) session%last_focus_index = session%focus_index
+    if (bounded /= session%focus_index) then
+      session%last_focus_index = session%focus_index
+      session%process_tree_active = .false.
+    end if
     session%focus_index = bounded
   end subroutine set_focus_index
 
@@ -857,6 +867,7 @@ contains
     end if
 
     session%zoomed = .not. session%zoomed
+    session%process_tree_active = .false.
     if (session%zoomed) then
       call set_status(session, "zoom " // focus)
     else
@@ -1050,6 +1061,8 @@ contains
       call toggle_pause(session)
       return
     end if
+    if (handle_process_tree_mode_key(session, event%key_name)) return
+    if (handle_directional_focus_key(session, event%key_name)) return
     if (handle_process_named_key(session, event%key_name)) return
     if (handle_network_named_key(session, event%key_name)) return
     select case (event%key_name)
@@ -1069,6 +1082,136 @@ contains
       call set_status(session, "key: " // event%key_name)
     end select
   end subroutine handle_key_event
+
+  logical function handle_process_tree_mode_key(session, key_name) result(handled)
+    type(terminal_session), intent(inout) :: session
+    character(len=*), intent(in) :: key_name
+
+    handled = .false.
+    if (.not. process_widget_focused(session)) return
+    if (text_input_active(session)) return
+
+    select case (key_name)
+    case (FGOF_KEY_ENTER)
+      if (session%zoomed) then
+        call toggle_zoom(session)
+      else if (session%process_tree_active) then
+        session%process_tree_active = .false.
+        call toggle_zoom(session)
+      else
+        session%process_tree_active = .true.
+        call set_status(session, "process tree active")
+      end if
+      handled = .true.
+    case (FGOF_KEY_ESCAPE)
+      if (.not. session%process_tree_active) return
+      session%process_tree_active = .false.
+      call set_status(session, "focus process")
+      handled = .true.
+    end select
+  end function handle_process_tree_mode_key
+
+  logical function handle_directional_focus_key(session, key_name) result(handled)
+    type(terminal_session), intent(inout) :: session
+    character(len=*), intent(in) :: key_name
+    character(len=:), allocatable :: current_widget
+    character(len=:), allocatable :: next_widget
+    type(layout_grid) :: fallback_grid
+    type(widget_rect) :: viewport
+    integer :: direction
+    logical :: focused
+
+    handled = .false.
+    direction = layout_direction_from_key(key_name)
+    if (direction <= 0) return
+    if (session%zoomed) return
+    if (text_input_active(session)) return
+    if (session%process_tree_active .and. process_widget_focused(session)) then
+      call handle_active_process_direction(session, direction)
+      handled = .true.
+      return
+    end if
+    if (process_widget_focused(session) .and. session%process_state%fuzzy_query_length > 0) return
+
+    current_widget = focused_widget_name(session)
+    if (len(current_widget) <= 0) return
+
+    viewport = current_layout_viewport(session)
+    if (viewport%width <= 0 .or. viewport%height <= 0) return
+
+    if (session%layout_loaded) then
+      next_widget = layout_directional_focus_widget(session%layout, viewport, current_widget, direction)
+    else
+      fallback_grid = default_dashboard_grid(stacked=session%current%size%width < 96)
+      next_widget = layout_directional_focus_widget(fallback_grid, viewport, current_widget, direction)
+    end if
+    if (len(next_widget) <= 0) return
+
+    focused = focus_widget_named(session, next_widget)
+    if (.not. focused) return
+
+    call set_status(session, "focus " // next_widget)
+    handled = .true.
+  end function handle_directional_focus_key
+
+  subroutine handle_active_process_direction(session, direction)
+    type(terminal_session), intent(inout) :: session
+    integer, intent(in) :: direction
+
+    select case (direction)
+    case (LAYOUT_DIRECTION_UP)
+      if (session%process_state%fuzzy_query_length > 0) then
+        call process_table_step_fuzzy_match(session%process_state, -1)
+        call mark_process_fuzzy_activity(session)
+      else
+        call process_table_select_delta(session%process_state, -1)
+      end if
+    case (LAYOUT_DIRECTION_DOWN)
+      if (session%process_state%fuzzy_query_length > 0) then
+        call process_table_step_fuzzy_match(session%process_state, 1)
+        call mark_process_fuzzy_activity(session)
+      else
+        call process_table_select_delta(session%process_state, 1)
+      end if
+    case (LAYOUT_DIRECTION_LEFT)
+      call process_table_cycle_sort_key(session%process_state, -1)
+    case (LAYOUT_DIRECTION_RIGHT)
+      call process_table_cycle_sort_key(session%process_state, 1)
+    end select
+    call set_status(session, "process tree navigate " // process_table_status(session%process_state))
+  end subroutine handle_active_process_direction
+
+  integer function layout_direction_from_key(key_name) result(direction)
+    character(len=*), intent(in) :: key_name
+
+    select case (key_name)
+    case (FGOF_KEY_UP)
+      direction = LAYOUT_DIRECTION_UP
+    case (FGOF_KEY_DOWN)
+      direction = LAYOUT_DIRECTION_DOWN
+    case (FGOF_KEY_LEFT)
+      direction = LAYOUT_DIRECTION_LEFT
+    case (FGOF_KEY_RIGHT)
+      direction = LAYOUT_DIRECTION_RIGHT
+    case default
+      direction = 0
+    end select
+  end function layout_direction_from_key
+
+  function current_layout_viewport(session) result(viewport)
+    type(terminal_session), intent(in) :: session
+    type(widget_rect) :: viewport
+    integer :: height
+    integer :: width
+
+    width = session%current%size%width
+    height = session%current%size%height
+    if (width < 8 .or. height < 6) then
+      viewport = widget_rect(0, 0, 0, 0)
+    else
+      viewport = widget_rect(3, 3, max(0, width - 4), max(0, height - 5))
+    end if
+  end function current_layout_viewport
 
   logical function handle_global_printable_key(session, text) result(handled)
     type(terminal_session), intent(inout) :: session
@@ -1375,6 +1518,7 @@ contains
       handled = .true.
       return
     end if
+    if (.not. process_table_navigation_enabled(session)) return
     select case (key_name)
     case (FGOF_KEY_BACKSPACE, FGOF_KEY_DELETE)
       if (session%process_state%fuzzy_query_length <= 0) return
@@ -1426,8 +1570,30 @@ contains
       return
     end select
     handled = .true.
-    call set_status(session, process_table_status(session%process_state))
+    if (session%process_tree_active .and. process_table_navigation_key(key_name)) then
+      call set_status(session, "process tree navigate " // process_table_status(session%process_state))
+    else
+      call set_status(session, process_table_status(session%process_state))
+    end if
   end function handle_process_named_key
+
+  logical function process_table_navigation_key(key_name) result(navigation_key)
+    character(len=*), intent(in) :: key_name
+
+    select case (key_name)
+    case (FGOF_KEY_UP, FGOF_KEY_DOWN, FGOF_KEY_LEFT, FGOF_KEY_RIGHT, &
+          FGOF_KEY_PAGEUP, FGOF_KEY_PAGEDOWN, FGOF_KEY_HOME, FGOF_KEY_END)
+      navigation_key = .true.
+    case default
+      navigation_key = .false.
+    end select
+  end function process_table_navigation_key
+
+  logical function process_table_navigation_enabled(session) result(enabled)
+    type(terminal_session), intent(in) :: session
+
+    enabled = session%zoomed .or. session%process_tree_active .or. session%process_state%fuzzy_query_length > 0
+  end function process_table_navigation_enabled
 
   logical function handle_process_function_key(session, key_name) result(handled)
     type(terminal_session), intent(inout) :: session

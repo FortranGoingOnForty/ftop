@@ -24,6 +24,10 @@ module ftop_layout
   character(len=*), parameter, public :: LAYOUT_WIDGET_MEMORY = "memory"
   character(len=*), parameter, public :: LAYOUT_WIDGET_NETWORK = "network"
   character(len=*), parameter, public :: LAYOUT_WIDGET_PROCESS = "process"
+  integer, parameter, public :: LAYOUT_DIRECTION_UP = 1
+  integer, parameter, public :: LAYOUT_DIRECTION_DOWN = 2
+  integer, parameter, public :: LAYOUT_DIRECTION_LEFT = 3
+  integer, parameter, public :: LAYOUT_DIRECTION_RIGHT = 4
   integer, parameter, public :: LAYOUT_PROCESS_COLUMN_CAPACITY = 12
   integer, parameter, public :: LAYOUT_PROCESS_COLUMN_NAME_LEN = 16
 
@@ -75,6 +79,7 @@ module ftop_layout
   public :: default_dashboard_layout
   public :: default_dashboard_grid
   public :: distribute_weighted_space
+  public :: layout_directional_focus_widget
   public :: layout_focus_count
   public :: layout_focus_widget
   public :: layout_widget_registered
@@ -636,6 +641,198 @@ contains
       end do
     end do
   end function layout_focus_widget
+
+  function layout_directional_focus_widget(grid, viewport, current_widget, direction) result(widget)
+    type(layout_grid), intent(in) :: grid
+    type(widget_rect), intent(in) :: viewport
+    character(len=*), intent(in) :: current_widget
+    integer, intent(in) :: direction
+    character(len=:), allocatable :: widget
+    type(layout_assignment), allocatable :: assignments(:)
+    integer :: candidate
+    integer :: best_candidate
+    integer :: best_center_delta
+    integer :: best_cross_gap
+    integer :: best_primary_gap
+    integer :: center_delta
+    integer :: cross_gap
+    integer :: primary_gap
+    integer :: source
+
+    widget = ""
+    if (viewport%width <= 0 .or. viewport%height <= 0) return
+
+    assignments = resolve_layout(grid, viewport)
+    if (.not. allocated(assignments)) return
+    source = layout_assignment_index(assignments, current_widget)
+    if (source <= 0) return
+
+    best_candidate = 0
+    best_cross_gap = huge(best_cross_gap)
+    best_primary_gap = huge(best_primary_gap)
+    best_center_delta = huge(best_center_delta)
+    do candidate = 1, size(assignments)
+      if (candidate == source) cycle
+      if (assignments(candidate)%rect%width <= 0 .or. assignments(candidate)%rect%height <= 0) cycle
+      if (.not. layout_direction_candidate(assignments(source)%rect, assignments(candidate)%rect, direction)) cycle
+
+      primary_gap = layout_primary_gap(assignments(source)%rect, assignments(candidate)%rect, direction)
+      cross_gap = layout_cross_gap(assignments(source)%rect, assignments(candidate)%rect, direction)
+      center_delta = layout_cross_center_delta(assignments(source)%rect, assignments(candidate)%rect, direction)
+      if (layout_direction_candidate_is_better(primary_gap, cross_gap, center_delta, &
+                                               best_primary_gap, best_cross_gap, best_center_delta)) then
+        best_candidate = candidate
+        best_primary_gap = primary_gap
+        best_cross_gap = cross_gap
+        best_center_delta = center_delta
+      end if
+    end do
+
+    if (best_candidate > 0) widget = assignments(best_candidate)%widget
+  end function layout_directional_focus_widget
+
+  integer function layout_assignment_index(assignments, widget) result(index_value)
+    type(layout_assignment), intent(in) :: assignments(:)
+    character(len=*), intent(in) :: widget
+    integer :: item
+
+    index_value = 0
+    if (len_trim(widget) <= 0) return
+    do item = 1, size(assignments)
+      if (assignments(item)%widget == trim(widget)) then
+        index_value = item
+        return
+      end if
+    end do
+  end function layout_assignment_index
+
+  logical function layout_direction_candidate(source, candidate, direction) result(candidate_valid)
+    type(widget_rect), intent(in) :: source
+    type(widget_rect), intent(in) :: candidate
+    integer, intent(in) :: direction
+
+    select case (direction)
+    case (LAYOUT_DIRECTION_UP)
+      candidate_valid = layout_rect_bottom(candidate) < source%row
+    case (LAYOUT_DIRECTION_DOWN)
+      candidate_valid = candidate%row > layout_rect_bottom(source)
+    case (LAYOUT_DIRECTION_LEFT)
+      candidate_valid = layout_rect_right(candidate) < source%col
+    case (LAYOUT_DIRECTION_RIGHT)
+      candidate_valid = candidate%col > layout_rect_right(source)
+    case default
+      candidate_valid = .false.
+    end select
+  end function layout_direction_candidate
+
+  integer function layout_primary_gap(source, candidate, direction) result(gap)
+    type(widget_rect), intent(in) :: source
+    type(widget_rect), intent(in) :: candidate
+    integer, intent(in) :: direction
+
+    select case (direction)
+    case (LAYOUT_DIRECTION_UP)
+      gap = max(0, source%row - layout_rect_bottom(candidate))
+    case (LAYOUT_DIRECTION_DOWN)
+      gap = max(0, candidate%row - layout_rect_bottom(source))
+    case (LAYOUT_DIRECTION_LEFT)
+      gap = max(0, source%col - layout_rect_right(candidate))
+    case (LAYOUT_DIRECTION_RIGHT)
+      gap = max(0, candidate%col - layout_rect_right(source))
+    case default
+      gap = huge(gap)
+    end select
+  end function layout_primary_gap
+
+  integer function layout_cross_gap(source, candidate, direction) result(gap)
+    type(widget_rect), intent(in) :: source
+    type(widget_rect), intent(in) :: candidate
+    integer, intent(in) :: direction
+
+    select case (direction)
+    case (LAYOUT_DIRECTION_UP, LAYOUT_DIRECTION_DOWN)
+      gap = layout_span_gap(source%col, layout_rect_right(source), candidate%col, layout_rect_right(candidate))
+    case (LAYOUT_DIRECTION_LEFT, LAYOUT_DIRECTION_RIGHT)
+      gap = layout_span_gap(source%row, layout_rect_bottom(source), candidate%row, layout_rect_bottom(candidate))
+    case default
+      gap = huge(gap)
+    end select
+  end function layout_cross_gap
+
+  integer function layout_cross_center_delta(source, candidate, direction) result(delta)
+    type(widget_rect), intent(in) :: source
+    type(widget_rect), intent(in) :: candidate
+    integer, intent(in) :: direction
+
+    select case (direction)
+    case (LAYOUT_DIRECTION_UP, LAYOUT_DIRECTION_DOWN)
+      delta = abs(layout_rect_center_col2(source) - layout_rect_center_col2(candidate))
+    case (LAYOUT_DIRECTION_LEFT, LAYOUT_DIRECTION_RIGHT)
+      delta = abs(layout_rect_center_row2(source) - layout_rect_center_row2(candidate))
+    case default
+      delta = huge(delta)
+    end select
+  end function layout_cross_center_delta
+
+  logical function layout_direction_candidate_is_better(primary_gap, cross_gap, center_delta, &
+                                                        best_primary_gap, best_cross_gap, &
+                                                        best_center_delta) result(better)
+    integer, intent(in) :: primary_gap
+    integer, intent(in) :: cross_gap
+    integer, intent(in) :: center_delta
+    integer, intent(in) :: best_primary_gap
+    integer, intent(in) :: best_cross_gap
+    integer, intent(in) :: best_center_delta
+
+    better = .false.
+    if (cross_gap < best_cross_gap) then
+      better = .true.
+    else if (cross_gap == best_cross_gap .and. primary_gap < best_primary_gap) then
+      better = .true.
+    else if (cross_gap == best_cross_gap .and. primary_gap == best_primary_gap .and. &
+             center_delta < best_center_delta) then
+      better = .true.
+    end if
+  end function layout_direction_candidate_is_better
+
+  integer function layout_span_gap(left_start, left_end, right_start, right_end) result(gap)
+    integer, intent(in) :: left_start
+    integer, intent(in) :: left_end
+    integer, intent(in) :: right_start
+    integer, intent(in) :: right_end
+
+    if (left_end < right_start) then
+      gap = right_start - left_end
+    else if (right_end < left_start) then
+      gap = left_start - right_end
+    else
+      gap = 0
+    end if
+  end function layout_span_gap
+
+  integer function layout_rect_right(rect) result(col)
+    type(widget_rect), intent(in) :: rect
+
+    col = rect%col + max(0, rect%width) - 1
+  end function layout_rect_right
+
+  integer function layout_rect_bottom(rect) result(row)
+    type(widget_rect), intent(in) :: rect
+
+    row = rect%row + max(0, rect%height) - 1
+  end function layout_rect_bottom
+
+  integer function layout_rect_center_col2(rect) result(col2)
+    type(widget_rect), intent(in) :: rect
+
+    col2 = 2 * rect%col + max(0, rect%width) - 1
+  end function layout_rect_center_col2
+
+  integer function layout_rect_center_row2(rect) result(row2)
+    type(widget_rect), intent(in) :: rect
+
+    row2 = 2 * rect%row + max(0, rect%height) - 1
+  end function layout_rect_center_row2
 
   integer function integer_field(table_value, key, default_value, error) result(value)
     type(toml_value), intent(in) :: table_value
