@@ -29,9 +29,27 @@ module ftop_disk_data
     integer(int64) :: available_bytes = 0_int64
   end type filesystem_info
 
+  type, public :: disk_io_info
+    logical :: valid = .false.
+    character(len=DISK_DEVICE_LEN) :: device = ""
+    integer(int64) :: read_bytes = 0_int64
+    integer(int64) :: write_bytes = 0_int64
+    integer(int64) :: read_ops = 0_int64
+    integer(int64) :: write_ops = 0_int64
+    integer(int64) :: reads_merged = 0_int64
+    integer(int64) :: writes_merged = 0_int64
+    integer(int64) :: read_time_ms = 0_int64
+    integer(int64) :: write_time_ms = 0_int64
+    integer(int64) :: ios_in_progress = 0_int64
+    integer(int64) :: io_time_ms = 0_int64
+    integer(int64) :: weighted_io_time_ms = 0_int64
+    integer(int64) :: sector_size_bytes = 512_int64
+  end type disk_io_info
+
   type, public :: disk_table
     logical :: valid = .false.
     type(filesystem_info), allocatable :: filesystems(:)
+    type(disk_io_info), allocatable :: io(:)
   end type disk_table
 
   public :: disk_table_from_c

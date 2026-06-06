@@ -141,6 +141,11 @@ target_link_libraries(ftop_linux_loadavg_test PRIVATE ftop_core)
 
 add_test(NAME ftop_linux_loadavg COMMAND ftop_linux_loadavg_test)
 
+add_executable(ftop_linux_diskstats_test unit/test_linux_diskstats.f90)
+target_link_libraries(ftop_linux_diskstats_test PRIVATE ftop_core)
+
+add_test(NAME ftop_linux_diskstats COMMAND ftop_linux_diskstats_test)
+
 add_executable(ftop_collector_test unit/test_collector.f90)
 target_link_libraries(ftop_collector_test PRIVATE ftop_core)
 ftop_avoid_linux_gfortran_callback_pie_warning(ftop_collector_test)

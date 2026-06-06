@@ -83,6 +83,7 @@ add_library(
   ftop_core STATIC
   src/collect/ftop_cpu_data.f90
   src/collect/ftop_disk_data.f90
+  src/collect/ftop_linux_diskstats.f90
   src/collect/ftop_proc_data.f90
   src/collect/ftop_collector.f90
   src/collect/ftop_linux_loadavg.f90
