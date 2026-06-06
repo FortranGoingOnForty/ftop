@@ -139,6 +139,7 @@ module ftop_app
   integer, parameter :: MIN_REFRESH_MS = REFRESH_PRESET_MS(1)
   integer, parameter :: MAX_REFRESH_MS = REFRESH_PRESET_MS(REFRESH_PRESET_COUNT)
   integer, parameter :: DOUBLE_CLICK_MS = 500
+  integer, parameter :: PROCESS_FUZZY_IDLE_MS = 1000
   integer, parameter :: PROCESS_SIGNAL_CHOICE_COUNT = 7
   integer, parameter :: LAYOUT_PRESET_COUNT = 4
   integer, parameter :: LAYOUT_PRESET_NAME_LEN = 16
@@ -180,6 +181,7 @@ module ftop_app
     integer :: last_render_count = 0
     integer :: last_refresh_count = 0
     integer :: last_process_click_count = 0
+    integer :: last_process_fuzzy_input_count = 0
     integer :: last_process_click_row = 0
     integer :: clock_rate = 0
     real :: render_fps = 0.0
@@ -206,6 +208,7 @@ module ftop_app
   public :: render_test_frame
   public :: adjusted_refresh_ms
   public :: process_batch_signal_status
+  public :: process_fuzzy_idle_expired
   public :: refresh_status_text
   public :: process_vim_navigation_delta
   public :: select_draw_snapshot
@@ -237,6 +240,7 @@ contains
       if (.not. session%running) exit
 
       input = read_terminal_input(poll_timeout_ms(session))
+      call expire_process_fuzzy_query(session)
       if (input%failed) then
         call set_status(session, "input read failed: errno=" // integer_text(input%error_code))
         session%running = .false.
@@ -980,9 +984,9 @@ contains
         continue
       else if (handle_refresh_printable_key(session, text)) then
         continue
-      else if (handle_global_printable_key(session, text)) then
-        continue
       else if (handle_process_printable_key(session, text)) then
+        continue
+      else if (handle_global_printable_key(session, text)) then
         continue
       else if (handle_network_printable_key(session, text)) then
         continue
@@ -1261,6 +1265,7 @@ contains
     else
       if (.not. ascii_alnum_text(text)) return
       call process_table_append_fuzzy_text(session%process_state, text)
+      call mark_process_fuzzy_activity(session)
     end if
     handled = .true.
     call set_status(session, process_table_status(session%process_state))
@@ -1336,9 +1341,11 @@ contains
     case (FGOF_KEY_BACKSPACE, FGOF_KEY_DELETE)
       if (session%process_state%fuzzy_query_length <= 0) return
       call process_table_delete_fuzzy_char(session%process_state)
+      call mark_process_fuzzy_activity(session)
     case (FGOF_KEY_ENTER)
       if (session%process_state%fuzzy_query_length > 0) then
         call process_table_clear_fuzzy(session%process_state)
+        session%last_process_fuzzy_input_count = 0
       else
         node_toggled = process_table_toggle_selected_node(session%process_state)
         if (.not. node_toggled) return
@@ -1346,6 +1353,7 @@ contains
     case (FGOF_KEY_ESCAPE)
       if (session%process_state%fuzzy_query_length > 0) then
         call process_table_clear_fuzzy(session%process_state)
+        session%last_process_fuzzy_input_count = 0
       else
         if (.not. session%process_state%filter_active .and. session%process_state%filter_length <= 0) return
         call process_table_clear_filter(session%process_state)
@@ -1353,12 +1361,14 @@ contains
     case (FGOF_KEY_UP)
       if (session%process_state%fuzzy_query_length > 0) then
         call process_table_step_fuzzy_match(session%process_state, -1)
+        call mark_process_fuzzy_activity(session)
       else
         call process_table_select_delta(session%process_state, -1)
       end if
     case (FGOF_KEY_DOWN)
       if (session%process_state%fuzzy_query_length > 0) then
         call process_table_step_fuzzy_match(session%process_state, 1)
+        call mark_process_fuzzy_activity(session)
       else
         call process_table_select_delta(session%process_state, 1)
       end if
@@ -1469,6 +1479,56 @@ contains
     if (fuzzy_query_length > 0) return
     delta = vim_navigation_delta(text, row_count)
   end function process_vim_navigation_delta
+
+  subroutine mark_process_fuzzy_activity(session)
+    type(terminal_session), intent(inout) :: session
+
+    if (session%process_state%fuzzy_query_length <= 0) then
+      session%last_process_fuzzy_input_count = 0
+      return
+    end if
+    call system_clock(session%last_process_fuzzy_input_count)
+  end subroutine mark_process_fuzzy_activity
+
+  subroutine expire_process_fuzzy_query(session)
+    type(terminal_session), intent(inout) :: session
+    integer :: now_count
+    integer :: rate
+
+    if (session%process_state%fuzzy_query_length <= 0) then
+      session%last_process_fuzzy_input_count = 0
+      return
+    end if
+    if (session%last_process_fuzzy_input_count <= 0) then
+      call mark_process_fuzzy_activity(session)
+      return
+    end if
+
+    call system_clock(now_count, rate)
+    if (rate <= 0) rate = session%clock_rate
+    if (.not. process_fuzzy_idle_expired(session%process_state%fuzzy_query_length, &
+                                        session%last_process_fuzzy_input_count, now_count, rate)) return
+
+    call process_table_clear_fuzzy(session%process_state)
+    session%last_process_fuzzy_input_count = 0
+    call set_status(session, process_table_status(session%process_state))
+  end subroutine expire_process_fuzzy_query
+
+  logical function process_fuzzy_idle_expired(fuzzy_query_length, last_input_count, now_count, clock_rate) result(expired)
+    integer, intent(in) :: fuzzy_query_length
+    integer, intent(in) :: last_input_count
+    integer, intent(in) :: now_count
+    integer, intent(in) :: clock_rate
+    integer :: elapsed_ms
+
+    expired = .false.
+    if (fuzzy_query_length <= 0) return
+    if (last_input_count <= 0) return
+    if (clock_rate <= 0) return
+
+    elapsed_ms = int((real(now_count - last_input_count) / real(clock_rate)) * 1000.0)
+    expired = elapsed_ms >= PROCESS_FUZZY_IDLE_MS
+  end function process_fuzzy_idle_expired
 
   integer function vim_navigation_delta(text, row_count) result(delta)
     character(len=*), intent(in) :: text
@@ -1996,8 +2056,29 @@ contains
     end if
 
     remaining_ms = session%refresh_ms - elapsed_since_refresh_ms(session)
+    if (session%process_state%fuzzy_query_length > 0 .and. session%last_process_fuzzy_input_count > 0) then
+      remaining_ms = min(remaining_ms, process_fuzzy_idle_remaining_ms(session))
+    end if
     timeout_ms = max(0, remaining_ms)
   end function poll_timeout_ms
+
+  integer function process_fuzzy_idle_remaining_ms(session) result(remaining_ms)
+    type(terminal_session), intent(in) :: session
+    integer :: elapsed_ms
+    integer :: now_count
+    integer :: rate
+
+    remaining_ms = PROCESS_FUZZY_IDLE_MS
+    if (session%process_state%fuzzy_query_length <= 0) return
+    if (session%last_process_fuzzy_input_count <= 0) return
+
+    call system_clock(now_count, rate)
+    if (rate <= 0) rate = session%clock_rate
+    if (rate <= 0) return
+
+    elapsed_ms = int((real(now_count - session%last_process_fuzzy_input_count) / real(rate)) * 1000.0)
+    remaining_ms = max(0, PROCESS_FUZZY_IDLE_MS - max(0, elapsed_ms))
+  end function process_fuzzy_idle_remaining_ms
 
   integer function elapsed_since_refresh_ms(session) result(elapsed_ms)
     type(terminal_session), intent(in) :: session

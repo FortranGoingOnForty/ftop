@@ -1,12 +1,13 @@
 program test_app_batch_signal
   use ftop_app, only : adjusted_refresh_ms, process_batch_signal_status, refresh_status_text, select_draw_snapshot
-  use ftop_app, only : summarize_batch_signal_results
+  use ftop_app, only : process_fuzzy_idle_expired, summarize_batch_signal_results
   use ftop_app, only : process_vim_navigation_delta, vim_navigation_delta
   use ftop_collector, only : collector_snapshot
   implicit none
 
   call test_pause_snapshot_selection()
   call test_refresh_adjustment()
+  call test_process_fuzzy_idle_expiry()
   call test_vim_navigation_deltas()
   call test_batch_signal_summary()
   call test_batch_signal_status_text()
@@ -41,6 +42,19 @@ contains
     call require(adjusted_refresh_ms(50, 0) == 250, "neutral refresh adjustment should snap to nearest preset")
     call require(refresh_status_text(500) == "Refresh: 500ms", "refresh status should report preset milliseconds")
   end subroutine test_refresh_adjustment
+
+  subroutine test_process_fuzzy_idle_expiry()
+    call require(.not. process_fuzzy_idle_expired(1, 100, 109, 10), &
+                 "fuzzy query should stay active before idle timeout")
+    call require(process_fuzzy_idle_expired(1, 100, 110, 10), &
+                 "fuzzy query should expire after one idle second")
+    call require(.not. process_fuzzy_idle_expired(0, 100, 200, 10), &
+                 "empty fuzzy query should not expire")
+    call require(.not. process_fuzzy_idle_expired(1, 0, 200, 10), &
+                 "missing fuzzy timestamp should not expire")
+    call require(.not. process_fuzzy_idle_expired(1, 100, 200, 0), &
+                 "missing clock rate should not expire fuzzy query")
+  end subroutine test_process_fuzzy_idle_expiry
 
   subroutine test_vim_navigation_deltas()
     call require(process_vim_navigation_delta("j", 0, 10) == 1, "process j should move down without fuzzy")

@@ -218,15 +218,18 @@ contains
     if (.not. send_text(filter_session, "j")) error stop "failed to send vim key in fuzzy query"
     filter_match = wait_for_string(filter_session, "Find: xj_", SMOKE_TIMEOUT_MS)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "vim key did not append to active fuzzy query"
+    if (.not. send_text(filter_session, "c")) error stop "failed to send global key in fuzzy query"
+    filter_match = wait_for_string(filter_session, "Find: xjc_", SMOKE_TIMEOUT_MS)
+    if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "global focus key did not append to active fuzzy query"
+
+    filter_match = wait_for_string(filter_session, "__ftop_fuzzy_idle_timeout__", 1500)
+    if (.not. send_text(filter_session, "s")) error stop "failed to send fuzzy text after idle"
+    filter_match = wait_for_string(filter_session, "Find: s_", SMOKE_TIMEOUT_MS)
+    if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "idle fuzzy query did not reset before new text"
 
     if (.not. send_text(filter_session, achar(27) // achar(27))) error stop "failed to clear fuzzy query"
     filter_match = wait_for_string(filter_session, "history spark", SMOKE_TIMEOUT_MS)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not clear fuzzy query"
-
-    if (.not. send_text(filter_session, "s")) error stop "failed to send old sort key as fuzzy text"
-    filter_match = wait_for_string(filter_session, "Find: s_", SMOKE_TIMEOUT_MS)
-    if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "old process sort key did not start fuzzy search"
-    if (.not. send_text(filter_session, achar(27) // achar(27))) error stop "failed to clear old sort key fuzzy query"
 
     if (.not. send_text(filter_session, "h")) error stop "failed to send old sparkline key as fuzzy text"
     filter_match = wait_for_string(filter_session, "Find: h_", SMOKE_TIMEOUT_MS)
