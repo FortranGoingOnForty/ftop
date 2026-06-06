@@ -195,8 +195,28 @@ program test_terminal_smoke
   if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not jump to last focus"
 
   if (.not. send_text(session, "d")) error stop "failed to send disk focus key"
-  match = wait_for_string(session, "Disk panel not yet available", SMOKE_TIMEOUT_MS)
-  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not show disk placeholder"
+  match = wait_for_string(session, "focus Disk", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not focus disk from global key"
+
+  if (.not. send_text(session, achar(13))) error stop "failed to activate disk table"
+  match = wait_for_string(session, "disk table active", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "enter did not activate disk table mode"
+
+  if (.not. send_text(session, achar(27) // "[B")) error stop "failed to send active disk arrow down"
+  match = wait_for_string(session, "navigate", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "active disk arrow down did not navigate disk table"
+
+  if (.not. send_text(session, achar(13))) error stop "failed to zoom active disk table"
+  match = wait_for_string(session, "zoom disk", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "second enter did not zoom disk table"
+
+  if (.not. send_text(session, achar(27))) error stop "failed to escape disk zoom"
+  match = wait_for_string(session, "grid disk", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "escape did not return from disk zoom"
+
+  if (.not. send_text(session, "c")) error stop "failed to reset CPU focus after disk"
+  match = wait_for_string(session, "focus CPU", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not reset CPU focus after disk"
 
   if (.not. send_text(session, "?")) error stop "failed to send help key"
   match = wait_for_string(session, "ftop help", SMOKE_TIMEOUT_MS)
@@ -288,6 +308,10 @@ contains
     if (.not. send_text(filter_session, achar(9))) error stop "failed to send filter memory Tab"
     filter_match = wait_for_string(filter_session, "focus memory", SMOKE_TIMEOUT_MS)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not focus memory before filter"
+
+    if (.not. send_text(filter_session, achar(9))) error stop "failed to send filter disk Tab"
+    filter_match = wait_for_string(filter_session, "focus disk", SMOKE_TIMEOUT_MS)
+    if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not focus disk before filter"
 
     if (.not. send_text(filter_session, achar(9))) error stop "failed to send filter process Tab"
     filter_match = wait_for_string(filter_session, "focus process", SMOKE_TIMEOUT_MS)

@@ -2,6 +2,7 @@ module ftop_platform
   use, intrinsic :: iso_c_binding, only : c_char, c_double, c_int, c_long_long, c_null_char, c_size_t
   use, intrinsic :: iso_fortran_env, only : int64, real64
   use ftop_cpu_data, only : cpu_core_info, cpu_state_ticks, cpu_state_total_ticks
+  use ftop_disk_data, only : DISK_FILESYSTEM_CAPACITY, c_filesystem_info, disk_table, disk_table_from_c
   use ftop_net_data, only : &
     NET_ADDRESS_LEN, &
     NET_INTERFACE_NAME_LEN, &
@@ -95,6 +96,7 @@ module ftop_platform
     procedure :: get_system_uptime => macos_get_system_uptime
     procedure :: get_process_table => macos_get_process_table
     procedure :: get_network_table => macos_get_network_table
+    procedure :: get_disk_table => macos_get_disk_table
   end type macos_backend
 
   public :: create_platform
@@ -102,6 +104,7 @@ module ftop_platform
   public :: cpu_topology_info
   public :: cpu_usage_percent
   public :: load_average_info
+  public :: macos_disk_snapshot
   public :: macos_iokit_disk_count
   public :: macos_iokit_gpu_count
   public :: macos_network_connections
@@ -125,6 +128,15 @@ module ftop_platform
       integer(c_int), intent(out) :: count
       integer(c_int), intent(out) :: sys_errno
     end function c_ftop_macos_cpu_count
+
+    integer(c_int) function c_ftop_macos_filesystems(filesystems, capacity, filesystem_count, sys_errno) &
+        bind(C, name="ftop_macos_filesystems")
+      import :: c_filesystem_info, c_int
+      type(c_filesystem_info), intent(inout) :: filesystems(*)
+      integer(c_int), value :: capacity
+      integer(c_int), intent(out) :: filesystem_count
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_macos_filesystems
 
     integer(c_int) function c_ftop_macos_cpu_ticks(total_ticks, idle_ticks, sys_errno) &
         bind(C, name="ftop_macos_cpu_ticks")
@@ -467,6 +479,35 @@ contains
 
     if (.not. macos_network_snapshot(table)) table = network_table()
   end function macos_get_network_table
+
+  function macos_get_disk_table(self) result(table)
+    class(macos_backend), intent(in) :: self
+    type(disk_table) :: table
+
+    associate(unused => self)
+    end associate
+
+    if (.not. macos_disk_snapshot(table)) table = disk_table()
+  end function macos_get_disk_table
+
+  logical function macos_disk_snapshot(table, error_code) result(success)
+    type(disk_table), intent(out) :: table
+    integer, intent(out), optional :: error_code
+    type(c_filesystem_info) :: filesystems(DISK_FILESYSTEM_CAPACITY)
+    integer(c_int) :: filesystem_count
+    integer(c_int) :: sys_errno
+    integer(c_int) :: rc
+
+    table = disk_table()
+    filesystems = c_filesystem_info()
+    rc = c_ftop_macos_filesystems(filesystems, int(DISK_FILESYSTEM_CAPACITY, c_int), filesystem_count, sys_errno)
+    success = rc == 0_c_int
+    if (success) then
+      table = disk_table_from_c(filesystems, int(filesystem_count))
+    else
+      if (present(error_code)) error_code = int(sys_errno)
+    end if
+  end function macos_disk_snapshot
 
   logical function macos_network_snapshot(table, error_code) result(success)
     type(network_table), intent(out) :: table

@@ -5,6 +5,7 @@ program test_dashboard
   use ftop_collector, only : collector_snapshot
   use ftop_color, only : rgb, style_from_rgb
   use ftop_dashboard, only : dashboard_layout, default_dashboard_layout, render_dashboard
+  use ftop_disk, only : disk_table_state
   use ftop_network, only : NETWORK_SORT_PID, NETWORK_SORT_PROCESS, NETWORK_SORT_PROTOCOL, network_table_state, &
     network_table_toggle_sort_direction, render_network_panel
   use ftop_services, only : load_service_cache_from_text
@@ -21,6 +22,7 @@ program test_dashboard
   call test_dashboard_scrolls_cpu_cores()
   call test_dashboard_renders_paused_indicator()
   call test_dashboard_renders_zoomed_widget()
+  call test_dashboard_renders_active_disk_table()
   call test_dashboard_renders_zoomed_network_table()
   call test_network_table_column_sizing()
   call test_network_preview_uses_sort_state()
@@ -41,6 +43,8 @@ contains
     call require(layout%memory_panel%col > layout%cpu_panel%col, "wide layout memory panel should be right of cpu")
     call require(layout%network_panel%row == layout%cpu_panel%row, "wide layout should place network beside cpu")
     call require(layout%network_panel%col > layout%memory_panel%col, "wide layout network panel should be right of memory")
+    call require(layout%disk_panel%row == layout%cpu_panel%row, "wide layout should place disk beside network")
+    call require(layout%disk_panel%col > layout%network_panel%col, "wide layout disk panel should be right of network")
     call require(layout%process_panel%row > layout%cpu_panel%row, "wide layout should place process below metrics")
     call require(layout%process_panel%height >= 8, "wide layout should reserve process table height")
     call require(layout%footer%row == 22, "wide layout footer should stay above bottom border")
@@ -51,7 +55,9 @@ contains
     call require(layout%memory_panel%width == layout%cpu_panel%width, "narrow panels should share width")
     call require(layout%network_panel%row > layout%memory_panel%row, "narrow layout network panel should follow memory")
     call require(layout%network_panel%width == layout%cpu_panel%width, "narrow network panel should share width")
-    call require(layout%process_panel%row > layout%network_panel%row, "narrow layout process panel should follow network")
+    call require(layout%disk_panel%row > layout%network_panel%row, "narrow layout disk panel should follow network")
+    call require(layout%disk_panel%width == layout%cpu_panel%width, "narrow disk panel should share width")
+    call require(layout%process_panel%row > layout%disk_panel%row, "narrow layout process panel should follow disk")
     call require(layout%process_panel%width == layout%cpu_panel%width, "narrow process panel should share width")
     call require(layout%process_panel%row + layout%process_panel%height <= layout%footer%row, &
                  "narrow process panel should stay above footer")
@@ -63,13 +69,14 @@ contains
     character(len=:), allocatable :: text
 
     snapshot = sample_snapshot()
-    buffer = allocate_screen(120, 24)
+    buffer = allocate_screen(160, 24)
     call render_dashboard(buffer, snapshot, 1000, 7, "ready")
     text = buffer_text(buffer)
 
     call require(index(text, "CPU") > 0, "dashboard should render cpu panel")
     call require(index(text, "Memory") > 0, "dashboard should render memory panel")
     call require(index(text, "Network") > 0, "dashboard should render network panel")
+    call require(index(text, "Disk") > 0, "dashboard should render disk panel")
     call require(index(text, "Processes") > 0, "dashboard should render process panel by default")
     call require(index(text, "42.5%") > 0, "dashboard should render cpu usage")
     call require(index(text, "50.0%") > 0, "dashboard should render memory usage")
@@ -142,6 +149,29 @@ contains
     call require(index(text, "CPU 42.5%") == 0, "zoomed dashboard should hide unfocused cpu widget")
     call require(index(text, "memory zoom") > 0, "zoomed dashboard should render zoom status")
   end subroutine test_dashboard_renders_zoomed_widget
+
+  subroutine test_dashboard_renders_active_disk_table()
+    type(screen_buffer) :: buffer
+    type(collector_snapshot) :: snapshot
+    type(disk_table_state) :: disk_state
+    character(len=:), allocatable :: text
+
+    snapshot = sample_snapshot()
+    buffer = allocate_screen(120, 24)
+    call render_dashboard(buffer, snapshot, 1000, 7, "disk-test", focused_widget="disk", &
+                          disk_state=disk_state, disk_table_active=.true.)
+    text = buffer_text(buffer)
+
+    call require(index(text, "disk table") > 0, "active disk should render disk table status")
+    call require(index(text, "Enter zoom") > 0, "active disk should render active-mode key hints")
+    call require(disk_state%row_count == 2, "active disk should track filesystem rows")
+
+    call render_dashboard(buffer, snapshot, 1000, 7, "disk-test", focused_widget="disk", zoomed=.true., &
+                          disk_state=disk_state)
+    text = buffer_text(buffer)
+    call require(index(text, "MOUNT") > 0, "zoomed disk should render filesystem table")
+    call require(index(text, "disk zoom") > 0, "zoomed disk should render zoom status")
+  end subroutine test_dashboard_renders_active_disk_table
 
   subroutine test_dashboard_renders_zoomed_network_table()
     type(screen_buffer) :: buffer
@@ -390,6 +420,23 @@ contains
     snapshot%network%connections(1)%state = "ESTABLISHED"
     snapshot%network%connections(1)%pid = 1234
     snapshot%network%connections(1)%process_name = "curl"
+
+    snapshot%disk%valid = .true.
+    allocate(snapshot%disk%filesystems(2))
+    snapshot%disk%filesystems(1)%valid = .true.
+    snapshot%disk%filesystems(1)%device = "/dev/ada0p2"
+    snapshot%disk%filesystems(1)%mountpoint = "/"
+    snapshot%disk%filesystems(1)%fstype = "ufs"
+    snapshot%disk%filesystems(1)%total_bytes = 100_int64 * GIB
+    snapshot%disk%filesystems(1)%used_bytes = 72_int64 * GIB
+    snapshot%disk%filesystems(1)%available_bytes = 28_int64 * GIB
+    snapshot%disk%filesystems(2)%valid = .true.
+    snapshot%disk%filesystems(2)%device = "zroot/home"
+    snapshot%disk%filesystems(2)%mountpoint = "/home"
+    snapshot%disk%filesystems(2)%fstype = "zfs"
+    snapshot%disk%filesystems(2)%total_bytes = 200_int64 * GIB
+    snapshot%disk%filesystems(2)%used_bytes = 90_int64 * GIB
+    snapshot%disk%filesystems(2)%available_bytes = 110_int64 * GIB
   end function sample_snapshot
 
   function large_cpu_snapshot(core_count) result(snapshot)

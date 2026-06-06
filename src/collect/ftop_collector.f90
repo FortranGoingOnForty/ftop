@@ -17,6 +17,12 @@ module ftop_collector
     cpu_state_delta_info, &
     cpu_state_ticks, &
     cpu_total_info
+  use ftop_disk_data, only : &
+    DISK_DEVICE_LEN, &
+    DISK_FILESYSTEM_CAPACITY, &
+    DISK_FSTYPE_LEN, &
+    DISK_MOUNTPOINT_LEN, &
+    disk_table
   use ftop_mem_data, only : metric_memory_info => memory_info
   use ftop_net_data, only : &
     NET_ADDRESS_LEN, &
@@ -69,6 +75,7 @@ module ftop_collector
   integer, parameter, public :: FTOP_COLLECTOR_MAX_INTERFACES = 64
   integer, parameter, public :: FTOP_COLLECTOR_MAX_CONNECTIONS = 512
   integer, parameter, public :: FTOP_COLLECTOR_MAX_NETWORK_PROCESSES = 256
+  integer, parameter, public :: FTOP_COLLECTOR_MAX_FILESYSTEMS = DISK_FILESYSTEM_CAPACITY
 
   type, bind(C) :: collector_shared_state
     integer(c_int) :: stop_requested
@@ -170,6 +177,15 @@ module ftop_collector
     integer(c_long_long) :: network_process_tx_bytes(FTOP_COLLECTOR_MAX_NETWORK_PROCESSES)
     real(c_double) :: network_process_rx_bytes_per_sec(FTOP_COLLECTOR_MAX_NETWORK_PROCESSES)
     real(c_double) :: network_process_tx_bytes_per_sec(FTOP_COLLECTOR_MAX_NETWORK_PROCESSES)
+    integer(c_int) :: disk_table_valid
+    integer(c_int) :: disk_filesystem_count
+    integer(c_int) :: disk_filesystem_valid(FTOP_COLLECTOR_MAX_FILESYSTEMS)
+    character(kind=c_char) :: disk_filesystem_device(DISK_DEVICE_LEN, FTOP_COLLECTOR_MAX_FILESYSTEMS)
+    character(kind=c_char) :: disk_filesystem_mountpoint(DISK_MOUNTPOINT_LEN, FTOP_COLLECTOR_MAX_FILESYSTEMS)
+    character(kind=c_char) :: disk_filesystem_fstype(DISK_FSTYPE_LEN, FTOP_COLLECTOR_MAX_FILESYSTEMS)
+    integer(c_long_long) :: disk_filesystem_total_bytes(FTOP_COLLECTOR_MAX_FILESYSTEMS)
+    integer(c_long_long) :: disk_filesystem_used_bytes(FTOP_COLLECTOR_MAX_FILESYSTEMS)
+    integer(c_long_long) :: disk_filesystem_available_bytes(FTOP_COLLECTOR_MAX_FILESYSTEMS)
     integer(c_int) :: history_start
     integer(c_int) :: history_count
     real(c_double) :: cpu_usage_history(FTOP_COLLECTOR_HISTORY_CAPACITY)
@@ -189,6 +205,7 @@ module ftop_collector
     type(metric_memory_info) :: memory
     type(process_table) :: processes
     type(network_table) :: network
+    type(disk_table) :: disk
     real(real64), allocatable :: cpu_usage_history(:)
     real(real64), allocatable :: cpu_core_usage_history(:, :)
     real(real64), allocatable :: memory_usage_history(:)
@@ -346,6 +363,11 @@ contains
       call ignore_mutex_unlock(self%mutex)
       return
     end if
+    if (.not. copy_disk(self%state, snapshot)) then
+      call clear_snapshot(snapshot)
+      call ignore_mutex_unlock(self%mutex)
+      return
+    end if
     if (.not. copy_cpu_cores(self%state, snapshot)) then
       call clear_snapshot(snapshot)
       call ignore_mutex_unlock(self%mutex)
@@ -406,6 +428,7 @@ contains
     type(network_table) :: network
     type(network_table) :: empty_network
     type(network_table) :: previous_network
+    type(disk_table) :: disk
     type(system_uptime_info) :: system_uptime
     integer(c_long_long) :: deadline_ms
     integer(c_long_long) :: metadata_refresh_ms
@@ -435,12 +458,14 @@ contains
     call append_process_histories(processes, empty_processes)
     network = backend%get_network_table()
     call append_interface_histories(network, empty_network)
+    disk = backend%get_disk_table()
     deadline_ms = monotonic_ms()
     previous_processes = processes
     previous_network = network
     previous_process_sample_ms = deadline_ms
     previous_network_sample_ms = deadline_ms
-    call publish_sample(state, topology, total_cpu, core_cpus, .true., memory, load_average, system_uptime, processes, network)
+    call publish_sample(state, topology, total_cpu, core_cpus, .true., memory, load_average, system_uptime, processes, &
+                        network, disk)
 
     metadata_refresh_ms = deadline_ms + 1000_c_long_long
     process_refresh_ms = deadline_ms + 1000_c_long_long
@@ -489,10 +514,11 @@ contains
       call append_interface_histories(network, previous_network)
       previous_network = network
       previous_network_sample_ms = deadline_ms
+      disk = backend%get_disk_table()
       call merge_cpu_metadata(core_cpus, cpu_metadata)
 
       call publish_sample(state, topology, total_cpu, core_cpus, warming_up, memory, load_average, system_uptime, &
-                          processes, network)
+                          processes, network, disk)
       if (should_stop(state)) exit
     end do
 
@@ -642,6 +668,15 @@ contains
     state%network_process_tx_bytes = 0_c_long_long
     state%network_process_rx_bytes_per_sec = 0.0_c_double
     state%network_process_tx_bytes_per_sec = 0.0_c_double
+    state%disk_table_valid = 0_c_int
+    state%disk_filesystem_count = 0_c_int
+    state%disk_filesystem_valid = 0_c_int
+    state%disk_filesystem_device = c_null_char
+    state%disk_filesystem_mountpoint = c_null_char
+    state%disk_filesystem_fstype = c_null_char
+    state%disk_filesystem_total_bytes = 0_c_long_long
+    state%disk_filesystem_used_bytes = 0_c_long_long
+    state%disk_filesystem_available_bytes = 0_c_long_long
     state%history_start = 1_c_int
     state%history_count = 0_c_int
     state%cpu_usage_history = 0.0_c_double
@@ -750,6 +785,15 @@ contains
     state%network_process_tx_bytes = 0_c_long_long
     state%network_process_rx_bytes_per_sec = 0.0_c_double
     state%network_process_tx_bytes_per_sec = 0.0_c_double
+    state%disk_table_valid = 0_c_int
+    state%disk_filesystem_count = 0_c_int
+    state%disk_filesystem_valid = 0_c_int
+    state%disk_filesystem_device = c_null_char
+    state%disk_filesystem_mountpoint = c_null_char
+    state%disk_filesystem_fstype = c_null_char
+    state%disk_filesystem_total_bytes = 0_c_long_long
+    state%disk_filesystem_used_bytes = 0_c_long_long
+    state%disk_filesystem_available_bytes = 0_c_long_long
     state%history_start = 1_c_int
     state%history_count = 0_c_int
     state%cpu_usage_history = 0.0_c_double
@@ -787,6 +831,7 @@ contains
     snapshot%memory%swap_used_bytes = 0_int64
     snapshot%processes%valid = .false.
     snapshot%network%valid = .false.
+    snapshot%disk%valid = .false.
   end subroutine clear_snapshot
 
   logical function copy_cpu_cores(state, snapshot) result(success)
@@ -975,6 +1020,42 @@ contains
     success = .true.
   end function copy_network
 
+  logical function copy_disk(state, snapshot) result(success)
+    type(collector_shared_state), intent(in) :: state
+    type(collector_snapshot), intent(inout) :: snapshot
+    integer :: allocation_status
+    integer :: filesystem_count
+    integer :: filesystem_index
+    logical :: string_valid
+
+    success = .false.
+    filesystem_count = bounded_filesystem_count(int(state%disk_filesystem_count))
+    snapshot%disk%valid = state%disk_table_valid /= 0_c_int
+    allocate(snapshot%disk%filesystems(filesystem_count), stat=allocation_status)
+    if (allocation_status /= 0) return
+
+    do filesystem_index = 1, filesystem_count
+      snapshot%disk%filesystems(filesystem_index)%valid = state%disk_filesystem_valid(filesystem_index) /= 0_c_int
+      call copy_c_chars_to_fortran(state%disk_filesystem_device(:, filesystem_index), &
+                                   state%disk_filesystem_valid(filesystem_index), &
+                                   snapshot%disk%filesystems(filesystem_index)%device, string_valid)
+      call copy_c_chars_to_fortran(state%disk_filesystem_mountpoint(:, filesystem_index), &
+                                   state%disk_filesystem_valid(filesystem_index), &
+                                   snapshot%disk%filesystems(filesystem_index)%mountpoint, string_valid)
+      call copy_c_chars_to_fortran(state%disk_filesystem_fstype(:, filesystem_index), &
+                                   state%disk_filesystem_valid(filesystem_index), &
+                                   snapshot%disk%filesystems(filesystem_index)%fstype, string_valid)
+      snapshot%disk%filesystems(filesystem_index)%total_bytes = &
+        int(state%disk_filesystem_total_bytes(filesystem_index), int64)
+      snapshot%disk%filesystems(filesystem_index)%used_bytes = &
+        int(state%disk_filesystem_used_bytes(filesystem_index), int64)
+      snapshot%disk%filesystems(filesystem_index)%available_bytes = &
+        int(state%disk_filesystem_available_bytes(filesystem_index), int64)
+    end do
+
+    success = .true.
+  end function copy_disk
+
   logical function copy_history(state, snapshot) result(success)
     type(collector_shared_state), intent(in) :: state
     type(collector_snapshot), intent(inout) :: snapshot
@@ -1044,6 +1125,12 @@ contains
 
     bounded = max(0, min(FTOP_COLLECTOR_MAX_NETWORK_PROCESSES, process_count))
   end function bounded_network_process_count
+
+  integer function bounded_filesystem_count(filesystem_count) result(bounded)
+    integer, intent(in) :: filesystem_count
+
+    bounded = max(0, min(FTOP_COLLECTOR_MAX_FILESYSTEMS, filesystem_count))
+  end function bounded_filesystem_count
 
   integer function bounded_process_history_count(history_count) result(bounded)
     integer, intent(in) :: history_count
@@ -1138,7 +1225,7 @@ contains
   end function should_stop
 
   subroutine publish_sample(state, topology, total_cpu, core_cpus, warming_up, memory, load_average, system_uptime, &
-                            processes, network)
+                            processes, network, disk)
     type(collector_shared_state), intent(inout) :: state
     type(cpu_topology_info), intent(in) :: topology
     type(cpu_core_info), intent(in) :: total_cpu
@@ -1149,6 +1236,7 @@ contains
     type(system_uptime_info), intent(in) :: system_uptime
     type(process_table), intent(in) :: processes
     type(network_table), intent(in) :: network
+    type(disk_table), intent(in) :: disk
     type(ftop_mutex_handle) :: mutex
     integer :: core_count
     integer :: physical_core_count
@@ -1192,6 +1280,7 @@ contains
     state%memory_swap_used_bytes = int(clamp_memory_value(memory%swap_used_bytes, memory%swap_total_bytes), c_long_long)
     call publish_processes(state, processes)
     call publish_network(state, network)
+    call publish_disk(state, disk)
     call append_history(state, real(state%cpu_usage_percent, real64), memory_usage_percent(memory), core_cpus, core_count)
 
     if (.not. ftop_mutex_unlock(mutex)) return
@@ -1409,6 +1498,48 @@ contains
         real(max(0.0_real64, network%processes(process_index)%tx_bytes_per_sec), c_double)
     end do
   end subroutine publish_network
+
+  subroutine publish_disk(state, disk)
+    type(collector_shared_state), intent(inout) :: state
+    type(disk_table), intent(in) :: disk
+    integer :: filesystem_count
+    integer :: filesystem_index
+    integer(c_int) :: string_valid
+
+    state%disk_table_valid = merge(1_c_int, 0_c_int, disk%valid)
+    state%disk_filesystem_count = 0_c_int
+    state%disk_filesystem_valid = 0_c_int
+    state%disk_filesystem_device = c_null_char
+    state%disk_filesystem_mountpoint = c_null_char
+    state%disk_filesystem_fstype = c_null_char
+    state%disk_filesystem_total_bytes = 0_c_long_long
+    state%disk_filesystem_used_bytes = 0_c_long_long
+    state%disk_filesystem_available_bytes = 0_c_long_long
+    if (.not. disk%valid .or. .not. allocated(disk%filesystems)) return
+
+    filesystem_count = bounded_filesystem_count(size(disk%filesystems))
+    state%disk_filesystem_count = int(filesystem_count, c_int)
+    do filesystem_index = 1, filesystem_count
+      state%disk_filesystem_valid(filesystem_index) = merge(1_c_int, 0_c_int, disk%filesystems(filesystem_index)%valid)
+      call copy_fortran_string_to_c_chars(disk%filesystems(filesystem_index)%device, &
+                                          len_trim(disk%filesystems(filesystem_index)%device) > 0, &
+                                          state%disk_filesystem_device(:, filesystem_index), string_valid)
+      call copy_fortran_string_to_c_chars(disk%filesystems(filesystem_index)%mountpoint, &
+                                          len_trim(disk%filesystems(filesystem_index)%mountpoint) > 0, &
+                                          state%disk_filesystem_mountpoint(:, filesystem_index), string_valid)
+      call copy_fortran_string_to_c_chars(disk%filesystems(filesystem_index)%fstype, &
+                                          len_trim(disk%filesystems(filesystem_index)%fstype) > 0, &
+                                          state%disk_filesystem_fstype(:, filesystem_index), string_valid)
+      state%disk_filesystem_total_bytes(filesystem_index) = &
+        int(max(0_int64, disk%filesystems(filesystem_index)%total_bytes), c_long_long)
+      state%disk_filesystem_used_bytes(filesystem_index) = &
+        int(clamp_memory_value(disk%filesystems(filesystem_index)%used_bytes, &
+                               disk%filesystems(filesystem_index)%total_bytes), c_long_long)
+      state%disk_filesystem_available_bytes(filesystem_index) = &
+        int(clamp_memory_value(disk%filesystems(filesystem_index)%available_bytes, &
+                               disk%filesystems(filesystem_index)%total_bytes), c_long_long)
+    end do
+  end subroutine publish_disk
 
   subroutine copy_process_history_to_state(state, process_index, process)
     type(collector_shared_state), intent(inout) :: state

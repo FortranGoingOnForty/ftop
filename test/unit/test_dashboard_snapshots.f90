@@ -179,6 +179,23 @@ contains
     snapshot%network%connections(1)%state = "ESTABLISHED"
     snapshot%network%connections(1)%pid = 1234
     snapshot%network%connections(1)%process_name = "curl"
+
+    snapshot%disk%valid = .true.
+    allocate(snapshot%disk%filesystems(2))
+    snapshot%disk%filesystems(1)%valid = .true.
+    snapshot%disk%filesystems(1)%device = "/dev/ada0p2"
+    snapshot%disk%filesystems(1)%mountpoint = "/"
+    snapshot%disk%filesystems(1)%fstype = "ufs"
+    snapshot%disk%filesystems(1)%total_bytes = 100_int64 * GIB
+    snapshot%disk%filesystems(1)%used_bytes = 72_int64 * GIB
+    snapshot%disk%filesystems(1)%available_bytes = 28_int64 * GIB
+    snapshot%disk%filesystems(2)%valid = .true.
+    snapshot%disk%filesystems(2)%device = "zroot/home"
+    snapshot%disk%filesystems(2)%mountpoint = "/home"
+    snapshot%disk%filesystems(2)%fstype = "zfs"
+    snapshot%disk%filesystems(2)%total_bytes = 200_int64 * GIB
+    snapshot%disk%filesystems(2)%used_bytes = 90_int64 * GIB
+    snapshot%disk%filesystems(2)%available_bytes = 110_int64 * GIB
   end function sample_snapshot
 
   function golden_file(root, name) result(path)

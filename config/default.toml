@@ -1,5 +1,5 @@
 # Default dashboard layout. Keep this showcasing every implemented widget.
-# Do not add placeholders for disk or GPU until those widgets ship.
+# Do not add placeholders for GPU until that widget ships.
 
 [network]
 include_loopback = false
@@ -25,6 +25,12 @@ widget = "network"
 weight = 1
 min_width = 24
 min_height = 8
+
+[[row.column]]
+widget = "disk"
+weight = 1
+min_width = 24
+min_height = 6
 
 [[row]]
 weight = 2

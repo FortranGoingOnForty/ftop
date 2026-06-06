@@ -43,6 +43,11 @@ module ftop_app
   use ftop_collector, only : collector, collector_snapshot
   use ftop_cpu, only : cpu_core_scroll_limit
   use ftop_dashboard, only : render_dashboard
+  use ftop_disk, only : &
+    disk_table_page_delta, &
+    disk_table_select_delta, &
+    disk_table_state, &
+    disk_table_status
   use ftop_help, only : render_help_overlay
   use ftop_layout, only : &
     dashboard_layout, &
@@ -158,7 +163,7 @@ module ftop_app
   integer, parameter :: DOUBLE_CLICK_MS = 500
   integer, parameter :: PROCESS_FUZZY_IDLE_MS = 1000
   integer, parameter :: PROCESS_SIGNAL_CHOICE_COUNT = 7
-  integer, parameter :: LAYOUT_PRESET_COUNT = 4
+  integer, parameter :: LAYOUT_PRESET_COUNT = 5
   integer, parameter :: LAYOUT_PRESET_NAME_LEN = 16
   integer, parameter :: LAYOUT_PRESET_FILE_LEN = 40
   character(len=*), parameter :: FTOP_VERSION = "0.1.0"
@@ -167,14 +172,16 @@ module ftop_app
     "full", &
     "compact", &
     "process", &
-    "network" &
+    "network", &
+    "disk" &
   ]
   character(len=LAYOUT_PRESET_FILE_LEN), parameter :: LAYOUT_PRESET_FILES(LAYOUT_PRESET_COUNT) = [ &
     character(len=LAYOUT_PRESET_FILE_LEN) :: &
     "default.toml", &
     "compact.toml", &
     "process-focused.toml", &
-    "network-focused.toml" &
+    "network-focused.toml", &
+    "disk-focused.toml" &
   ]
 
   type :: terminal_session
@@ -186,6 +193,7 @@ module ftop_app
     type(layout_grid) :: layout
     type(key_decoder_state) :: decoder
     type(network_table_state) :: network_state
+    type(disk_table_state) :: disk_state
     type(process_table_state) :: process_state
     character(len=:), allocatable :: config_path
     character(len=LAYOUT_PRESET_NAME_LEN) :: layout_preset_name = "full"
@@ -211,6 +219,7 @@ module ftop_app
     logical :: help_visible = .false.
     logical :: cpu_core_active = .false.
     logical :: network_table_active = .false.
+    logical :: disk_table_active = .false.
     logical :: process_tree_active = .false.
     logical :: paused = .false.
     logical :: running = .true.
@@ -421,22 +430,24 @@ contains
     focus = focused_widget_name(session)
     if (session%layout_loaded) then
       call render_dashboard(session%current, snapshot, session%refresh_ms, session%frame_count, &
-                               session%status_text, session%layout, focus, session%zoomed, &
-                               layout_name=trim(session%layout_preset_name), render_fps=session%render_fps, &
-                               process_state=session%process_state, &
-                               network_state=session%network_state, paused=session%paused, &
-                               cpu_core_scroll_offset=session%cpu_core_scroll_offset, &
-                               cpu_core_active=session%cpu_core_active, process_tree_active=session%process_tree_active, &
-                               network_table_active=session%network_table_active)
+                                session%status_text, session%layout, focus, session%zoomed, &
+                                layout_name=trim(session%layout_preset_name), render_fps=session%render_fps, &
+                                process_state=session%process_state, &
+                                network_state=session%network_state, disk_state=session%disk_state, paused=session%paused, &
+                                cpu_core_scroll_offset=session%cpu_core_scroll_offset, &
+                                cpu_core_active=session%cpu_core_active, process_tree_active=session%process_tree_active, &
+                                network_table_active=session%network_table_active, &
+                                disk_table_active=session%disk_table_active)
     else
       call render_dashboard(session%current, snapshot, session%refresh_ms, session%frame_count, &
-                               session%status_text, focused_widget=focus, zoomed=session%zoomed, &
-                               layout_name=trim(session%layout_preset_name), render_fps=session%render_fps, &
-                               process_state=session%process_state, &
-                               network_state=session%network_state, paused=session%paused, &
-                               cpu_core_scroll_offset=session%cpu_core_scroll_offset, &
-                               cpu_core_active=session%cpu_core_active, process_tree_active=session%process_tree_active, &
-                               network_table_active=session%network_table_active)
+                                session%status_text, focused_widget=focus, zoomed=session%zoomed, &
+                                layout_name=trim(session%layout_preset_name), render_fps=session%render_fps, &
+                                process_state=session%process_state, &
+                                network_state=session%network_state, disk_state=session%disk_state, paused=session%paused, &
+                                cpu_core_scroll_offset=session%cpu_core_scroll_offset, &
+                                cpu_core_active=session%cpu_core_active, process_tree_active=session%process_tree_active, &
+                                network_table_active=session%network_table_active, &
+                                disk_table_active=session%disk_table_active)
     end if
     if (session%help_visible) call render_help_overlay(session%current, focus)
   end subroutine draw_frame
@@ -586,6 +597,7 @@ contains
     session%last_focus_index = 0
     session%cpu_core_active = .false.
     session%network_table_active = .false.
+    session%disk_table_active = .false.
     session%process_tree_active = .false.
     if (old_zoomed .and. layout_contains_widget(session%layout, old_focus)) then
       session%zoomed = .false.
@@ -857,6 +869,7 @@ contains
       session%last_focus_index = session%focus_index
       session%cpu_core_active = .false.
       session%network_table_active = .false.
+      session%disk_table_active = .false.
       session%process_tree_active = .false.
     end if
     session%focus_index = bounded
@@ -913,6 +926,7 @@ contains
     session%zoomed = .not. session%zoomed
     session%cpu_core_active = .false.
     session%network_table_active = .false.
+    session%disk_table_active = .false.
     session%process_tree_active = .false.
     session%needs_full_render = .true.
     if (session%zoomed) then
@@ -1117,6 +1131,7 @@ contains
     if (handle_cpu_core_mode_key(session, event%key_name)) return
     if (handle_process_tree_mode_key(session, event%key_name)) return
     if (handle_network_table_mode_key(session, event%key_name)) return
+    if (handle_disk_table_mode_key(session, event%key_name)) return
     if (handle_directional_focus_key(session, event%key_name)) return
     if (handle_process_named_key(session, event%key_name)) return
     if (handle_network_named_key(session, event%key_name)) return
@@ -1298,6 +1313,59 @@ contains
     call set_status(session, "network table navigate " // network_table_status(session%network_state))
   end subroutine handle_active_network_table_key
 
+  logical function handle_disk_table_mode_key(session, key_name) result(handled)
+    type(terminal_session), intent(inout) :: session
+    character(len=*), intent(in) :: key_name
+
+    handled = .false.
+    if (.not. disk_widget_focused(session)) return
+    if (text_input_active(session)) return
+
+    select case (key_name)
+    case (FGOF_KEY_ENTER)
+      if (session%zoomed) then
+        call toggle_zoom(session)
+      else if (session%disk_table_active) then
+        session%disk_table_active = .false.
+        call toggle_zoom(session)
+      else
+        session%disk_table_active = .true.
+        call set_status(session, "disk table active")
+      end if
+      handled = .true.
+    case (FGOF_KEY_ESCAPE)
+      if (.not. session%disk_table_active) return
+      session%disk_table_active = .false.
+      call set_status(session, "focus disk")
+      handled = .true.
+    case (FGOF_KEY_UP, FGOF_KEY_DOWN, FGOF_KEY_PAGEUP, FGOF_KEY_PAGEDOWN, FGOF_KEY_HOME, FGOF_KEY_END)
+      if (.not. session%zoomed .and. .not. session%disk_table_active) return
+      call handle_active_disk_table_key(session, key_name)
+      handled = .true.
+    end select
+  end function handle_disk_table_mode_key
+
+  subroutine handle_active_disk_table_key(session, key_name)
+    type(terminal_session), intent(inout) :: session
+    character(len=*), intent(in) :: key_name
+
+    select case (key_name)
+    case (FGOF_KEY_UP)
+      call disk_table_select_delta(session%disk_state, -1)
+    case (FGOF_KEY_DOWN)
+      call disk_table_select_delta(session%disk_state, 1)
+    case (FGOF_KEY_PAGEUP)
+      call disk_table_page_delta(session%disk_state, -1)
+    case (FGOF_KEY_PAGEDOWN)
+      call disk_table_page_delta(session%disk_state, 1)
+    case (FGOF_KEY_HOME)
+      call disk_table_select_delta(session%disk_state, -session%disk_state%row_count)
+    case (FGOF_KEY_END)
+      call disk_table_select_delta(session%disk_state, session%disk_state%row_count)
+    end select
+    call set_status(session, "disk table navigate " // disk_table_status(session%disk_state))
+  end subroutine handle_active_disk_table_key
+
   logical function handle_directional_focus_key(session, key_name) result(handled)
     type(terminal_session), intent(inout) :: session
     character(len=*), intent(in) :: key_name
@@ -1423,7 +1491,7 @@ contains
     case ("p")
       call jump_to_widget(session, "process", "Process")
     case ("d")
-      call set_status(session, "Disk panel not yet available")
+      call jump_to_widget(session, "disk", "Disk")
     case ("g")
       call set_status(session, "GPU panel not yet available")
     case default
@@ -2023,6 +2091,12 @@ contains
 
     focused = focused_widget_name(session) == "network"
   end function network_widget_focused
+
+  logical function disk_widget_focused(session) result(focused)
+    type(terminal_session), intent(in) :: session
+
+    focused = focused_widget_name(session) == "disk"
+  end function disk_widget_focused
 
   subroutine begin_process_signal(session)
     type(terminal_session), intent(inout) :: session

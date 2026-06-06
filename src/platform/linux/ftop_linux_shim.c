@@ -3,6 +3,7 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <mntent.h>
 #include <netinet/in.h>
 #include <pwd.h>
 #include <stddef.h>
@@ -11,6 +12,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <sys/socket.h>
+#include <sys/statvfs.h>
 #include <unistd.h>
 
 #include <linux/inet_diag.h>
@@ -27,6 +29,9 @@
 #define FTOP_LINUX_PROCESS_IO_LEN 512
 #define FTOP_LINUX_PROCESS_CGROUP_LEN 1024
 #define FTOP_LINUX_SOCKET_OWNER_PROCESS_NAME_LEN 64
+#define FTOP_DISK_DEVICE_LEN 64
+#define FTOP_DISK_MOUNTPOINT_LEN 128
+#define FTOP_DISK_FSTYPE_LEN 32
 #define FTOP_USER_LOOKUP_BUFFER_LEN 16384
 
 #ifndef SOCK_CLOEXEC
@@ -103,6 +108,16 @@ struct ftop_linux_tcp_info_bytes {
   uint64_t max_pacing_rate;
   uint64_t bytes_acked;
   uint64_t bytes_received;
+};
+
+struct ftop_filesystem_info {
+  int valid;
+  char device[FTOP_DISK_DEVICE_LEN];
+  char mountpoint[FTOP_DISK_MOUNTPOINT_LEN];
+  char fstype[FTOP_DISK_FSTYPE_LEN];
+  long long total_bytes;
+  long long used_bytes;
+  long long available_bytes;
 };
 
 static int ftop_read_file_into_buffer(const char *path, char *buffer, size_t buffer_len, size_t *value_len, int *sys_errno) {
@@ -980,6 +995,60 @@ static void ftop_copy_string(char *destination, size_t destination_len, const ch
 
   for (i = 0U; i + 1U < destination_len && source[i] != '\0' && source[i] != '\n'; ++i) destination[i] = source[i];
   destination[i] = '\0';
+}
+
+static long long ftop_linux_blocks_to_bytes(unsigned long blocks, unsigned long block_size) {
+  unsigned long long value;
+
+  if (blocks == 0UL || block_size == 0UL) return 0LL;
+  if ((unsigned long long)blocks > (unsigned long long)LLONG_MAX / (unsigned long long)block_size) return LLONG_MAX;
+  value = (unsigned long long)blocks * (unsigned long long)block_size;
+  return value > (unsigned long long)LLONG_MAX ? LLONG_MAX : (long long)value;
+}
+
+static void ftop_linux_copy_filesystem_info(
+    struct ftop_filesystem_info *destination, const struct mntent *mount, const struct statvfs *stats) {
+  long long free_bytes;
+
+  memset(destination, 0, sizeof(*destination));
+  destination->valid = 1;
+  ftop_copy_string(destination->device, sizeof(destination->device), mount->mnt_fsname != NULL ? mount->mnt_fsname : "");
+  ftop_copy_string(
+      destination->mountpoint, sizeof(destination->mountpoint), mount->mnt_dir != NULL ? mount->mnt_dir : "");
+  ftop_copy_string(destination->fstype, sizeof(destination->fstype), mount->mnt_type != NULL ? mount->mnt_type : "");
+  destination->total_bytes = ftop_linux_blocks_to_bytes(stats->f_blocks, stats->f_frsize);
+  free_bytes = ftop_linux_blocks_to_bytes(stats->f_bfree, stats->f_frsize);
+  destination->available_bytes = ftop_linux_blocks_to_bytes(stats->f_bavail, stats->f_frsize);
+  destination->used_bytes = destination->total_bytes > free_bytes ? destination->total_bytes - free_bytes : 0LL;
+}
+
+int ftop_linux_filesystems(
+    struct ftop_filesystem_info *filesystems, int capacity, int *filesystem_count, int *sys_errno) {
+  FILE *mounts;
+  struct mntent *mount;
+  struct statvfs stats;
+  int count;
+
+  if (filesystems == NULL || filesystem_count == NULL || sys_errno == NULL || capacity < 0) return -1;
+  memset(filesystems, 0, (size_t)capacity * sizeof(*filesystems));
+  *filesystem_count = 0;
+  *sys_errno = 0;
+
+  mounts = setmntent("/proc/mounts", "r");
+  if (mounts == NULL) {
+    *sys_errno = errno != 0 ? errno : EINVAL;
+    return -1;
+  }
+
+  count = 0;
+  while (count < capacity && (mount = getmntent(mounts)) != NULL) {
+    if (mount->mnt_dir == NULL || statvfs(mount->mnt_dir, &stats) != 0) continue;
+    ftop_linux_copy_filesystem_info(&filesystems[count], mount, &stats);
+    ++count;
+  }
+  endmntent(mounts);
+  *filesystem_count = count;
+  return 0;
 }
 
 static int ftop_read_hwmon_name(const char *path, char *name, size_t name_len) {

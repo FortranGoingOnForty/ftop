@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/proc_info.h>
+#include <sys/mount.h>
 #include <sys/sysctl.h>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -39,6 +40,9 @@ struct ftop_macos_processor_ticks {
 #define FTOP_NET_ADDRESS_LEN 64
 #define FTOP_NET_STATE_LEN 16
 #define FTOP_NET_PROCESS_NAME_LEN 64
+#define FTOP_DISK_DEVICE_LEN 64
+#define FTOP_DISK_MOUNTPOINT_LEN 128
+#define FTOP_DISK_FSTYPE_LEN 32
 #define FTOP_USER_LOOKUP_BUFFER_LEN 16384
 
 struct ftop_macos_process_info {
@@ -78,6 +82,16 @@ struct ftop_macos_net_connection_info {
   long long socket_id;
   int pid;
   char process_name[FTOP_NET_PROCESS_NAME_LEN];
+};
+
+struct ftop_filesystem_info {
+  int valid;
+  char device[FTOP_DISK_DEVICE_LEN];
+  char mountpoint[FTOP_DISK_MOUNTPOINT_LEN];
+  char fstype[FTOP_DISK_FSTYPE_LEN];
+  long long total_bytes;
+  long long used_bytes;
+  long long available_bytes;
 };
 
 typedef struct __IOHIDEvent *IOHIDEventRef;
@@ -847,6 +861,56 @@ static void ftop_copy_bounded_string(char *destination, size_t capacity, const c
   copied_len = source_len < capacity - 1U ? source_len : capacity - 1U;
   memcpy(destination, source, copied_len);
   destination[copied_len] = '\0';
+}
+
+static long long ftop_blocks_to_bytes(long long blocks, unsigned long long block_size) {
+  unsigned long long value;
+
+  if (blocks <= 0 || block_size == 0ULL) return 0;
+  if ((unsigned long long)blocks > (unsigned long long)LLONG_MAX / block_size) return LLONG_MAX;
+  value = (unsigned long long)blocks * block_size;
+  return value > (unsigned long long)LLONG_MAX ? LLONG_MAX : (long long)value;
+}
+
+static void ftop_copy_filesystem_info(struct ftop_filesystem_info *destination, const struct statfs *source) {
+  long long block_size;
+  long long free_bytes;
+
+  memset(destination, 0, sizeof(*destination));
+  if (source == NULL) return;
+  block_size = source->f_bsize > 0 ? (long long)source->f_bsize : 0LL;
+  destination->valid = 1;
+  ftop_copy_bounded_string(destination->device, sizeof(destination->device), source->f_mntfromname);
+  ftop_copy_bounded_string(destination->mountpoint, sizeof(destination->mountpoint), source->f_mntonname);
+  ftop_copy_bounded_string(destination->fstype, sizeof(destination->fstype), source->f_fstypename);
+  destination->total_bytes = ftop_blocks_to_bytes((long long)source->f_blocks, (unsigned long long)block_size);
+  free_bytes = ftop_blocks_to_bytes((long long)source->f_bfree, (unsigned long long)block_size);
+  destination->available_bytes = ftop_blocks_to_bytes((long long)source->f_bavail, (unsigned long long)block_size);
+  destination->used_bytes = destination->total_bytes > free_bytes ? destination->total_bytes - free_bytes : 0LL;
+}
+
+int ftop_macos_filesystems(struct ftop_filesystem_info *filesystems, int capacity, int *filesystem_count,
+    int *sys_errno) {
+  struct statfs *mounts;
+  int mount_count;
+  int copy_count;
+  int i;
+
+  if (filesystems == NULL || filesystem_count == NULL || sys_errno == NULL || capacity < 0) return -1;
+  memset(filesystems, 0, (size_t)capacity * sizeof(*filesystems));
+  *filesystem_count = 0;
+  *sys_errno = 0;
+
+  mount_count = getmntinfo(&mounts, MNT_NOWAIT);
+  if (mount_count <= 0) {
+    *sys_errno = errno != 0 ? errno : EINVAL;
+    return -1;
+  }
+
+  copy_count = mount_count < capacity ? mount_count : capacity;
+  for (i = 0; i < copy_count; ++i) ftop_copy_filesystem_info(&filesystems[i], &mounts[i]);
+  *filesystem_count = copy_count;
+  return 0;
 }
 
 static long long ftop_nonnegative_unsigned_long_long(unsigned long long value) {

@@ -10,6 +10,7 @@ module ftop_dashboard
     COLOR_UI_PANEL, &
     style_from_rgb
   use ftop_cpu, only : render_cpu_panel
+  use ftop_disk, only : disk_table_state, render_disk_panel
   use ftop_layout, only : dashboard_layout, dashboard_layout_from_grid, default_dashboard_layout, layout_grid
   use ftop_memory, only : render_memory_panel
   use ftop_network, only : &
@@ -34,8 +35,8 @@ module ftop_dashboard
 contains
 
   subroutine render_dashboard(buffer, snapshot, refresh_ms, frame_count, status_text, grid, focused_widget, zoomed, render_fps, &
-                              process_state, network_state, layout_name, paused, cpu_core_scroll_offset, cpu_core_active, &
-                              process_tree_active, network_table_active)
+                              process_state, network_state, disk_state, layout_name, paused, cpu_core_scroll_offset, &
+                              cpu_core_active, process_tree_active, network_table_active, disk_table_active)
     type(screen_buffer), intent(inout) :: buffer
     type(collector_snapshot), intent(in) :: snapshot
     integer, intent(in) :: refresh_ms
@@ -47,15 +48,18 @@ contains
     real, intent(in), optional :: render_fps
     type(process_table_state), intent(inout), optional :: process_state
     type(network_table_state), intent(inout), optional :: network_state
+    type(disk_table_state), intent(inout), optional :: disk_state
     character(len=*), intent(in), optional :: layout_name
     logical, intent(in), optional :: paused
     integer, intent(in), optional :: cpu_core_scroll_offset
     logical, intent(in), optional :: cpu_core_active
     logical, intent(in), optional :: process_tree_active
     logical, intent(in), optional :: network_table_active
+    logical, intent(in), optional :: disk_table_active
     type(dashboard_layout) :: layout
     type(screen_style) :: border_style
     type(screen_style) :: cpu_border_style
+    type(screen_style) :: disk_border_style
     type(screen_style) :: title_style
     type(screen_style) :: dim_style
     type(screen_style) :: focus_style
@@ -72,6 +76,7 @@ contains
     logical :: is_zoomed
     logical :: is_paused
     logical :: cpu_active
+    logical :: disk_active
     logical :: network_active
     logical :: process_active
 
@@ -97,6 +102,8 @@ contains
     if (present(process_tree_active)) process_active = process_tree_active
     network_active = .false.
     if (present(network_table_active)) network_active = network_table_active
+    disk_active = .false.
+    if (present(disk_table_active)) disk_active = disk_table_active
 
     call clear_screen(buffer)
     buffer%cursor_visible = .false.
@@ -119,25 +126,17 @@ contains
 
     if (is_zoomed) then
       zoom_rect = widget_rect(3, 3, max(0, width - 4), max(0, height - 5))
-      if (present(process_state) .and. present(network_state)) then
-        call render_dashboard_panel(buffer, zoom_rect, focus, snapshot, focus_style, title_style, dim_style, .true., &
-                                    process_state, network_state, cpu_core_scroll_offset=cpu_offset)
-      else if (present(process_state)) then
-        call render_dashboard_panel(buffer, zoom_rect, focus, snapshot, focus_style, title_style, dim_style, .true., &
-                                    process_state=process_state, cpu_core_scroll_offset=cpu_offset)
-      else if (present(network_state)) then
-        call render_dashboard_panel(buffer, zoom_rect, focus, snapshot, focus_style, title_style, dim_style, .true., &
-                                    network_state=network_state, cpu_core_scroll_offset=cpu_offset)
-      else
-        call render_dashboard_panel(buffer, zoom_rect, focus, snapshot, focus_style, title_style, dim_style, .true., &
-                                    cpu_core_scroll_offset=cpu_offset)
-      end if
+      call render_dashboard_panel(buffer, zoom_rect, focus, snapshot, focus_style, title_style, dim_style, .true., &
+                                  process_state=process_state, network_state=network_state, disk_state=disk_state, &
+                                  cpu_core_scroll_offset=cpu_offset)
     else
       cpu_border_style = border_style
+      disk_border_style = border_style
       memory_border_style = border_style
       network_border_style = border_style
       process_border_style = border_style
       if (focus == "cpu") cpu_border_style = focus_style
+      if (focus == "disk") disk_border_style = focus_style
       if (focus == "memory") memory_border_style = focus_style
       if (focus == "network") network_border_style = focus_style
       if (focus == "process") process_border_style = focus_style
@@ -158,6 +157,10 @@ contains
                                     expanded=.false.)
         end if
       end if
+      if (layout%disk_panel%height >= 3) then
+        call render_disk_panel(buffer, layout%disk_panel, snapshot, disk_border_style, title_style, dim_style, &
+                               state=disk_state, expanded=.false.)
+      end if
       if (layout%process_panel%height >= 3) then
         if (present(process_state)) then
           call render_process_panel(buffer, layout%process_panel, snapshot, process_border_style, title_style, dim_style, &
@@ -169,37 +172,21 @@ contains
     end if
 
     if (.not. is_zoomed .and. layout%cpu_panel%height < 3 .and. layout%memory_panel%height < 3 .and. &
-        layout%network_panel%height < 3 .and. layout%process_panel%height < 3) then
-      title_col = max(2, (width - len_trim("CPU / Memory / Network / Processes")) / 2 + 1)
+        layout%network_panel%height < 3 .and. layout%disk_panel%height < 3 .and. layout%process_panel%height < 3) then
+      title_col = max(2, (width - len_trim("CPU / Memory / Network / Disk / Processes")) / 2 + 1)
       title_rect = widget_rect(max(2, height / 2), title_col, width - title_col, 1)
-      call render_text(buffer, title_rect, "CPU / Memory / Network / Processes", title_style)
+      call render_text(buffer, title_rect, "CPU / Memory / Network / Disk / Processes", title_style)
     end if
 
-    if (present(process_state) .and. present(network_state)) then
-      call render_footer(buffer, layout%footer, snapshot, refresh_ms, frame_count, status_text, &
-                         dim_style, focus_style, focus, is_zoomed, render_fps=render_fps, layout_name=layout_name, &
-                         paused=is_paused, cpu_core_active=cpu_active, process_tree_active=process_active, &
-                         network_table_active=network_active, process_state=process_state, network_state=network_state)
-    else if (present(process_state)) then
-      call render_footer(buffer, layout%footer, snapshot, refresh_ms, frame_count, status_text, &
-                         dim_style, focus_style, focus, is_zoomed, render_fps=render_fps, layout_name=layout_name, &
-                         paused=is_paused, cpu_core_active=cpu_active, process_tree_active=process_active, &
-                         network_table_active=network_active, process_state=process_state)
-    else if (present(network_state)) then
-      call render_footer(buffer, layout%footer, snapshot, refresh_ms, frame_count, status_text, &
-                         dim_style, focus_style, focus, is_zoomed, render_fps=render_fps, layout_name=layout_name, &
-                         paused=is_paused, cpu_core_active=cpu_active, process_tree_active=process_active, &
-                         network_table_active=network_active, network_state=network_state)
-    else
-      call render_footer(buffer, layout%footer, snapshot, refresh_ms, frame_count, status_text, &
-                         dim_style, focus_style, focus, is_zoomed, render_fps=render_fps, layout_name=layout_name, &
-                         paused=is_paused, cpu_core_active=cpu_active, process_tree_active=process_active, &
-                         network_table_active=network_active)
-    end if
+    call render_footer(buffer, layout%footer, snapshot, refresh_ms, frame_count, status_text, &
+                       dim_style, focus_style, focus, is_zoomed, render_fps=render_fps, layout_name=layout_name, &
+                       paused=is_paused, cpu_core_active=cpu_active, process_tree_active=process_active, &
+                       network_table_active=network_active, disk_table_active=disk_active, process_state=process_state, &
+                       network_state=network_state, disk_state=disk_state)
   end subroutine render_dashboard
 
   subroutine render_dashboard_panel(buffer, rect, widget, snapshot, border_style, title_style, dim_style, expanded, &
-                                    process_state, network_state, cpu_core_scroll_offset)
+                                    process_state, network_state, disk_state, cpu_core_scroll_offset)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: rect
     character(len=*), intent(in) :: widget
@@ -210,6 +197,7 @@ contains
     logical, intent(in) :: expanded
     type(process_table_state), intent(inout), optional :: process_state
     type(network_table_state), intent(inout), optional :: network_state
+    type(disk_table_state), intent(inout), optional :: disk_state
     integer, intent(in), optional :: cpu_core_scroll_offset
 
     if (rect%height < 3 .or. rect%width <= 0) return
@@ -225,6 +213,8 @@ contains
       else
         call render_network_panel(buffer, rect, snapshot, border_style, title_style, dim_style, expanded=expanded)
       end if
+    case ("disk")
+      call render_disk_panel(buffer, rect, snapshot, border_style, title_style, dim_style, state=disk_state, expanded=expanded)
     case ("process")
       if (present(process_state)) then
         call render_process_panel(buffer, rect, snapshot, border_style, title_style, dim_style, process_state)
@@ -235,8 +225,8 @@ contains
   end subroutine render_dashboard_panel
 
   subroutine render_footer(buffer, footer, snapshot, refresh_ms, frame_count, status_text, dim_style, label_style, &
-                           focused_widget, zoomed, render_fps, layout_name, paused, cpu_core_active, process_tree_active, &
-                           network_table_active, process_state, network_state)
+                            focused_widget, zoomed, render_fps, layout_name, paused, cpu_core_active, process_tree_active, &
+                            network_table_active, disk_table_active, process_state, network_state, disk_state)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: footer
     type(collector_snapshot), intent(in) :: snapshot
@@ -253,12 +243,15 @@ contains
     logical, intent(in), optional :: cpu_core_active
     logical, intent(in), optional :: process_tree_active
     logical, intent(in), optional :: network_table_active
+    logical, intent(in), optional :: disk_table_active
     type(process_table_state), intent(in), optional :: process_state
     type(network_table_state), intent(in), optional :: network_state
+    type(disk_table_state), intent(in), optional :: disk_state
     type(widget_rect) :: line
     character(len=:), allocatable :: status
     logical :: is_paused
     logical :: cpu_active
+    logical :: disk_active
     logical :: network_active
     logical :: process_active
 
@@ -271,57 +264,27 @@ contains
     if (present(process_tree_active)) process_active = process_tree_active
     network_active = .false.
     if (present(network_table_active)) network_active = network_table_active
+    disk_active = .false.
+    if (present(disk_table_active)) disk_active = disk_table_active
 
     line = widget_rect(footer%row, footer%col, footer%width, 1)
-    if (present(process_state) .and. present(network_state)) then
-      call render_footer_segment(buffer, line, "KEYS", footer_actions_text(focused_widget, zoomed, is_paused, cpu_active, &
-                                                                           process_active, network_active, process_state, &
-                                                                           network_state), &
-                                 label_style, dim_style)
-    else if (present(process_state)) then
-      call render_footer_segment(buffer, line, "KEYS", footer_actions_text(focused_widget, zoomed, is_paused, cpu_active, &
-                                                                           process_active, network_active, &
-                                                                           process_state=process_state), &
-                                 label_style, dim_style)
-    else if (present(network_state)) then
-      call render_footer_segment(buffer, line, "KEYS", footer_actions_text(focused_widget, zoomed, is_paused, cpu_active, &
-                                                                           process_active, network_active, &
-                                                                           network_state=network_state), &
-                                 label_style, dim_style)
-    else
-      call render_footer_segment(buffer, line, "KEYS", footer_actions_text(focused_widget, zoomed, is_paused, cpu_active, &
-                                                                           process_active, network_active), label_style, dim_style)
-    end if
+    call render_footer_segment(buffer, line, "KEYS", footer_actions_text(focused_widget, zoomed, is_paused, cpu_active, &
+                                                                         process_active, network_active, disk_active, &
+                                                                         process_state=process_state, &
+                                                                         network_state=network_state), &
+                               label_style, dim_style)
 
     if (footer%height < 2) return
     status = trim(status_text)
     if (len(status) == 0) status = "ready"
     line = widget_rect(footer%row + 1, footer%col, footer%width, 1)
-    if (present(process_state) .and. present(network_state)) then
-      call render_footer_segment(buffer, line, "STAT", footer_status_text(status, snapshot, refresh_ms, frame_count, &
-                                                                          focused_widget, zoomed, is_paused, render_fps, &
-                                                                          layout_name, cpu_active, process_active, &
-                                                                          network_active, process_state, network_state), &
-                                 label_style, dim_style)
-    else if (present(process_state)) then
-      call render_footer_segment(buffer, line, "STAT", footer_status_text(status, snapshot, refresh_ms, frame_count, &
-                                                                          focused_widget, zoomed, is_paused, render_fps, &
-                                                                          layout_name, cpu_active, process_active, &
-                                                                          network_active, process_state=process_state), &
-                                 label_style, dim_style)
-    else if (present(network_state)) then
-      call render_footer_segment(buffer, line, "STAT", footer_status_text(status, snapshot, refresh_ms, frame_count, &
-                                                                          focused_widget, zoomed, is_paused, render_fps, &
-                                                                          layout_name, cpu_active, process_active, &
-                                                                          network_active, network_state=network_state), &
-                                 label_style, dim_style)
-    else
-      call render_footer_segment(buffer, line, "STAT", footer_status_text(status, snapshot, refresh_ms, frame_count, &
-                                                                           focused_widget, zoomed, is_paused, render_fps, &
-                                                                           layout_name, cpu_active, process_active, &
-                                                                           network_active), &
-                                 label_style, dim_style)
-    end if
+    call render_footer_segment(buffer, line, "STAT", footer_status_text(status, snapshot, refresh_ms, frame_count, &
+                                                                        focused_widget, zoomed, is_paused, render_fps, &
+                                                                        layout_name, cpu_active, process_active, &
+                                                                        network_active, disk_active, &
+                                                                        process_state=process_state, network_state=network_state, &
+                                                                        disk_state=disk_state), &
+                               label_style, dim_style)
   end subroutine render_footer
 
   subroutine render_footer_segment(buffer, rect, label, value, label_style, value_style)
@@ -349,13 +312,14 @@ contains
   end subroutine render_footer_segment
 
   function footer_actions_text(focused_widget, zoomed, paused, cpu_core_active, process_tree_active, network_table_active, &
-                               process_state, network_state) result(text)
+                               disk_table_active, process_state, network_state) result(text)
     character(len=*), intent(in) :: focused_widget
     logical, intent(in) :: zoomed
     logical, intent(in) :: paused
     logical, intent(in) :: cpu_core_active
     logical, intent(in) :: process_tree_active
     logical, intent(in) :: network_table_active
+    logical, intent(in) :: disk_table_active
     type(process_table_state), intent(in), optional :: process_state
     type(network_table_state), intent(in), optional :: network_state
     character(len=:), allocatable :: text
@@ -397,6 +361,14 @@ contains
         text = "Esc grid  Enter grid  q quit"
       else
         text = "z/Enter zoom  arrows panes  Tab focus  q quit"
+      end if
+    case ("disk")
+      if (zoomed) then
+        text = "Up/Down rows  Page rows  Enter grid  Esc grid  q quit"
+      else if (disk_table_active) then
+        text = "Up/Down rows  Page rows  Enter zoom  Esc focus"
+      else
+        text = "Enter table  z zoom  arrows panes  Tab focus  q quit"
       end if
     case default
       text = "Tab focus  arrows panes  z/Enter zoom  P layout  ? help  q quit"
@@ -442,8 +414,8 @@ contains
   end function network_footer_actions
 
   function footer_status_text(status, snapshot, refresh_ms, frame_count, focused_widget, zoomed, paused, render_fps, &
-                              layout_name, cpu_core_active, process_tree_active, network_table_active, process_state, &
-                              network_state) result(text)
+                              layout_name, cpu_core_active, process_tree_active, network_table_active, disk_table_active, &
+                              process_state, network_state, disk_state) result(text)
     type(collector_snapshot), intent(in) :: snapshot
     integer, intent(in) :: refresh_ms
     integer, intent(in) :: frame_count
@@ -456,36 +428,31 @@ contains
     logical, intent(in) :: cpu_core_active
     logical, intent(in) :: process_tree_active
     logical, intent(in) :: network_table_active
+    logical, intent(in) :: disk_table_active
     type(process_table_state), intent(in), optional :: process_state
     type(network_table_state), intent(in), optional :: network_state
+    type(disk_table_state), intent(in), optional :: disk_state
     character(len=:), allocatable :: text
 
-    if (present(process_state) .and. present(network_state)) then
-      text = trim(status) // " | " // footer_mode_text(focused_widget, zoomed, paused, cpu_core_active, &
-                                                        process_tree_active, network_table_active, process_state, network_state)
-    else if (present(process_state)) then
-      text = trim(status) // " | " // footer_mode_text(focused_widget, zoomed, paused, cpu_core_active, &
-                                                        process_tree_active, network_table_active, process_state=process_state)
-    else if (present(network_state)) then
-      text = trim(status) // " | " // footer_mode_text(focused_widget, zoomed, paused, cpu_core_active, &
-                                                        process_tree_active, network_table_active, network_state=network_state)
-    else
-      text = trim(status) // " | " // footer_mode_text(focused_widget, zoomed, paused, cpu_core_active, &
-                                                        process_tree_active, network_table_active)
-    end if
+    text = trim(status) // " | " // footer_mode_text(focused_widget, zoomed, paused, cpu_core_active, &
+                                                      process_tree_active, network_table_active, disk_table_active, &
+                                                      process_state=process_state, network_state=network_state, &
+                                                      disk_state=disk_state)
     text = text // footer_layout_text(layout_name) // " | " // footer_timing_text(snapshot, refresh_ms, frame_count, render_fps)
   end function footer_status_text
 
   function footer_mode_text(focused_widget, zoomed, paused, cpu_core_active, process_tree_active, network_table_active, &
-                            process_state, network_state) result(text)
+                            disk_table_active, process_state, network_state, disk_state) result(text)
     character(len=*), intent(in) :: focused_widget
     logical, intent(in) :: zoomed
     logical, intent(in) :: paused
     logical, intent(in) :: cpu_core_active
     logical, intent(in) :: process_tree_active
     logical, intent(in) :: network_table_active
+    logical, intent(in) :: disk_table_active
     type(process_table_state), intent(in), optional :: process_state
     type(network_table_state), intent(in), optional :: network_state
+    type(disk_table_state), intent(in), optional :: disk_state
     character(len=:), allocatable :: text
 
     if (paused) then
@@ -527,6 +494,16 @@ contains
         text = "memory zoom"
       else
         text = "memory focus"
+      end if
+    case ("disk")
+      if (present(disk_state)) then
+        text = disk_footer_mode(zoomed, disk_table_active, disk_state)
+      else if (zoomed) then
+        text = "disk zoom"
+      else if (disk_table_active) then
+        text = "disk table"
+      else
+        text = "disk focus"
       end if
     case default
       if (zoomed) then
@@ -577,6 +554,23 @@ contains
            " | sort " // network_table_sort_key_label(state) // " " // network_table_sort_direction_label(state)
     if (len_trim(state%state_filter) > 0) text = text // " | state " // trim(state%state_filter)
   end function network_footer_mode
+
+  function disk_footer_mode(zoomed, disk_table_active, state) result(text)
+    logical, intent(in) :: zoomed
+    logical, intent(in) :: disk_table_active
+    type(disk_table_state), intent(in) :: state
+    character(len=:), allocatable :: text
+
+    if (zoomed) then
+      text = "disk zoom"
+    else if (disk_table_active) then
+      text = "disk table"
+    else
+      text = "disk focus"
+    end if
+    text = text // " | row " // integer_text(max(0, state%selected_row)) // "/" // &
+           integer_text(max(0, state%row_count))
+  end function disk_footer_mode
 
   function footer_layout_text(layout_name) result(text)
     character(len=*), intent(in), optional :: layout_name

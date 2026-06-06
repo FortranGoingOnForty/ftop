@@ -23,9 +23,9 @@ module ftop_help
 
   type(help_section), parameter :: HELP_SECTIONS(3) = [ &
     help_section("Global", "", 8, [character(len=HELP_LINE_LEN) :: &
-      "c/m/n/p: focus CPU/Memory/Network/Process", &
-      "d/g: disk/GPU placeholder status", &
-      "P: cycle layout   1-4: jump layouts", &
+      "c/m/n/p/d: focus CPU/Memory/Network/Process/Disk", &
+      "g: GPU placeholder status", &
+      "P: cycle layout   1-5: jump layouts", &
       "arrows: focus panes; Enter activates CPU/network modes", &
       "Tab: next focus   Shift+Tab: last focus", &
       "z: zoom   Enter: activate/zoom focus", &

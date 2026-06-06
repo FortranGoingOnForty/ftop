@@ -12,6 +12,7 @@ module ftop_platform
     c_size_t
   use, intrinsic :: iso_fortran_env, only : int64, real64
   use ftop_cpu_data, only : cpu_core_info, cpu_state_ticks, cpu_state_total_ticks
+  use ftop_disk_data, only : DISK_FILESYSTEM_CAPACITY, c_filesystem_info, disk_table, disk_table_from_c
   use ftop_net_data, only : &
     NET_ADDRESS_LEN, &
     NET_INTERFACE_NAME_LEN, &
@@ -129,6 +130,7 @@ module ftop_platform
     procedure :: get_system_uptime => freebsd_get_system_uptime
     procedure :: get_process_table => freebsd_get_process_table
     procedure :: get_network_table => freebsd_get_network_table
+    procedure :: get_disk_table => freebsd_get_disk_table
   end type freebsd_backend
 
   public :: create_platform
@@ -142,6 +144,7 @@ module ftop_platform
   public :: freebsd_network_interfaces
   public :: freebsd_network_connections
   public :: freebsd_network_snapshot
+  public :: freebsd_disk_snapshot
   public :: freebsd_sysctl_bytes
   public :: freebsd_sysctl_int
   public :: freebsd_sysctl_long
@@ -211,6 +214,15 @@ module ftop_platform
       integer(c_long_long), intent(out) :: swap_used_bytes
       integer(c_int), intent(out) :: sys_errno
     end function c_ftop_freebsd_memory_info
+
+    integer(c_int) function c_ftop_freebsd_filesystems(filesystems, capacity, filesystem_count, sys_errno) &
+        bind(C, name="ftop_freebsd_filesystems")
+      import :: c_filesystem_info, c_int
+      type(c_filesystem_info), intent(inout) :: filesystems(*)
+      integer(c_int), value :: capacity
+      integer(c_int), intent(out) :: filesystem_count
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_freebsd_filesystems
 
     integer(c_int) function c_ftop_freebsd_load_average(loads, sys_errno) bind(C, name="ftop_freebsd_load_average")
       import :: c_double, c_int
@@ -561,6 +573,35 @@ contains
 
     if (.not. freebsd_network_snapshot(table)) table = network_table()
   end function freebsd_get_network_table
+
+  function freebsd_get_disk_table(self) result(table)
+    class(freebsd_backend), intent(in) :: self
+    type(disk_table) :: table
+
+    associate(unused => self)
+    end associate
+
+    if (.not. freebsd_disk_snapshot(table)) table = disk_table()
+  end function freebsd_get_disk_table
+
+  logical function freebsd_disk_snapshot(table, error_code) result(success)
+    type(disk_table), intent(out) :: table
+    integer, intent(out), optional :: error_code
+    type(c_filesystem_info) :: filesystems(DISK_FILESYSTEM_CAPACITY)
+    integer(c_int) :: filesystem_count
+    integer(c_int) :: sys_errno
+    integer(c_int) :: rc
+
+    table = disk_table()
+    filesystems = c_filesystem_info()
+    rc = c_ftop_freebsd_filesystems(filesystems, int(DISK_FILESYSTEM_CAPACITY, c_int), filesystem_count, sys_errno)
+    success = rc == 0_c_int
+    if (success) then
+      table = disk_table_from_c(filesystems, int(filesystem_count))
+    else
+      if (present(error_code)) error_code = int(sys_errno)
+    end if
+  end function freebsd_disk_snapshot
 
   logical function freebsd_network_snapshot(table, error_code) result(success)
     type(network_table), intent(out) :: table

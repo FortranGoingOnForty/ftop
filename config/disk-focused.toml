@@ -1,4 +1,8 @@
-# Dense overview layout for dogfooding compact widgets.
+# Disk-focused layout.
+
+[network]
+include_loopback = false
+exclude_interfaces = []
 
 [[row]]
 weight = 1
@@ -7,19 +11,13 @@ weight = 1
 widget = "cpu"
 weight = 1
 min_width = 24
-min_height = 6
-
-[[row]]
-weight = 1
+min_height = 5
 
 [[row.column]]
 widget = "memory"
 weight = 1
 min_width = 24
-min_height = 6
-
-[[row]]
-weight = 1
+min_height = 5
 
 [[row.column]]
 widget = "network"
@@ -27,17 +25,11 @@ weight = 1
 min_width = 24
 min_height = 5
 
+[[row]]
+weight = 2
+
 [[row.column]]
 widget = "disk"
 weight = 1
-min_width = 24
-min_height = 5
-
-[[row]]
-weight = 1
-
-[[row.column]]
-widget = "process"
-weight = 1
 min_width = 40
-min_height = 5
+min_height = 8
