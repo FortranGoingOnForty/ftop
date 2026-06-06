@@ -151,9 +151,12 @@ contains
     text = buffer_text(buffer)
     call require(index(text, "Disk") > 0, "disk panel should render title")
     call require(index(text, "Filesystems 2") > 0, "disk panel should summarize filesystems")
+    call require(index(text, "I/O ada0") > 0, "disk compact panel should render IO device")
+    call require(index(text, "R: 2.0 MiB/s") > 0, "disk compact panel should render read throughput")
+    call require(index(text, "W: 512.0 KiB/s") > 0, "disk compact panel should render write throughput")
     call require(index(text, "/var") > 0, "disk compact panel should sort hottest filesystem first")
     call require(index(text, "/var") < index(text, "/home"), "disk compact rows should sort by usage")
-    compact_row = row_text(buffer, 4)
+    compact_row = row_text(buffer, 5)
     call require(index(compact_row, "/var") > 0, "disk compact row should render mountpoint")
     call require(index(compact_row, "90.0%") > 0, "disk compact row should render usage percent")
     call require(index(compact_row, "90.0%") - index(compact_row, "/var") >= 8, &
@@ -167,6 +170,8 @@ contains
     call require(index(text, "MOUNT") > 0, "expanded disk panel should render table header")
     call require(index(text, "AVAIL") > 0, "expanded disk panel should render available column")
     call require(index(text, "90.0%") > 0, "expanded disk panel should render usage percent")
+    call require(index(text, "rlat 1.5 ms") > 0, "expanded disk panel should render read latency")
+    call require(index(text, "wlat 3.0 ms") > 0, "expanded disk panel should render write latency")
   end subroutine test_disk_panel_renders_compact_and_expanded
 
   subroutine fill_disk_snapshot(snapshot)
@@ -188,6 +193,23 @@ contains
     snapshot%disk%filesystems(2)%total_bytes = 100_int64 * GIB
     snapshot%disk%filesystems(2)%used_bytes = 25_int64 * GIB
     snapshot%disk%filesystems(2)%available_bytes = 75_int64 * GIB
+    allocate(snapshot%disk%io(1))
+    snapshot%disk%io(1) = disk_io_sample("ada0", 1000_int64, 2000_int64, 10_int64, 20_int64, &
+                                         100_int64, 200_int64, 50_int64)
+    allocate(snapshot%disk%io_rates(1))
+    snapshot%disk%io_rates(1) = disk_io_rate_info()
+    snapshot%disk%io_rates(1)%valid = .true.
+    snapshot%disk%io_rates(1)%device = "ada0"
+    snapshot%disk%io_rates(1)%read_bytes_per_sec = 2.0_real64 * 1024.0_real64 * 1024.0_real64
+    snapshot%disk%io_rates(1)%write_bytes_per_sec = 512.0_real64 * 1024.0_real64
+    allocate(snapshot%disk%latencies(1))
+    snapshot%disk%latencies(1) = disk_latency_info()
+    snapshot%disk%latencies(1)%valid = .true.
+    snapshot%disk%latencies(1)%read_valid = .true.
+    snapshot%disk%latencies(1)%write_valid = .true.
+    snapshot%disk%latencies(1)%device = "ada0"
+    snapshot%disk%latencies(1)%avg_read_latency_us = 1500.0_real64
+    snapshot%disk%latencies(1)%avg_write_latency_us = 3000.0_real64
   end subroutine fill_disk_snapshot
 
   subroutine put_c_text(chars, text)

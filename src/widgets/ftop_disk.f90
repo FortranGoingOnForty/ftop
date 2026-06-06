@@ -4,7 +4,7 @@ module ftop_disk
   use ftop_box, only : BOX_STYLE_ROUNDED, box_content_rect, draw_box
   use ftop_collector, only : collector_snapshot
   use ftop_color, only : COLOR_BRIGHT_WHITE, gradient_green_yellow_red, style_from_rgb
-  use ftop_disk_data, only : disk_table, filesystem_info, filesystem_usage_percent, real_filesystem_count
+  use ftop_disk_data, only : disk_latency_info, disk_table, filesystem_info, filesystem_usage_percent, real_filesystem_count
   use ftop_meter, only : METER_FILL_SHADED, render_meter
   use ftop_table, only : &
     TABLE_SEPARATOR_SPACE, &
@@ -24,6 +24,9 @@ module ftop_disk
   integer, parameter :: DISK_TABLE_COLUMNS = 5
   integer, parameter :: COMPACT_ROW_GAP_WIDTH = 4
   integer, parameter :: COMPACT_PERCENT_WIDTH = 6
+  real(real64), parameter :: RATE_KIB = 1024.0_real64
+  real(real64), parameter :: RATE_MIB = RATE_KIB * 1024.0_real64
+  real(real64), parameter :: RATE_GIB = RATE_MIB * 1024.0_real64
 
   type, public :: disk_table_state
     integer :: selected_row = 1
@@ -99,6 +102,7 @@ contains
     type(disk_table_state), intent(inout), optional :: state
     type(filesystem_info), allocatable :: filesystems(:)
     type(screen_style) :: row_style
+    character(len=:), allocatable :: io_text
     integer :: actual_index
     integer :: line_index
     integer :: preview_row
@@ -133,6 +137,11 @@ contains
     call render_text(buffer, content_line_rect(content, 1), disk_summary_text(table, filesystems), text_style)
     call render_disk_usage_strip(buffer, content_line_rect(content, 2), filesystems, dim_style)
     line_index = 3
+    io_text = disk_io_summary_text(table)
+    if (len_trim(io_text) > 0 .and. line_index <= content%height) then
+      call render_text(buffer, content_line_rect(content, line_index), io_text, dim_style)
+      line_index = line_index + 1
+    end if
     do preview_row = 1, max(0, content%height - line_index + 1)
       actual_index = start_index + preview_row - 1
       if (actual_index > size(filesystems)) exit
@@ -171,19 +180,29 @@ contains
     type(table_column) :: columns(DISK_TABLE_COLUMNS)
     type(disk_table_state) :: active_state
     type(widget_rect) :: table_rect
+    character(len=:), allocatable :: io_text
+    integer :: table_start_line
 
     filesystems = sorted_filesystems(table)
     call render_text(buffer, content_line_rect(content, 1), disk_summary_text(table, filesystems), text_style)
     if (content%height <= 1) return
+    table_start_line = 2
+    io_text = disk_io_summary_text(table)
+    if (len_trim(io_text) > 0) then
+      call render_text(buffer, content_line_rect(content, 2), io_text, dim_style)
+      table_start_line = 3
+    end if
+    if (content%height < table_start_line) return
     if (size(filesystems) <= 0) then
       if (present(state)) call clear_disk_table_state(state)
-      call render_text(buffer, content_line_rect(content, 2), "no filesystems", dim_style, TEXT_ALIGN_CENTER)
+      call render_text(buffer, content_line_rect(content, table_start_line), "no filesystems", dim_style, TEXT_ALIGN_CENTER)
       return
     end if
 
     active_state = disk_table_state()
     if (present(state)) active_state = state
-    table_rect = widget_rect(content%row + 1, content%col, content%width, content%height - 1)
+    table_rect = widget_rect(content%row + table_start_line - 1, content%col, content%width, &
+                             content%height - table_start_line + 1)
     active_state%row_count = size(filesystems)
     active_state%viewport_rows = table_viewport_row_count(table_rect, .true.)
     call normalize_disk_table_state(active_state)
@@ -243,6 +262,92 @@ contains
              format_percent(real(filesystem_usage_percent(filesystems(1))))
     end if
   end function disk_summary_text
+
+  function disk_io_summary_text(table) result(text)
+    type(disk_table), intent(in) :: table
+    character(len=:), allocatable :: text
+    integer :: rate_index
+
+    text = ""
+    rate_index = busiest_disk_rate_index(table)
+    if (rate_index <= 0) return
+
+    text = "I/O " // trim(table%io_rates(rate_index)%device) // &
+           " R: " // format_disk_rate(table%io_rates(rate_index)%read_bytes_per_sec) // &
+           " W: " // format_disk_rate(table%io_rates(rate_index)%write_bytes_per_sec)
+    if (allocated(table%latencies) .and. rate_index <= size(table%latencies)) then
+      if (trim(table%latencies(rate_index)%device) == trim(table%io_rates(rate_index)%device)) then
+        text = text // disk_latency_suffix(table%latencies(rate_index))
+      end if
+    end if
+  end function disk_io_summary_text
+
+  integer function busiest_disk_rate_index(table) result(rate_index)
+    type(disk_table), intent(in) :: table
+    real(real64) :: activity
+    real(real64) :: best_activity
+    integer :: index
+
+    rate_index = 0
+    best_activity = -1.0_real64
+    if (.not. allocated(table%io_rates)) return
+    do index = 1, size(table%io_rates)
+      if (.not. table%io_rates(index)%valid) cycle
+      if (len_trim(table%io_rates(index)%device) <= 0) cycle
+      activity = max(0.0_real64, table%io_rates(index)%read_bytes_per_sec) + &
+                 max(0.0_real64, table%io_rates(index)%write_bytes_per_sec)
+      if (rate_index <= 0 .or. activity > best_activity) then
+        rate_index = index
+        best_activity = activity
+      end if
+    end do
+  end function busiest_disk_rate_index
+
+  function disk_latency_suffix(latency) result(text)
+    type(disk_latency_info), intent(in) :: latency
+    character(len=:), allocatable :: text
+
+    text = ""
+    if (.not. latency%valid) return
+    if (latency%read_valid) text = text // " rlat " // format_latency_us(latency%avg_read_latency_us)
+    if (latency%write_valid) text = text // " wlat " // format_latency_us(latency%avg_write_latency_us)
+  end function disk_latency_suffix
+
+  function format_disk_rate(bytes_per_sec) result(text)
+    real(real64), intent(in) :: bytes_per_sec
+    character(len=:), allocatable :: text
+    character(len=32) :: buffer
+    real(real64) :: value
+
+    value = max(0.0_real64, bytes_per_sec)
+    if (value < RATE_KIB) then
+      write(buffer, '(I0, A)') int(value), " B/s"
+    else if (value < RATE_MIB) then
+      write(buffer, '(F0.1, A)') value / RATE_KIB, " KiB/s"
+    else if (value < RATE_GIB) then
+      write(buffer, '(F0.1, A)') value / RATE_MIB, " MiB/s"
+    else
+      write(buffer, '(F0.1, A)') value / RATE_GIB, " GiB/s"
+    end if
+    text = trim(adjustl(buffer))
+  end function format_disk_rate
+
+  function format_latency_us(latency_us) result(text)
+    real(real64), intent(in) :: latency_us
+    character(len=:), allocatable :: text
+    character(len=32) :: buffer
+    real(real64) :: value
+
+    value = max(0.0_real64, latency_us)
+    if (value < 1000.0_real64) then
+      write(buffer, '(I0, A)') int(value), " us"
+    else if (value < 1000000.0_real64) then
+      write(buffer, '(F0.1, A)') value / 1000.0_real64, " ms"
+    else
+      write(buffer, '(F0.1, A)') value / 1000000.0_real64, " s"
+    end if
+    text = trim(adjustl(buffer))
+  end function format_latency_us
 
   subroutine render_compact_filesystem_row(buffer, rect, filesystem, style)
     type(screen_buffer), intent(inout) :: buffer
