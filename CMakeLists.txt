@@ -92,6 +92,7 @@ add_library(
   src/collect/ftop_ring_buffer.f90
   src/collect/ftop_services.f90
   src/shim/ftop_dl.f90
+  src/ftop_log.f90
   src/shim/ftop_pthread.f90
   src/shim/ftop_signal.f90
   src/shim/ftop_terminal_io.f90
@@ -112,6 +113,7 @@ add_library(
   src/widgets/ftop_process_table.f90
   src/widgets/ftop_table.f90
   src/shim/ftop_dl.c
+  src/shim/ftop_log.c
   src/shim/ftop_pthread.c
   src/shim/ftop_signal.c
   src/shim/ftop_terminal_posix.c

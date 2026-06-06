@@ -23,6 +23,7 @@ module ftop_platform
     platform_backend, &
     process_table, &
     system_uptime_info
+  use ftop_log, only : log_warn
   use ftop_proc_data, only : &
     PROCESS_CGROUP_LEN, &
     PROCESS_COMMAND_LEN, &
@@ -52,6 +53,7 @@ module ftop_platform
 
   integer, allocatable, save :: user_cache_uids(:)
   character(len=PROCESS_USER_LEN), allocatable, save :: user_cache_names(:)
+  logical, save :: linux_hwmon_warned = .false.
 
   type, bind(C), public :: linux_hwmon_sensor
     character(kind=c_char) :: path(LINUX_HWMON_PATH_LEN)
@@ -426,6 +428,8 @@ contains
         cores(cpu_index)%temp_valid = .true.
         cores(cpu_index)%temp_c = real(temperature_c, real64)
       end do
+    else
+      call log_warn_once(linux_hwmon_warned, "hwmon sensor not found: errno=" // integer_text(int(sys_errno)))
     end if
     success = cpu_count > 0
   end function linux_get_cpu_metadata
@@ -1434,5 +1438,23 @@ contains
 
     if (present(error_code)) error_code = int(sys_errno)
   end subroutine assign_error
+
+  subroutine log_warn_once(warned, message)
+    logical, intent(inout) :: warned
+    character(len=*), intent(in) :: message
+
+    if (warned) return
+    call log_warn(message)
+    warned = .true.
+  end subroutine log_warn_once
+
+  function integer_text(value) result(text)
+    integer, intent(in) :: value
+    character(len=:), allocatable :: text
+    character(len=32) :: buffer
+
+    write(buffer, '(i0)') value
+    text = trim(buffer)
+  end function integer_text
 
 end module ftop_platform

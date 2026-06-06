@@ -94,6 +94,11 @@ target_link_libraries(ftop_app_batch_signal_test PRIVATE ftop_core)
 
 add_test(NAME ftop_app_batch_signal COMMAND ftop_app_batch_signal_test)
 
+add_executable(ftop_log_test unit/test_log.f90 unit/ftop_log_test.c)
+target_link_libraries(ftop_log_test PRIVATE ftop_core)
+
+add_test(NAME ftop_log COMMAND ftop_log_test)
+
 add_executable(ftop_table_test unit/test_table.f90)
 target_link_libraries(ftop_table_test PRIVATE ftop_core)
 

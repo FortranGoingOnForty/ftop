@@ -28,9 +28,10 @@ program test_terminal_smoke
   end interface
 
   integer, parameter :: SMOKE_TIMEOUT_MS = 5000
+  character(len=*), parameter :: SMOKE_LOG_PATH = "ftop-smoke.log"
   character(len=512) :: ftop_path
   character(len=512) :: process_config_path
-  character(len=32) :: argv(2)
+  character(len=512) :: argv(5)
   type(expect_options) :: options
   type(expect_session) :: session
   type(expect_match) :: match
@@ -42,7 +43,7 @@ program test_terminal_smoke
   call get_command_argument(2, process_config_path)
   if (len_trim(process_config_path) == 0) error stop "process config path argument is required"
 
-  call delete_debug_log()
+  call delete_log(SMOKE_LOG_PATH)
 
   options = clear_expect_options()
   options%timeout_ms = SMOKE_TIMEOUT_MS
@@ -52,6 +53,9 @@ program test_terminal_smoke
   argv = ""
   argv(1) = "--refresh-ms"
   argv(2) = "500"
+  argv(3) = "--log-file"
+  argv(4) = SMOKE_LOG_PATH
+  argv(5) = "--verbose"
   session = spawn_expect(trim(ftop_path), argv, options)
   if (session%error_code /= FGOF_EXPECT_OK) error stop "failed to spawn ftop"
 
@@ -133,7 +137,12 @@ program test_terminal_smoke
   closed = close_expect(session)
   if (.not. closed) error stop "failed to close ftop expect session"
 
-  if (.not. debug_log_contains("mouse press left row=5 col=10")) error stop "mouse event was not logged"
+  if (.not. log_contains(SMOKE_LOG_PATH, "ftop v0.1.0 starting")) error stop "startup was not logged"
+  if (.not. log_contains(SMOKE_LOG_PATH, "loaded layout preset")) error stop "layout load was not logged"
+  if (.not. log_contains(SMOKE_LOG_PATH, "collector started")) error stop "collector start was not logged"
+  if (.not. log_contains(SMOKE_LOG_PATH, "terminal size:")) error stop "terminal size was not logged"
+  if (.not. log_contains(SMOKE_LOG_PATH, "ftop shutting down")) error stop "shutdown was not logged"
+  if (.not. log_contains(SMOKE_LOG_PATH, "mouse press left row=5 col=10")) error stop "mouse event was not logged"
 
   call verify_process_filter(trim(ftop_path), trim(process_config_path), options)
   call verify_signal_exit(trim(ftop_path), argv, options)
@@ -301,22 +310,24 @@ contains
     if (.not. signal_closed) error stop "failed to close signal-exit expect session"
   end subroutine verify_signal_exit
 
-  subroutine delete_debug_log()
+  subroutine delete_log(path)
+    character(len=*), intent(in) :: path
     integer :: unit
     integer :: status
 
-    open(newunit=unit, file="ftop-debug.log", status="old", action="read", iostat=status)
+    open(newunit=unit, file=path, status="old", action="read", iostat=status)
     if (status == 0) close(unit, status="delete")
-  end subroutine delete_debug_log
+  end subroutine delete_log
 
-  logical function debug_log_contains(expected) result(found)
+  logical function log_contains(path, expected) result(found)
+    character(len=*), intent(in) :: path
     character(len=*), intent(in) :: expected
     character(len=256) :: line
     integer :: unit
     integer :: status
 
     found = .false.
-    open(newunit=unit, file="ftop-debug.log", status="old", action="read", iostat=status)
+    open(newunit=unit, file=path, status="old", action="read", iostat=status)
     if (status /= 0) return
 
     do
@@ -329,6 +340,6 @@ contains
     end do
 
     close(unit)
-  end function debug_log_contains
+  end function log_contains
 
 end program test_terminal_smoke

@@ -20,6 +20,7 @@ module ftop_platform
     platform_backend, &
     process_table, &
     system_uptime_info
+  use ftop_log, only : log_warn
   use ftop_proc_data, only : &
     PROCESS_COMMAND_LEN, &
     PROCESS_USER_LEN, &
@@ -33,6 +34,8 @@ module ftop_platform
 
   integer, allocatable, save :: user_cache_uids(:)
   character(len=PROCESS_USER_LEN), allocatable, save :: user_cache_names(:)
+  logical, save :: macos_iokit_disk_warned = .false.
+  logical, save :: macos_iokit_gpu_warned = .false.
 
   type, bind(C), public :: macos_processor_ticks
     integer(c_long_long) :: user
@@ -856,6 +859,8 @@ contains
       count = int(c_count)
     else
       count = 0
+      call log_warn_once(macos_iokit_gpu_warned, &
+                         "IOKit GPU service unavailable: errno=" // integer_text(int(sys_errno)))
     end if
     call assign_error(error_code, sys_errno)
   end function macos_iokit_gpu_count
@@ -873,6 +878,8 @@ contains
       count = int(c_count)
     else
       count = 0
+      call log_warn_once(macos_iokit_disk_warned, &
+                         "IOKit disk service unavailable: errno=" // integer_text(int(sys_errno)))
     end if
     call assign_error(error_code, sys_errno)
   end function macos_iokit_disk_count
@@ -972,5 +979,23 @@ contains
 
     if (present(error_code)) error_code = int(sys_errno)
   end subroutine assign_error
+
+  subroutine log_warn_once(warned, message)
+    logical, intent(inout) :: warned
+    character(len=*), intent(in) :: message
+
+    if (warned) return
+    call log_warn(message)
+    warned = .true.
+  end subroutine log_warn_once
+
+  function integer_text(value) result(text)
+    integer, intent(in) :: value
+    character(len=:), allocatable :: text
+    character(len=32) :: buffer
+
+    write(buffer, '(i0)') value
+    text = trim(buffer)
+  end function integer_text
 
 end module ftop_platform

@@ -52,6 +52,14 @@ module ftop_app
     layout_focus_widget, &
     layout_grid, &
     parse_layout_file
+  use ftop_log, only : &
+    LOG_LEVEL_INFO, &
+    log_debug, &
+    log_error, &
+    log_info, &
+    log_init, &
+    log_shutdown, &
+    log_warn
   use ftop_net_data, only : set_network_interface_filters
   use ftop_network, only : &
     network_table_clear_state_filter, &
@@ -144,7 +152,7 @@ module ftop_app
   integer, parameter :: LAYOUT_PRESET_COUNT = 4
   integer, parameter :: LAYOUT_PRESET_NAME_LEN = 16
   integer, parameter :: LAYOUT_PRESET_FILE_LEN = 40
-  character(len=*), parameter :: DEBUG_LOG_PATH = "ftop-debug.log"
+  character(len=*), parameter :: FTOP_VERSION = "0.1.0"
   character(len=LAYOUT_PRESET_NAME_LEN), parameter :: LAYOUT_PRESET_NAMES(LAYOUT_PRESET_COUNT) = [ &
     character(len=LAYOUT_PRESET_NAME_LEN) :: &
     "full", &
@@ -204,6 +212,7 @@ module ftop_app
     logical :: pressed = .false.
   end type sgr_mouse_event
 
+  public :: FTOP_VERSION
   public :: run_ftop
   public :: render_test_frame
   public :: adjusted_refresh_ms
@@ -217,20 +226,36 @@ module ftop_app
 
 contains
 
-  integer function run_ftop(refresh_ms, config_path) result(status)
+  integer function run_ftop(refresh_ms, config_path, log_path, log_level) result(status)
     integer, intent(in), optional :: refresh_ms
     character(len=*), intent(in), optional :: config_path
+    character(len=*), intent(in), optional :: log_path
+    integer, intent(in), optional :: log_level
     type(terminal_session) :: session
     type(terminal_read_result) :: input
+    character(len=:), allocatable :: log_error_message
+    integer :: verbosity
 
+    status = 0
     if (present(refresh_ms)) session%refresh_ms = bounded_refresh_ms(refresh_ms)
     if (present(config_path)) then
       if (len_trim(config_path) > 0) session%config_path = trim(config_path)
     end if
 
+    verbosity = LOG_LEVEL_INFO
+    if (present(log_level)) verbosity = log_level
+    if (.not. log_init(log_path, verbosity, log_error_message)) then
+      write(error_unit, '(a)') "ftop: " // log_error_message
+      status = 1
+      return
+    end if
+    call log_info("ftop v" // FTOP_VERSION // " starting")
+
     status = start_terminal_session(session)
     if (status /= 0) then
       call stop_terminal_session(session)
+      call log_info("ftop shutting down")
+      call log_shutdown()
       return
     end if
 
@@ -254,6 +279,8 @@ contains
     end do
 
     call stop_terminal_session(session)
+    call log_info("ftop shutting down")
+    call log_shutdown()
   end function run_ftop
 
   function render_test_frame(width, height, refresh_ms, frame_count, status_text) result(rendered)
@@ -285,7 +312,7 @@ contains
 
     call bind_guard(session%guard)
     if (session%guard%last_error_code /= FGOF_TERMIOS_ERR_NONE) then
-      call print_terminal_error("failed to bind terminal", session%guard%last_error_message)
+      call log_error(terminal_error_message("failed to bind terminal", session%guard%last_error_message))
       status = 1
       return
     end if
@@ -293,13 +320,13 @@ contains
 
     call enter_raw_mode(session%guard)
     if (session%guard%last_error_code /= FGOF_TERMIOS_ERR_NONE) then
-      call print_terminal_error("failed to enter raw mode", session%guard%last_error_message)
+      call log_error(terminal_error_message("failed to enter raw mode", session%guard%last_error_message))
       status = 1
       return
     end if
 
     if (.not. terminal_signal_setup()) then
-      write(error_unit, '(a)') "ftop: failed to install signal handlers"
+      call log_error("failed to install signal handlers")
       status = 1
       return
     end if
@@ -307,8 +334,10 @@ contains
     if (.not. allocated(session%metrics)) allocate(session%metrics)
     if (session%metrics%start(session%refresh_ms)) then
       session%collector_started = .true.
+      call log_info("collector started, interval=" // integer_text(session%refresh_ms) // "ms")
     else
       call set_status(session, "collector unavailable")
+      call log_warn("collector unavailable")
     end if
 
     call write_terminal_output(enter_terminal_control_sequence())
@@ -421,11 +450,14 @@ contains
       call parse_layout_file(path, session%layout, error)
       if (error%failed) then
         call set_status(session, "layout config failed: " // error%message)
+        call log_warn("layout config failed: " // error%message)
       else if (.not. apply_layout_config(session, process_error)) then
         call set_status(session, "layout config failed: " // process_error)
+        call log_warn("layout config failed: " // process_error)
       else
         session%layout_loaded = .true.
         call set_status(session, "layout config " // path)
+        call log_info("loaded layout config: " // path)
       end if
       return
     end if
@@ -437,11 +469,14 @@ contains
       call parse_layout_file(path, session%layout, error)
       if (error%failed) then
         call set_status(session, "layout config failed: " // error%message)
+        call log_warn("layout config failed: " // error%message)
       else if (.not. apply_layout_config(session, process_error)) then
         call set_status(session, "layout config failed: " // process_error)
+        call log_warn("layout config failed: " // process_error)
       else
         session%layout_loaded = .true.
         call set_status(session, "layout custom")
+        call log_info("loaded layout config: " // path)
       end if
       return
     end if
@@ -450,6 +485,7 @@ contains
       call set_status(session, "layout " // trim(session%layout_preset_name))
     else
       call set_status(session, process_error)
+      call log_warn(process_error)
     end if
   end subroutine initialize_layout
 
@@ -487,6 +523,7 @@ contains
     session%layout_loaded = .true.
     session%layout_preset_index = preset_index
     session%layout_preset_name = LAYOUT_PRESET_NAMES(preset_index)
+    call log_info("loaded layout preset: " // trim(session%layout_preset_name))
     loaded = .true.
   end function load_layout_preset
 
@@ -522,6 +559,7 @@ contains
     old_zoomed = session%zoomed
     if (.not. load_layout_preset(session, preset_index, error_message)) then
       call set_status(session, error_message)
+      call log_warn(error_message)
       return
     end if
 
@@ -1983,9 +2021,11 @@ contains
     if (size_info%valid) then
       rows = size_info%rows
       columns = size_info%columns
+      call log_info("terminal size: " // integer_text(columns) // "x" // integer_text(rows))
     else
       rows = DEFAULT_ROWS
       columns = DEFAULT_COLUMNS
+      call log_warn("terminal size unavailable; using " // integer_text(columns) // "x" // integer_text(rows))
     end if
 
     session%current = allocate_screen(columns, rows)
@@ -2110,27 +2150,17 @@ contains
     end if
   end function target_fps
 
-  subroutine log_debug(message)
-    character(len=*), intent(in) :: message
-    integer :: unit
-    integer :: status
-
-    open(newunit=unit, file=DEBUG_LOG_PATH, status="unknown", position="append", action="write", iostat=status)
-    if (status /= 0) return
-    write(unit, '(a)', iostat=status) trim(message)
-    close(unit)
-  end subroutine log_debug
-
-  subroutine print_terminal_error(prefix, message)
+  function terminal_error_message(prefix, message) result(text)
     character(len=*), intent(in) :: prefix
     character(len=*), intent(in) :: message
+    character(len=:), allocatable :: text
 
     if (len_trim(message) > 0) then
-      write(error_unit, '(a)') "ftop: " // trim(prefix) // ": " // trim(message)
+      text = trim(prefix) // ": " // trim(message)
     else
-      write(error_unit, '(a)') "ftop: " // trim(prefix)
+      text = trim(prefix)
     end if
-  end subroutine print_terminal_error
+  end function terminal_error_message
 
   logical function parse_sgr_mouse(bytes, event, message, remaining) result(found)
     character(len=*), intent(in) :: bytes

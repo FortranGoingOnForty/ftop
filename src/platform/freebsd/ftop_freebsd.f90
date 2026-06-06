@@ -30,6 +30,7 @@ module ftop_platform
     platform_backend, &
     process_table, &
     system_uptime_info
+  use ftop_log, only : log_warn
   use ftop_proc_data, only : &
     PROCESS_NAME_LEN, &
     PROCESS_USER_LEN, &
@@ -45,6 +46,8 @@ module ftop_platform
 
   integer, allocatable, save :: user_cache_uids(:)
   character(len=PROCESS_USER_LEN), allocatable, save :: user_cache_names(:)
+  logical, save :: freebsd_kvm_open_warned = .false.
+  logical, save :: freebsd_kvm_getprocs_warned = .false.
 
   type, bind(C), public :: freebsd_process_info
     integer(c_int) :: pid
@@ -516,18 +519,21 @@ contains
     type(freebsd_kvm_handle) :: handle
     type(freebsd_process_info), allocatable :: raw_processes(:)
     type(memory_info) :: memory
+    integer :: error_code
     integer :: process_count
     integer :: process_index
     logical :: ignored
 
     table = process_table()
     allocate(raw_processes(FREEBSD_PROCESS_CAPACITY))
-    if (.not. freebsd_kvm_open(handle)) then
+    if (.not. freebsd_kvm_open(handle, error_code)) then
+      call log_warn_once(freebsd_kvm_open_warned, "kvm_open failed: errno=" // integer_text(error_code))
       allocate(table%items(0))
       return
     end if
 
-    if (.not. freebsd_kvm_getprocs(handle, raw_processes, process_count)) then
+    if (.not. freebsd_kvm_getprocs(handle, raw_processes, process_count, error_code)) then
+      call log_warn_once(freebsd_kvm_getprocs_warned, "kvm_getprocs failed: errno=" // integer_text(error_code))
       ignored = freebsd_kvm_close(handle)
       allocate(table%items(0))
       return
@@ -1056,5 +1062,23 @@ contains
 
     if (present(error_code)) error_code = int(sys_errno)
   end subroutine assign_error
+
+  subroutine log_warn_once(warned, message)
+    logical, intent(inout) :: warned
+    character(len=*), intent(in) :: message
+
+    if (warned) return
+    call log_warn(message)
+    warned = .true.
+  end subroutine log_warn_once
+
+  function integer_text(value) result(text)
+    integer, intent(in) :: value
+    character(len=:), allocatable :: text
+    character(len=32) :: buffer
+
+    write(buffer, '(i0)') value
+    text = trim(buffer)
+  end function integer_text
 
 end module ftop_platform
