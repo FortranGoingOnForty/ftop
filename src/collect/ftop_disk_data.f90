@@ -8,6 +8,7 @@ module ftop_disk_data
   integer, parameter, public :: DISK_MOUNTPOINT_LEN = 128
   integer, parameter, public :: DISK_FSTYPE_LEN = 32
   integer, parameter, public :: DISK_FILESYSTEM_CAPACITY = 128
+  integer, parameter, public :: DISK_IO_CAPACITY = 256
 
   type, bind(C), public :: c_filesystem_info
     integer(c_int) :: valid = 0_c_int

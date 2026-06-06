@@ -21,7 +21,9 @@ module ftop_collector
     DISK_DEVICE_LEN, &
     DISK_FILESYSTEM_CAPACITY, &
     DISK_FSTYPE_LEN, &
+    DISK_IO_CAPACITY, &
     DISK_MOUNTPOINT_LEN, &
+    disk_io_info, &
     disk_table
   use ftop_mem_data, only : metric_memory_info => memory_info
   use ftop_net_data, only : &
@@ -76,6 +78,7 @@ module ftop_collector
   integer, parameter, public :: FTOP_COLLECTOR_MAX_CONNECTIONS = 512
   integer, parameter, public :: FTOP_COLLECTOR_MAX_NETWORK_PROCESSES = 256
   integer, parameter, public :: FTOP_COLLECTOR_MAX_FILESYSTEMS = DISK_FILESYSTEM_CAPACITY
+  integer, parameter, public :: FTOP_COLLECTOR_MAX_DISK_IO = DISK_IO_CAPACITY
 
   type, bind(C) :: collector_shared_state
     integer(c_int) :: stop_requested
@@ -186,6 +189,21 @@ module ftop_collector
     integer(c_long_long) :: disk_filesystem_total_bytes(FTOP_COLLECTOR_MAX_FILESYSTEMS)
     integer(c_long_long) :: disk_filesystem_used_bytes(FTOP_COLLECTOR_MAX_FILESYSTEMS)
     integer(c_long_long) :: disk_filesystem_available_bytes(FTOP_COLLECTOR_MAX_FILESYSTEMS)
+    integer(c_int) :: disk_io_count
+    integer(c_int) :: disk_io_valid(FTOP_COLLECTOR_MAX_DISK_IO)
+    character(kind=c_char) :: disk_io_device(DISK_DEVICE_LEN, FTOP_COLLECTOR_MAX_DISK_IO)
+    integer(c_long_long) :: disk_io_read_bytes(FTOP_COLLECTOR_MAX_DISK_IO)
+    integer(c_long_long) :: disk_io_write_bytes(FTOP_COLLECTOR_MAX_DISK_IO)
+    integer(c_long_long) :: disk_io_read_ops(FTOP_COLLECTOR_MAX_DISK_IO)
+    integer(c_long_long) :: disk_io_write_ops(FTOP_COLLECTOR_MAX_DISK_IO)
+    integer(c_long_long) :: disk_io_reads_merged(FTOP_COLLECTOR_MAX_DISK_IO)
+    integer(c_long_long) :: disk_io_writes_merged(FTOP_COLLECTOR_MAX_DISK_IO)
+    integer(c_long_long) :: disk_io_read_time_ms(FTOP_COLLECTOR_MAX_DISK_IO)
+    integer(c_long_long) :: disk_io_write_time_ms(FTOP_COLLECTOR_MAX_DISK_IO)
+    integer(c_long_long) :: disk_io_ios_in_progress(FTOP_COLLECTOR_MAX_DISK_IO)
+    integer(c_long_long) :: disk_io_io_time_ms(FTOP_COLLECTOR_MAX_DISK_IO)
+    integer(c_long_long) :: disk_io_weighted_io_time_ms(FTOP_COLLECTOR_MAX_DISK_IO)
+    integer(c_long_long) :: disk_io_sector_size_bytes(FTOP_COLLECTOR_MAX_DISK_IO)
     integer(c_int) :: history_start
     integer(c_int) :: history_count
     real(c_double) :: cpu_usage_history(FTOP_COLLECTOR_HISTORY_CAPACITY)
@@ -1026,12 +1044,17 @@ contains
     integer :: allocation_status
     integer :: filesystem_count
     integer :: filesystem_index
+    integer :: io_count
+    integer :: io_index
     logical :: string_valid
 
     success = .false.
     filesystem_count = bounded_filesystem_count(int(state%disk_filesystem_count))
+    io_count = bounded_disk_io_count(int(state%disk_io_count))
     snapshot%disk%valid = state%disk_table_valid /= 0_c_int
     allocate(snapshot%disk%filesystems(filesystem_count), stat=allocation_status)
+    if (allocation_status /= 0) return
+    allocate(snapshot%disk%io(io_count), stat=allocation_status)
     if (allocation_status /= 0) return
 
     do filesystem_index = 1, filesystem_count
@@ -1051,6 +1074,25 @@ contains
         int(state%disk_filesystem_used_bytes(filesystem_index), int64)
       snapshot%disk%filesystems(filesystem_index)%available_bytes = &
         int(state%disk_filesystem_available_bytes(filesystem_index), int64)
+    end do
+
+    do io_index = 1, io_count
+      snapshot%disk%io(io_index)%valid = state%disk_io_valid(io_index) /= 0_c_int
+      call copy_c_chars_to_fortran(state%disk_io_device(:, io_index), &
+                                   state%disk_io_valid(io_index), &
+                                   snapshot%disk%io(io_index)%device, string_valid)
+      snapshot%disk%io(io_index)%read_bytes = int(state%disk_io_read_bytes(io_index), int64)
+      snapshot%disk%io(io_index)%write_bytes = int(state%disk_io_write_bytes(io_index), int64)
+      snapshot%disk%io(io_index)%read_ops = int(state%disk_io_read_ops(io_index), int64)
+      snapshot%disk%io(io_index)%write_ops = int(state%disk_io_write_ops(io_index), int64)
+      snapshot%disk%io(io_index)%reads_merged = int(state%disk_io_reads_merged(io_index), int64)
+      snapshot%disk%io(io_index)%writes_merged = int(state%disk_io_writes_merged(io_index), int64)
+      snapshot%disk%io(io_index)%read_time_ms = int(state%disk_io_read_time_ms(io_index), int64)
+      snapshot%disk%io(io_index)%write_time_ms = int(state%disk_io_write_time_ms(io_index), int64)
+      snapshot%disk%io(io_index)%ios_in_progress = int(state%disk_io_ios_in_progress(io_index), int64)
+      snapshot%disk%io(io_index)%io_time_ms = int(state%disk_io_io_time_ms(io_index), int64)
+      snapshot%disk%io(io_index)%weighted_io_time_ms = int(state%disk_io_weighted_io_time_ms(io_index), int64)
+      snapshot%disk%io(io_index)%sector_size_bytes = int(state%disk_io_sector_size_bytes(io_index), int64)
     end do
 
     success = .true.
@@ -1131,6 +1173,12 @@ contains
 
     bounded = max(0, min(FTOP_COLLECTOR_MAX_FILESYSTEMS, filesystem_count))
   end function bounded_filesystem_count
+
+  integer function bounded_disk_io_count(io_count) result(bounded)
+    integer, intent(in) :: io_count
+
+    bounded = max(0, min(FTOP_COLLECTOR_MAX_DISK_IO, io_count))
+  end function bounded_disk_io_count
 
   integer function bounded_process_history_count(history_count) result(bounded)
     integer, intent(in) :: history_count
@@ -1504,6 +1552,8 @@ contains
     type(disk_table), intent(in) :: disk
     integer :: filesystem_count
     integer :: filesystem_index
+    integer :: io_count
+    integer :: io_index
     integer(c_int) :: string_valid
 
     state%disk_table_valid = merge(1_c_int, 0_c_int, disk%valid)
@@ -1515,31 +1565,78 @@ contains
     state%disk_filesystem_total_bytes = 0_c_long_long
     state%disk_filesystem_used_bytes = 0_c_long_long
     state%disk_filesystem_available_bytes = 0_c_long_long
-    if (.not. disk%valid .or. .not. allocated(disk%filesystems)) return
+    state%disk_io_count = 0_c_int
+    state%disk_io_valid = 0_c_int
+    state%disk_io_device = c_null_char
+    state%disk_io_read_bytes = 0_c_long_long
+    state%disk_io_write_bytes = 0_c_long_long
+    state%disk_io_read_ops = 0_c_long_long
+    state%disk_io_write_ops = 0_c_long_long
+    state%disk_io_reads_merged = 0_c_long_long
+    state%disk_io_writes_merged = 0_c_long_long
+    state%disk_io_read_time_ms = 0_c_long_long
+    state%disk_io_write_time_ms = 0_c_long_long
+    state%disk_io_ios_in_progress = 0_c_long_long
+    state%disk_io_io_time_ms = 0_c_long_long
+    state%disk_io_weighted_io_time_ms = 0_c_long_long
+    state%disk_io_sector_size_bytes = 0_c_long_long
+    if (.not. disk%valid) return
 
-    filesystem_count = bounded_filesystem_count(size(disk%filesystems))
-    state%disk_filesystem_count = int(filesystem_count, c_int)
-    do filesystem_index = 1, filesystem_count
-      state%disk_filesystem_valid(filesystem_index) = merge(1_c_int, 0_c_int, disk%filesystems(filesystem_index)%valid)
-      call copy_fortran_string_to_c_chars(disk%filesystems(filesystem_index)%device, &
-                                          len_trim(disk%filesystems(filesystem_index)%device) > 0, &
-                                          state%disk_filesystem_device(:, filesystem_index), string_valid)
-      call copy_fortran_string_to_c_chars(disk%filesystems(filesystem_index)%mountpoint, &
-                                          len_trim(disk%filesystems(filesystem_index)%mountpoint) > 0, &
-                                          state%disk_filesystem_mountpoint(:, filesystem_index), string_valid)
-      call copy_fortran_string_to_c_chars(disk%filesystems(filesystem_index)%fstype, &
-                                          len_trim(disk%filesystems(filesystem_index)%fstype) > 0, &
-                                          state%disk_filesystem_fstype(:, filesystem_index), string_valid)
-      state%disk_filesystem_total_bytes(filesystem_index) = &
-        int(max(0_int64, disk%filesystems(filesystem_index)%total_bytes), c_long_long)
-      state%disk_filesystem_used_bytes(filesystem_index) = &
-        int(clamp_memory_value(disk%filesystems(filesystem_index)%used_bytes, &
-                               disk%filesystems(filesystem_index)%total_bytes), c_long_long)
-      state%disk_filesystem_available_bytes(filesystem_index) = &
-        int(clamp_memory_value(disk%filesystems(filesystem_index)%available_bytes, &
-                               disk%filesystems(filesystem_index)%total_bytes), c_long_long)
-    end do
+    if (allocated(disk%filesystems)) then
+      filesystem_count = bounded_filesystem_count(size(disk%filesystems))
+      state%disk_filesystem_count = int(filesystem_count, c_int)
+      do filesystem_index = 1, filesystem_count
+        state%disk_filesystem_valid(filesystem_index) = merge(1_c_int, 0_c_int, disk%filesystems(filesystem_index)%valid)
+        call copy_fortran_string_to_c_chars(disk%filesystems(filesystem_index)%device, &
+                                            len_trim(disk%filesystems(filesystem_index)%device) > 0, &
+                                            state%disk_filesystem_device(:, filesystem_index), string_valid)
+        call copy_fortran_string_to_c_chars(disk%filesystems(filesystem_index)%mountpoint, &
+                                            len_trim(disk%filesystems(filesystem_index)%mountpoint) > 0, &
+                                            state%disk_filesystem_mountpoint(:, filesystem_index), string_valid)
+        call copy_fortran_string_to_c_chars(disk%filesystems(filesystem_index)%fstype, &
+                                            len_trim(disk%filesystems(filesystem_index)%fstype) > 0, &
+                                            state%disk_filesystem_fstype(:, filesystem_index), string_valid)
+        state%disk_filesystem_total_bytes(filesystem_index) = &
+          int(max(0_int64, disk%filesystems(filesystem_index)%total_bytes), c_long_long)
+        state%disk_filesystem_used_bytes(filesystem_index) = &
+          int(clamp_memory_value(disk%filesystems(filesystem_index)%used_bytes, &
+                                 disk%filesystems(filesystem_index)%total_bytes), c_long_long)
+        state%disk_filesystem_available_bytes(filesystem_index) = &
+          int(clamp_memory_value(disk%filesystems(filesystem_index)%available_bytes, &
+                                 disk%filesystems(filesystem_index)%total_bytes), c_long_long)
+      end do
+    end if
+
+    if (allocated(disk%io)) then
+      io_count = bounded_disk_io_count(size(disk%io))
+      state%disk_io_count = int(io_count, c_int)
+      do io_index = 1, io_count
+        call publish_disk_io(state, io_index, disk%io(io_index))
+      end do
+    end if
   end subroutine publish_disk
+
+  subroutine publish_disk_io(state, io_index, io)
+    type(collector_shared_state), intent(inout) :: state
+    integer, intent(in) :: io_index
+    type(disk_io_info), intent(in) :: io
+    integer(c_int) :: string_valid
+
+    state%disk_io_valid(io_index) = merge(1_c_int, 0_c_int, io%valid)
+    call copy_fortran_string_to_c_chars(io%device, len_trim(io%device) > 0, state%disk_io_device(:, io_index), string_valid)
+    state%disk_io_read_bytes(io_index) = int(max(0_int64, io%read_bytes), c_long_long)
+    state%disk_io_write_bytes(io_index) = int(max(0_int64, io%write_bytes), c_long_long)
+    state%disk_io_read_ops(io_index) = int(max(0_int64, io%read_ops), c_long_long)
+    state%disk_io_write_ops(io_index) = int(max(0_int64, io%write_ops), c_long_long)
+    state%disk_io_reads_merged(io_index) = int(max(0_int64, io%reads_merged), c_long_long)
+    state%disk_io_writes_merged(io_index) = int(max(0_int64, io%writes_merged), c_long_long)
+    state%disk_io_read_time_ms(io_index) = int(max(0_int64, io%read_time_ms), c_long_long)
+    state%disk_io_write_time_ms(io_index) = int(max(0_int64, io%write_time_ms), c_long_long)
+    state%disk_io_ios_in_progress(io_index) = int(max(0_int64, io%ios_in_progress), c_long_long)
+    state%disk_io_io_time_ms(io_index) = int(max(0_int64, io%io_time_ms), c_long_long)
+    state%disk_io_weighted_io_time_ms(io_index) = int(max(0_int64, io%weighted_io_time_ms), c_long_long)
+    state%disk_io_sector_size_bytes(io_index) = int(max(0_int64, io%sector_size_bytes), c_long_long)
+  end subroutine publish_disk_io
 
   subroutine copy_process_history_to_state(state, process_index, process)
     type(collector_shared_state), intent(inout) :: state

@@ -102,6 +102,7 @@ contains
     call require(all(snapshot%processes%items%history_count <= FTOP_COLLECTOR_HISTORY_CAPACITY), &
                  "collector process history counts must stay capped")
     call validate_network_snapshot(snapshot)
+    call validate_disk_snapshot(snapshot)
 
     call require(metrics%stop(), "collector stop failed")
     call require(.not. metrics%running(), "collector must stop running")
@@ -278,6 +279,24 @@ contains
                    "network process tx rate must not be negative")
     end do
   end subroutine validate_network_snapshot
+
+  subroutine validate_disk_snapshot(snapshot)
+    type(collector_snapshot), intent(in) :: snapshot
+    integer :: io_index
+
+    call require(snapshot%disk%valid, "collector disk table must be valid")
+    call require(allocated(snapshot%disk%filesystems), "collector disk filesystems must be allocated")
+    call require(allocated(snapshot%disk%io), "collector disk IO must be allocated")
+    do io_index = 1, size(snapshot%disk%io)
+      if (.not. snapshot%disk%io(io_index)%valid) cycle
+      call require(len_trim(snapshot%disk%io(io_index)%device) > 0, "collector disk IO device must not be empty")
+      call require(snapshot%disk%io(io_index)%read_bytes >= 0, "collector disk IO read bytes must not be negative")
+      call require(snapshot%disk%io(io_index)%write_bytes >= 0, "collector disk IO write bytes must not be negative")
+      call require(snapshot%disk%io(io_index)%read_ops >= 0, "collector disk IO read ops must not be negative")
+      call require(snapshot%disk%io(io_index)%write_ops >= 0, "collector disk IO write ops must not be negative")
+      call require(snapshot%disk%io(io_index)%sector_size_bytes > 0, "collector disk IO sector size must be positive")
+    end do
+  end subroutine validate_disk_snapshot
 
   function wait_for_later_snapshot(metrics, previous_sample_count) result(snapshot)
     type(collector), intent(in) :: metrics

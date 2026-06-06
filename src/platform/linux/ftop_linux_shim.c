@@ -169,6 +169,10 @@ int ftop_linux_read_proc_net_dev(char *buffer, size_t buffer_len, size_t *value_
   return ftop_read_file_into_buffer("/proc/net/dev", buffer, buffer_len, value_len, sys_errno);
 }
 
+int ftop_linux_read_proc_diskstats(char *buffer, size_t buffer_len, size_t *value_len, int *sys_errno) {
+  return ftop_read_file_into_buffer("/proc/diskstats", buffer, buffer_len, value_len, sys_errno);
+}
+
 int ftop_linux_read_proc_net_tcp(char *buffer, size_t buffer_len, size_t *value_len, int *sys_errno) {
   return ftop_read_file_into_buffer("/proc/net/tcp", buffer, buffer_len, value_len, sys_errno);
 }

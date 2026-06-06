@@ -2,7 +2,8 @@ module ftop_platform
   use, intrinsic :: iso_c_binding, only : c_char, c_double, c_int, c_long_long, c_null_char, c_size_t
   use, intrinsic :: iso_fortran_env, only : int64, real64
   use ftop_cpu_data, only : cpu_core_info, cpu_state_ticks, cpu_state_total_ticks
-  use ftop_disk_data, only : DISK_FILESYSTEM_CAPACITY, c_filesystem_info, disk_table, disk_table_from_c
+  use ftop_disk_data, only : DISK_FILESYSTEM_CAPACITY, c_filesystem_info, disk_io_info, disk_table, disk_table_from_c
+  use ftop_linux_diskstats, only : linux_diskstats_filter_whole_devices, linux_diskstats_parse
   use ftop_linux_loadavg, only : linux_loadavg_parse
   use ftop_linux_meminfo, only : linux_meminfo_parse
   use ftop_linux_proc_stat, only : linux_proc_stat_parse
@@ -40,6 +41,7 @@ module ftop_platform
   integer, parameter :: LINUX_PROC_UPTIME_BUFFER_LEN = 128
   integer, parameter :: LINUX_PROC_NET_DEV_BUFFER_LEN = 262144
   integer, parameter :: LINUX_PROC_NET_CONNECTION_BUFFER_LEN = 1048576
+  integer, parameter :: LINUX_PROC_DISKSTATS_BUFFER_LEN = 1048576
   integer, parameter :: LINUX_NET_IFACE_FIELD_BUFFER_LEN = 128
   integer, parameter :: LINUX_SOCKET_OWNER_CAPACITY = 16384
   integer, parameter :: LINUX_SOCKET_TRAFFIC_CAPACITY = 16384
@@ -184,6 +186,15 @@ module ftop_platform
       integer(c_size_t), intent(out) :: value_len
       integer(c_int), intent(out) :: sys_errno
     end function c_ftop_linux_read_proc_net_dev
+
+    integer(c_int) function c_ftop_linux_read_proc_diskstats(buffer, buffer_capacity, value_len, sys_errno) &
+        bind(C, name="ftop_linux_read_proc_diskstats")
+      import :: c_char, c_int, c_size_t
+      character(kind=c_char), intent(out) :: buffer(*)
+      integer(c_size_t), value :: buffer_capacity
+      integer(c_size_t), intent(out) :: value_len
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_linux_read_proc_diskstats
 
     integer(c_int) function c_ftop_linux_read_proc_net_tcp(buffer, buffer_capacity, value_len, sys_errno) &
         bind(C, name="ftop_linux_read_proc_net_tcp")
@@ -534,6 +545,7 @@ contains
   logical function linux_disk_snapshot(table, error_code) result(success)
     type(disk_table), intent(out) :: table
     integer, intent(out), optional :: error_code
+    type(disk_io_info), allocatable :: io_devices(:)
     type(c_filesystem_info) :: filesystems(DISK_FILESYSTEM_CAPACITY)
     integer(c_int) :: filesystem_count
     integer(c_int) :: sys_errno
@@ -545,10 +557,35 @@ contains
     success = rc == 0_c_int
     if (success) then
       table = disk_table_from_c(filesystems, int(filesystem_count))
+      if (linux_disk_io_snapshot(io_devices)) call move_alloc(io_devices, table%io)
     else
       if (present(error_code)) error_code = int(sys_errno)
     end if
   end function linux_disk_snapshot
+
+  logical function linux_disk_io_snapshot(devices, error_code) result(success)
+    type(disk_io_info), allocatable, intent(out) :: devices(:)
+    integer, intent(out), optional :: error_code
+    character(kind=c_char), allocatable :: c_buffer(:)
+    character(len=:), allocatable :: buffer
+    type(disk_io_info), allocatable :: parsed(:)
+    integer(c_size_t) :: value_len
+    integer(c_int) :: sys_errno
+    integer(c_int) :: rc
+
+    allocate(devices(0))
+    allocate(c_buffer(LINUX_PROC_DISKSTATS_BUFFER_LEN))
+    rc = c_ftop_linux_read_proc_diskstats(c_buffer, int(size(c_buffer), c_size_t), value_len, sys_errno)
+    success = rc == 0_c_int
+    if (.not. success) then
+      if (present(error_code)) error_code = int(sys_errno)
+      return
+    end if
+
+    call c_chars_to_string(c_buffer, int(value_len), buffer)
+    success = linux_diskstats_parse(buffer, parsed)
+    if (success) call linux_diskstats_filter_whole_devices(parsed, devices)
+  end function linux_disk_io_snapshot
 
   logical function linux_network_snapshot(table, error_code) result(success)
     type(network_table), intent(out) :: table
