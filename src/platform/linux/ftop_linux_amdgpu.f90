@@ -150,15 +150,17 @@ contains
     logical :: have_name
 
     have_name = read_sysfs_text(path_join(device_path, "product_name"), name)
-    if (have_name .and. len_trim(name) > 0) then
-      call assign_bounded(name, gpu%name)
-    else
+    if (have_name) then
+      if (len_trim(name) > 0) call assign_bounded(name, gpu%name)
+    end if
+    if (len_trim(gpu%name) <= 0) then
       have_device_id = read_sysfs_text(path_join(device_path, "device"), device_id)
-      if (have_device_id .and. len_trim(device_id) > 0) then
-        call assign_bounded("AMD " // trim(device_id), gpu%name)
-      else
-        gpu%name = "AMD GPU"
+      if (have_device_id) then
+        if (len_trim(device_id) > 0) call assign_bounded("AMD " // trim(first_line(device_id)), gpu%name)
       end if
+    end if
+    if (len_trim(gpu%name) <= 0) then
+      gpu%name = "AMD GPU"
     end if
 
     if (read_sysfs_text(path_join(device_path, "uevent"), uevent)) then
@@ -265,9 +267,11 @@ contains
     end if
     have_pwm = read_int64_sysfs(path_join(sensor_path, "pwm1"), pwm)
     have_pwm_max = read_int64_sysfs(path_join(sensor_path, "pwm1_max"), pwm_max)
-    if (have_pwm .and. have_pwm_max .and. pwm_max > 0_int64) then
-      gpu%fan_valid = .true.
-      gpu%fan_speed_percent = 100.0_real64 * real(max(0_int64, pwm), real64) / real(pwm_max, real64)
+    if (have_pwm .and. have_pwm_max) then
+      if (pwm_max > 0_int64) then
+        gpu%fan_valid = .true.
+        gpu%fan_speed_percent = 100.0_real64 * real(max(0_int64, pwm), real64) / real(pwm_max, real64)
+      end if
     end if
   end subroutine read_amdgpu_hwmon_metrics
 
