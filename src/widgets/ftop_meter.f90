@@ -25,6 +25,7 @@ module ftop_meter
   end type meter_widget
 
   public :: meter_fill_count
+  public :: meter_empty_cell_style
   public :: meter_label_cell_style
   public :: meter_shade_glyph
   public :: render_meter
@@ -44,6 +45,7 @@ contains
     type(screen_style), intent(in), optional :: empty_style
     type(screen_style), intent(in), optional :: label_style
     type(screen_style) :: active_empty_style
+    type(screen_style) :: active_empty_cell_style
     type(screen_style) :: active_fill_style
     type(screen_style) :: active_label_style
     character(len=:), allocatable :: glyph
@@ -74,6 +76,7 @@ contains
     if (present(empty_style)) active_empty_style = empty_style
     if (present(label_style)) active_label_style = label_style
     if (present(gradient)) active_fill_style = style_with_gradient(active_fill_style, gradient, clamped_value)
+    active_empty_cell_style = meter_empty_cell_style(active_empty_style)
 
     bar_col = rect%col
     bar_width = rect%width
@@ -95,19 +98,19 @@ contains
         if (cell_fraction > 0.0) then
           call put_glyph(buffer, rect%row, target_col, glyph, active_fill_style)
         else
-          call put_glyph(buffer, rect%row, target_col, glyph, active_empty_style)
+          call put_glyph(buffer, rect%row, target_col, glyph, active_empty_cell_style)
         end if
       case default
         if (i <= fill_count) then
           call put_glyph(buffer, rect%row, target_col, "█", active_fill_style)
         else
-          call put_glyph(buffer, rect%row, target_col, "░", active_empty_style)
+          call put_glyph(buffer, rect%row, target_col, "░", active_empty_cell_style)
         end if
       end select
     end do
 
     if (present(label)) then
-      call render_meter_label(buffer, rect, label, active_label_style, active_fill_style, active_empty_style, &
+      call render_meter_label(buffer, rect, label, active_label_style, active_fill_style, active_empty_cell_style, &
                               actual_fill_mode, clamped_value, bar_col, bar_width)
     end if
   end subroutine render_meter
@@ -193,6 +196,23 @@ contains
     if (has_background) call apply_contrast_foreground(style)
   end function meter_label_cell_style
 
+  function meter_empty_cell_style(empty_style) result(style)
+    type(screen_style), intent(in) :: empty_style
+    type(screen_style) :: style
+
+    style = empty_style
+    if (style%bg_truecolor .or. style%bg >= 0) return
+
+    if (style%fg_truecolor) then
+      style%bg_truecolor = .true.
+      style%bg_rgb = muted_rgb(style%fg_rgb)
+      style%bg = -1
+    else if (style%fg >= 0) then
+      style%bg = style%fg
+      style%bg_truecolor = .false.
+    end if
+  end function meter_empty_cell_style
+
   logical function apply_bar_background(style, bar_style, muted) result(applied)
     type(screen_style), intent(inout) :: style
     type(screen_style), intent(in) :: bar_style
@@ -228,7 +248,7 @@ contains
     integer :: channel
 
     do channel = 1, 3
-      muted(channel) = max(0, min(255, nint(real(color(channel)) * 0.25)))
+      muted(channel) = max(0, min(255, nint(real(color(channel)) * 0.20)))
     end do
   end function muted_rgb
 

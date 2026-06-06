@@ -13,7 +13,7 @@ module ftop_memory
     style_from_rgb
   use ftop_graph, only : render_graph
   use ftop_mem_data, only : memory_info, memory_usage_percent
-  use ftop_meter, only : METER_FILL_SHADED, meter_label_cell_style, render_meter
+  use ftop_meter, only : METER_FILL_SHADED, meter_empty_cell_style, meter_label_cell_style, render_meter
   use ftop_text, only : &
     TEXT_ALIGN_CENTER, &
     format_bytes, &
@@ -84,6 +84,8 @@ contains
     integer(int64) :: buffer_bytes
     integer(int64) :: used_bytes
     integer :: col
+    logical :: free_position
+    type(screen_style) :: segment_style
     real(real64) :: position
 
     if (rect%width <= 0 .or. rect%height <= 0) return
@@ -99,8 +101,13 @@ contains
 
     do col = 1, rect%width
       position = real(info%total_bytes, real64) * (real(col, real64) - 0.5_real64) / real(rect%width, real64)
-      call put_glyph(buffer, rect%row, rect%col + col - 1, "█", &
-                     memory_segment_style(position, used_bytes, buffer_bytes, cached_bytes))
+      segment_style = memory_segment_style(position, used_bytes, buffer_bytes, cached_bytes)
+      free_position = memory_position_is_free(position, used_bytes, buffer_bytes, cached_bytes)
+      if (free_position) then
+        call put_glyph(buffer, rect%row, rect%col + col - 1, "░", meter_empty_cell_style(segment_style))
+      else
+        call put_glyph(buffer, rect%row, rect%col + col - 1, "█", segment_style)
+      end if
     end do
     call render_memory_bar_label(buffer, rect, format_percent(real(memory_usage_percent(info))), label_style, &
                                  info%total_bytes, used_bytes, buffer_bytes, cached_bytes)
@@ -124,6 +131,7 @@ contains
     integer :: label_width
     integer :: segment_col
     integer :: target_col
+    logical :: free_position
     real(real64) :: position
 
     if (rect%width <= 0 .or. total_bytes <= 0_int64) return
@@ -143,10 +151,10 @@ contains
         segment_col = target_col - rect%col + 1
         position = real(total_bytes, real64) * (real(segment_col, real64) - 0.5_real64) / real(rect%width, real64)
         segment_style = memory_segment_style(position, used_bytes, buffer_bytes, cached_bytes)
+        free_position = memory_position_is_free(position, used_bytes, buffer_bytes, cached_bytes)
+        if (free_position) segment_style = meter_empty_cell_style(segment_style)
         call put_glyph(buffer, rect%row, target_col, clipped(i:i + glyph_bytes - 1), &
-                       meter_label_cell_style(label_style, segment_style, &
-                                              muted_background=memory_position_is_free(position, used_bytes, &
-                                                                                      buffer_bytes, cached_bytes)))
+                       meter_label_cell_style(label_style, segment_style))
       end if
       i = i + glyph_bytes
       glyph_index = glyph_index + 1

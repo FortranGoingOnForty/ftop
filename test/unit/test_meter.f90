@@ -109,10 +109,12 @@ contains
                  "filled label background should use fill color")
     call require(all(buffer%cells(1, 4)%style%fg_rgb == [0, 0, 0]), &
                  "bright filled label background should use dark text")
-    call require(all(buffer%cells(1, 6)%style%bg_rgb == [25, 30, 35]), &
+    call require(all(buffer%cells(1, 6)%style%bg_rgb == [20, 24, 28]), &
                  "empty label background should use muted empty color")
     call require(all(buffer%cells(1, 6)%style%fg_rgb == [255, 255, 255]), &
                  "muted empty label background should use light text")
+    call require(all(buffer%cells(1, 8)%style%bg_rgb == [20, 24, 28]), &
+                 "empty meter background should match empty label background")
     call require(buffer%cells(1, 4)%style%bg_truecolor, "filled label background should be truecolor")
     call require(buffer%cells(1, 6)%style%bg_truecolor, "empty label background should be truecolor")
     call require(buffer%cells(1, 4)%style%underline, "embedded label should preserve label style")

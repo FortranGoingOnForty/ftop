@@ -33,10 +33,13 @@ contains
                  "memory used label background should use used segment color")
     call require(all(buffer%cells(3, 14)%style%fg_rgb == [255, 255, 255]), &
                  "memory used label background should use light text")
-    call require(all(buffer%cells(3, 18)%style%bg_rgb == [38, 39, 45]), &
+    call require(all(buffer%cells(3, 18)%style%bg_rgb == [30, 31, 36]), &
                  "memory free label background should use muted free segment color")
     call require(all(buffer%cells(3, 18)%style%fg_rgb == [255, 255, 255]), &
                  "memory free label background should use light text")
+    call require_glyph(buffer, 3, 24, "░", "memory free segment should use empty glyph")
+    call require(all(buffer%cells(3, 24)%style%bg_rgb == [30, 31, 36]), &
+                 "memory free segment background should match free label background")
     call require(buffer%cells(3, 14)%style%bg_truecolor, "memory used label background should be truecolor")
     call require(buffer%cells(3, 18)%style%bg_truecolor, "memory free label background should be truecolor")
   end subroutine test_memory_label_backgrounds
