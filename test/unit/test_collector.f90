@@ -1,7 +1,7 @@
 program test_collector
   use, intrinsic :: iso_c_binding, only : c_int
   use, intrinsic :: iso_fortran_env, only : real64
-  use ftop_collector, only : FTOP_COLLECTOR_HISTORY_CAPACITY, collector, collector_snapshot
+  use ftop_collector, only : FTOP_COLLECTOR_HISTORY_CAPACITY, FTOP_COLLECTOR_MAX_GPUS, collector, collector_snapshot
   implicit none
 
   interface
@@ -103,6 +103,7 @@ contains
                  "collector process history counts must stay capped")
     call validate_network_snapshot(snapshot)
     call validate_disk_snapshot(snapshot)
+    call validate_gpu_snapshot(snapshot)
 
     call require(metrics%stop(), "collector stop failed")
     call require(.not. metrics%running(), "collector must stop running")
@@ -331,6 +332,31 @@ contains
       end if
     end do
   end subroutine validate_disk_snapshot
+
+  subroutine validate_gpu_snapshot(snapshot)
+    type(collector_snapshot), intent(in) :: snapshot
+    integer :: gpu_index
+
+    call require(snapshot%gpu%valid, "collector GPU table must be valid")
+    call require(allocated(snapshot%gpu%gpus), "collector GPU table must allocate rows")
+    call require(size(snapshot%gpu%gpus) <= FTOP_COLLECTOR_MAX_GPUS, "collector GPU row count must stay capped")
+    do gpu_index = 1, size(snapshot%gpu%gpus)
+      if (.not. snapshot%gpu%gpus(gpu_index)%valid) cycle
+      call require(len_trim(snapshot%gpu%gpus(gpu_index)%name) > 0, "collector GPU name must not be empty")
+      if (snapshot%gpu%gpus(gpu_index)%utilization_valid) then
+        call require(snapshot%gpu%gpus(gpu_index)%utilization_percent >= 0.0_real64, &
+                     "collector GPU utilization must not be negative")
+        call require(snapshot%gpu%gpus(gpu_index)%utilization_percent <= 100.0_real64, &
+                     "collector GPU utilization must not exceed 100")
+      end if
+      if (snapshot%gpu%gpus(gpu_index)%memory_valid) then
+        call require(snapshot%gpu%gpus(gpu_index)%memory_used_bytes >= 0, "collector GPU memory used must not be negative")
+        call require(snapshot%gpu%gpus(gpu_index)%memory_total_bytes >= 0, "collector GPU memory total must not be negative")
+        call require(snapshot%gpu%gpus(gpu_index)%memory_used_bytes <= snapshot%gpu%gpus(gpu_index)%memory_total_bytes, &
+                     "collector GPU memory used must not exceed total")
+      end if
+    end do
+  end subroutine validate_gpu_snapshot
 
   function wait_for_later_snapshot(metrics, previous_sample_count) result(snapshot)
     type(collector), intent(in) :: metrics

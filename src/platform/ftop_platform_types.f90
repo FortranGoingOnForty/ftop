@@ -2,6 +2,7 @@ module ftop_platform_types
   use, intrinsic :: iso_fortran_env, only : int64, real64
   use ftop_cpu_data, only : CPU_MODEL_NAME_LEN, cpu_core_info, cpu_state_ticks
   use ftop_disk_data, only : disk_table
+  use ftop_gpu_data, only : gpu_table
   use ftop_net_data, only : network_table
   use ftop_proc_data, only : process_table
   implicit none
@@ -11,6 +12,7 @@ module ftop_platform_types
   public :: cpu_topology_info
   public :: cpu_usage_percent
   public :: disk_table
+  public :: gpu_table
   public :: load_average_info
   public :: memory_info
   public :: network_table
@@ -67,6 +69,7 @@ module ftop_platform_types
     procedure(get_process_table_interface), deferred :: get_process_table
     procedure(get_network_table_interface), deferred :: get_network_table
     procedure(get_disk_table_interface), deferred :: get_disk_table
+    procedure(get_gpu_table_interface), deferred :: get_gpu_table
   end type platform_backend
 
   abstract interface
@@ -135,6 +138,12 @@ module ftop_platform_types
       class(platform_backend), intent(in) :: self
       type(disk_table) :: table
     end function get_disk_table_interface
+
+    function get_gpu_table_interface(self) result(table)
+      import :: gpu_table, platform_backend
+      class(platform_backend), intent(in) :: self
+      type(gpu_table) :: table
+    end function get_gpu_table_interface
   end interface
 
 contains

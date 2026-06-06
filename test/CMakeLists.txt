@@ -31,6 +31,11 @@ target_link_libraries(ftop_net_data_test PRIVATE ftop_core)
 
 add_test(NAME ftop_net_data COMMAND ftop_net_data_test)
 
+add_executable(ftop_gpu_data_test unit/test_gpu_data.f90)
+target_link_libraries(ftop_gpu_data_test PRIVATE ftop_core)
+
+add_test(NAME ftop_gpu_data COMMAND ftop_gpu_data_test)
+
 add_executable(ftop_proc_data_test unit/test_proc_data.f90)
 target_link_libraries(ftop_proc_data_test PRIVATE ftop_core)
 

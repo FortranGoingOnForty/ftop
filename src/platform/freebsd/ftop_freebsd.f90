@@ -13,6 +13,7 @@ module ftop_platform
   use, intrinsic :: iso_fortran_env, only : int64, real64
   use ftop_cpu_data, only : cpu_core_info, cpu_state_ticks, cpu_state_total_ticks
   use ftop_disk_data, only : DISK_FILESYSTEM_CAPACITY, c_filesystem_info, disk_table, disk_table_from_c
+  use ftop_gpu_data, only : empty_gpu_table, gpu_table
   use ftop_net_data, only : &
     NET_ADDRESS_LEN, &
     NET_INTERFACE_NAME_LEN, &
@@ -131,6 +132,7 @@ module ftop_platform
     procedure :: get_process_table => freebsd_get_process_table
     procedure :: get_network_table => freebsd_get_network_table
     procedure :: get_disk_table => freebsd_get_disk_table
+    procedure :: get_gpu_table => freebsd_get_gpu_table
   end type freebsd_backend
 
   public :: create_platform
@@ -583,6 +585,16 @@ contains
 
     if (.not. freebsd_disk_snapshot(table)) table = disk_table()
   end function freebsd_get_disk_table
+
+  function freebsd_get_gpu_table(self) result(table)
+    class(freebsd_backend), intent(in) :: self
+    type(gpu_table) :: table
+
+    associate(unused => self)
+    end associate
+
+    table = empty_gpu_table()
+  end function freebsd_get_gpu_table
 
   logical function freebsd_disk_snapshot(table, error_code) result(success)
     type(disk_table), intent(out) :: table

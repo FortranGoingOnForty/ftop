@@ -28,6 +28,14 @@ module ftop_collector
     disk_io_rate_info, &
     disk_latency_info, &
     disk_table
+  use ftop_gpu_data, only : &
+    GPU_CAPACITY, &
+    GPU_DRIVER_VERSION_LEN, &
+    GPU_NAME_LEN, &
+    GPU_PCI_ID_LEN, &
+    GPU_VENDOR_LEN, &
+    gpu_info, &
+    gpu_table
   use ftop_mem_data, only : metric_memory_info => memory_info
   use ftop_net_data, only : &
     NET_ADDRESS_LEN, &
@@ -82,6 +90,7 @@ module ftop_collector
   integer, parameter, public :: FTOP_COLLECTOR_MAX_NETWORK_PROCESSES = 256
   integer, parameter, public :: FTOP_COLLECTOR_MAX_FILESYSTEMS = DISK_FILESYSTEM_CAPACITY
   integer, parameter, public :: FTOP_COLLECTOR_MAX_DISK_IO = DISK_IO_CAPACITY
+  integer, parameter, public :: FTOP_COLLECTOR_MAX_GPUS = GPU_CAPACITY
 
   type, bind(C) :: collector_shared_state
     integer(c_int) :: stop_requested
@@ -219,6 +228,38 @@ module ftop_collector
     real(c_double) :: disk_latency_avg_read_us(FTOP_COLLECTOR_MAX_DISK_IO)
     real(c_double) :: disk_latency_avg_write_us(FTOP_COLLECTOR_MAX_DISK_IO)
     real(c_double) :: disk_latency_p99_us(FTOP_COLLECTOR_MAX_DISK_IO)
+    integer(c_int) :: gpu_table_valid
+    integer(c_int) :: gpu_count
+    integer(c_int) :: gpu_valid(FTOP_COLLECTOR_MAX_GPUS)
+    character(kind=c_char) :: gpu_vendor(GPU_VENDOR_LEN, FTOP_COLLECTOR_MAX_GPUS)
+    character(kind=c_char) :: gpu_name(GPU_NAME_LEN, FTOP_COLLECTOR_MAX_GPUS)
+    character(kind=c_char) :: gpu_pci_id(GPU_PCI_ID_LEN, FTOP_COLLECTOR_MAX_GPUS)
+    integer(c_int) :: gpu_utilization_valid(FTOP_COLLECTOR_MAX_GPUS)
+    real(c_double) :: gpu_utilization_percent(FTOP_COLLECTOR_MAX_GPUS)
+    integer(c_int) :: gpu_memory_utilization_valid(FTOP_COLLECTOR_MAX_GPUS)
+    real(c_double) :: gpu_memory_utilization_percent(FTOP_COLLECTOR_MAX_GPUS)
+    integer(c_int) :: gpu_temperature_valid(FTOP_COLLECTOR_MAX_GPUS)
+    real(c_double) :: gpu_temp_celsius(FTOP_COLLECTOR_MAX_GPUS)
+    real(c_double) :: gpu_temp_max_celsius(FTOP_COLLECTOR_MAX_GPUS)
+    integer(c_int) :: gpu_memory_valid(FTOP_COLLECTOR_MAX_GPUS)
+    integer(c_long_long) :: gpu_memory_used_bytes(FTOP_COLLECTOR_MAX_GPUS)
+    integer(c_long_long) :: gpu_memory_total_bytes(FTOP_COLLECTOR_MAX_GPUS)
+    integer(c_int) :: gpu_power_valid(FTOP_COLLECTOR_MAX_GPUS)
+    real(c_double) :: gpu_power_watts(FTOP_COLLECTOR_MAX_GPUS)
+    real(c_double) :: gpu_power_limit_watts(FTOP_COLLECTOR_MAX_GPUS)
+    integer(c_int) :: gpu_core_clock_valid(FTOP_COLLECTOR_MAX_GPUS)
+    real(c_double) :: gpu_clock_core_mhz(FTOP_COLLECTOR_MAX_GPUS)
+    real(c_double) :: gpu_clock_max_core_mhz(FTOP_COLLECTOR_MAX_GPUS)
+    integer(c_int) :: gpu_memory_clock_valid(FTOP_COLLECTOR_MAX_GPUS)
+    real(c_double) :: gpu_clock_memory_mhz(FTOP_COLLECTOR_MAX_GPUS)
+    integer(c_int) :: gpu_fan_valid(FTOP_COLLECTOR_MAX_GPUS)
+    real(c_double) :: gpu_fan_speed_percent(FTOP_COLLECTOR_MAX_GPUS)
+    integer(c_int) :: gpu_encoder_valid(FTOP_COLLECTOR_MAX_GPUS)
+    real(c_double) :: gpu_encoder_utilization_percent(FTOP_COLLECTOR_MAX_GPUS)
+    integer(c_int) :: gpu_decoder_valid(FTOP_COLLECTOR_MAX_GPUS)
+    real(c_double) :: gpu_decoder_utilization_percent(FTOP_COLLECTOR_MAX_GPUS)
+    integer(c_int) :: gpu_driver_version_valid(FTOP_COLLECTOR_MAX_GPUS)
+    character(kind=c_char) :: gpu_driver_version(GPU_DRIVER_VERSION_LEN, FTOP_COLLECTOR_MAX_GPUS)
     integer(c_int) :: history_start
     integer(c_int) :: history_count
     real(c_double) :: cpu_usage_history(FTOP_COLLECTOR_HISTORY_CAPACITY)
@@ -239,6 +280,7 @@ module ftop_collector
     type(process_table) :: processes
     type(network_table) :: network
     type(disk_table) :: disk
+    type(gpu_table) :: gpu
     real(real64), allocatable :: cpu_usage_history(:)
     real(real64), allocatable :: cpu_core_usage_history(:, :)
     real(real64), allocatable :: memory_usage_history(:)
@@ -401,6 +443,11 @@ contains
       call ignore_mutex_unlock(self%mutex)
       return
     end if
+    if (.not. copy_gpu(self%state, snapshot)) then
+      call clear_snapshot(snapshot)
+      call ignore_mutex_unlock(self%mutex)
+      return
+    end if
     if (.not. copy_cpu_cores(self%state, snapshot)) then
       call clear_snapshot(snapshot)
       call ignore_mutex_unlock(self%mutex)
@@ -463,6 +510,7 @@ contains
     type(network_table) :: previous_network
     type(disk_table) :: disk
     type(disk_table) :: previous_disk
+    type(gpu_table) :: gpu
     type(system_uptime_info) :: system_uptime
     integer(c_long_long) :: deadline_ms
     integer(c_long_long) :: metadata_refresh_ms
@@ -494,6 +542,7 @@ contains
     network = backend%get_network_table()
     call append_interface_histories(network, empty_network)
     disk = backend%get_disk_table()
+    gpu = backend%get_gpu_table()
     deadline_ms = monotonic_ms()
     previous_processes = processes
     previous_network = network
@@ -502,7 +551,7 @@ contains
     previous_network_sample_ms = deadline_ms
     previous_disk_sample_ms = deadline_ms
     call publish_sample(state, topology, total_cpu, core_cpus, .true., memory, load_average, system_uptime, processes, &
-                        network, disk)
+                        network, disk, gpu)
 
     metadata_refresh_ms = deadline_ms + 1000_c_long_long
     process_refresh_ms = deadline_ms + 1000_c_long_long
@@ -555,10 +604,11 @@ contains
       call assign_disk_io_metrics(disk, previous_disk, int(max(0_c_long_long, deadline_ms - previous_disk_sample_ms), int64))
       previous_disk = disk
       previous_disk_sample_ms = deadline_ms
+      gpu = backend%get_gpu_table()
       call merge_cpu_metadata(core_cpus, cpu_metadata)
 
       call publish_sample(state, topology, total_cpu, core_cpus, warming_up, memory, load_average, system_uptime, &
-                          processes, network, disk)
+                          processes, network, disk, gpu)
       if (should_stop(state)) exit
     end do
 
@@ -717,6 +767,34 @@ contains
     state%disk_filesystem_total_bytes = 0_c_long_long
     state%disk_filesystem_used_bytes = 0_c_long_long
     state%disk_filesystem_available_bytes = 0_c_long_long
+    state%disk_io_count = 0_c_int
+    state%disk_io_valid = 0_c_int
+    state%disk_io_device = c_null_char
+    state%disk_io_read_bytes = 0_c_long_long
+    state%disk_io_write_bytes = 0_c_long_long
+    state%disk_io_read_ops = 0_c_long_long
+    state%disk_io_write_ops = 0_c_long_long
+    state%disk_io_reads_merged = 0_c_long_long
+    state%disk_io_writes_merged = 0_c_long_long
+    state%disk_io_read_time_ms = 0_c_long_long
+    state%disk_io_write_time_ms = 0_c_long_long
+    state%disk_io_ios_in_progress = 0_c_long_long
+    state%disk_io_io_time_ms = 0_c_long_long
+    state%disk_io_weighted_io_time_ms = 0_c_long_long
+    state%disk_io_sector_size_bytes = 0_c_long_long
+    state%disk_io_rate_valid = 0_c_int
+    state%disk_io_read_bytes_per_sec = 0.0_c_double
+    state%disk_io_write_bytes_per_sec = 0.0_c_double
+    state%disk_io_read_ops_per_sec = 0.0_c_double
+    state%disk_io_write_ops_per_sec = 0.0_c_double
+    state%disk_io_busy_percent = 0.0_c_double
+    state%disk_latency_valid = 0_c_int
+    state%disk_latency_read_valid = 0_c_int
+    state%disk_latency_write_valid = 0_c_int
+    state%disk_latency_avg_read_us = 0.0_c_double
+    state%disk_latency_avg_write_us = 0.0_c_double
+    state%disk_latency_p99_us = 0.0_c_double
+    call clear_gpu_state(state)
     state%history_start = 1_c_int
     state%history_count = 0_c_int
     state%cpu_usage_history = 0.0_c_double
@@ -834,6 +912,34 @@ contains
     state%disk_filesystem_total_bytes = 0_c_long_long
     state%disk_filesystem_used_bytes = 0_c_long_long
     state%disk_filesystem_available_bytes = 0_c_long_long
+    state%disk_io_count = 0_c_int
+    state%disk_io_valid = 0_c_int
+    state%disk_io_device = c_null_char
+    state%disk_io_read_bytes = 0_c_long_long
+    state%disk_io_write_bytes = 0_c_long_long
+    state%disk_io_read_ops = 0_c_long_long
+    state%disk_io_write_ops = 0_c_long_long
+    state%disk_io_reads_merged = 0_c_long_long
+    state%disk_io_writes_merged = 0_c_long_long
+    state%disk_io_read_time_ms = 0_c_long_long
+    state%disk_io_write_time_ms = 0_c_long_long
+    state%disk_io_ios_in_progress = 0_c_long_long
+    state%disk_io_io_time_ms = 0_c_long_long
+    state%disk_io_weighted_io_time_ms = 0_c_long_long
+    state%disk_io_sector_size_bytes = 0_c_long_long
+    state%disk_io_rate_valid = 0_c_int
+    state%disk_io_read_bytes_per_sec = 0.0_c_double
+    state%disk_io_write_bytes_per_sec = 0.0_c_double
+    state%disk_io_read_ops_per_sec = 0.0_c_double
+    state%disk_io_write_ops_per_sec = 0.0_c_double
+    state%disk_io_busy_percent = 0.0_c_double
+    state%disk_latency_valid = 0_c_int
+    state%disk_latency_read_valid = 0_c_int
+    state%disk_latency_write_valid = 0_c_int
+    state%disk_latency_avg_read_us = 0.0_c_double
+    state%disk_latency_avg_write_us = 0.0_c_double
+    state%disk_latency_p99_us = 0.0_c_double
+    call clear_gpu_state(state)
     state%history_start = 1_c_int
     state%history_count = 0_c_int
     state%cpu_usage_history = 0.0_c_double
@@ -872,7 +978,45 @@ contains
     snapshot%processes%valid = .false.
     snapshot%network%valid = .false.
     snapshot%disk%valid = .false.
+    snapshot%gpu%valid = .false.
   end subroutine clear_snapshot
+
+  subroutine clear_gpu_state(state)
+    type(collector_shared_state), intent(inout) :: state
+
+    state%gpu_table_valid = 0_c_int
+    state%gpu_count = 0_c_int
+    state%gpu_valid = 0_c_int
+    state%gpu_vendor = c_null_char
+    state%gpu_name = c_null_char
+    state%gpu_pci_id = c_null_char
+    state%gpu_utilization_valid = 0_c_int
+    state%gpu_utilization_percent = 0.0_c_double
+    state%gpu_memory_utilization_valid = 0_c_int
+    state%gpu_memory_utilization_percent = 0.0_c_double
+    state%gpu_temperature_valid = 0_c_int
+    state%gpu_temp_celsius = 0.0_c_double
+    state%gpu_temp_max_celsius = 0.0_c_double
+    state%gpu_memory_valid = 0_c_int
+    state%gpu_memory_used_bytes = 0_c_long_long
+    state%gpu_memory_total_bytes = 0_c_long_long
+    state%gpu_power_valid = 0_c_int
+    state%gpu_power_watts = 0.0_c_double
+    state%gpu_power_limit_watts = 0.0_c_double
+    state%gpu_core_clock_valid = 0_c_int
+    state%gpu_clock_core_mhz = 0.0_c_double
+    state%gpu_clock_max_core_mhz = 0.0_c_double
+    state%gpu_memory_clock_valid = 0_c_int
+    state%gpu_clock_memory_mhz = 0.0_c_double
+    state%gpu_fan_valid = 0_c_int
+    state%gpu_fan_speed_percent = 0.0_c_double
+    state%gpu_encoder_valid = 0_c_int
+    state%gpu_encoder_utilization_percent = 0.0_c_double
+    state%gpu_decoder_valid = 0_c_int
+    state%gpu_decoder_utilization_percent = 0.0_c_double
+    state%gpu_driver_version_valid = 0_c_int
+    state%gpu_driver_version = c_null_char
+  end subroutine clear_gpu_state
 
   logical function copy_cpu_cores(state, snapshot) result(success)
     type(collector_shared_state), intent(in) :: state
@@ -1138,6 +1282,64 @@ contains
     success = .true.
   end function copy_disk
 
+  logical function copy_gpu(state, snapshot) result(success)
+    type(collector_shared_state), intent(in) :: state
+    type(collector_snapshot), intent(inout) :: snapshot
+    integer :: allocation_status
+    integer :: gpu_count
+    integer :: gpu_index
+    logical :: string_valid
+
+    success = .false.
+    gpu_count = bounded_gpu_count(int(state%gpu_count))
+    snapshot%gpu%valid = state%gpu_table_valid /= 0_c_int
+    allocate(snapshot%gpu%gpus(gpu_count), stat=allocation_status)
+    if (allocation_status /= 0) return
+
+    do gpu_index = 1, gpu_count
+      snapshot%gpu%gpus(gpu_index)%valid = state%gpu_valid(gpu_index) /= 0_c_int
+      call copy_c_chars_to_fortran(state%gpu_vendor(:, gpu_index), state%gpu_valid(gpu_index), &
+                                   snapshot%gpu%gpus(gpu_index)%vendor, string_valid)
+      call copy_c_chars_to_fortran(state%gpu_name(:, gpu_index), state%gpu_valid(gpu_index), &
+                                   snapshot%gpu%gpus(gpu_index)%name, string_valid)
+      call copy_c_chars_to_fortran(state%gpu_pci_id(:, gpu_index), state%gpu_valid(gpu_index), &
+                                   snapshot%gpu%gpus(gpu_index)%pci_id, string_valid)
+      snapshot%gpu%gpus(gpu_index)%utilization_valid = state%gpu_utilization_valid(gpu_index) /= 0_c_int
+      snapshot%gpu%gpus(gpu_index)%utilization_percent = real(state%gpu_utilization_percent(gpu_index), real64)
+      snapshot%gpu%gpus(gpu_index)%memory_utilization_valid = &
+        state%gpu_memory_utilization_valid(gpu_index) /= 0_c_int
+      snapshot%gpu%gpus(gpu_index)%memory_utilization_percent = &
+        real(state%gpu_memory_utilization_percent(gpu_index), real64)
+      snapshot%gpu%gpus(gpu_index)%temperature_valid = state%gpu_temperature_valid(gpu_index) /= 0_c_int
+      snapshot%gpu%gpus(gpu_index)%temp_celsius = real(state%gpu_temp_celsius(gpu_index), real64)
+      snapshot%gpu%gpus(gpu_index)%temp_max_celsius = real(state%gpu_temp_max_celsius(gpu_index), real64)
+      snapshot%gpu%gpus(gpu_index)%memory_valid = state%gpu_memory_valid(gpu_index) /= 0_c_int
+      snapshot%gpu%gpus(gpu_index)%memory_used_bytes = int(state%gpu_memory_used_bytes(gpu_index), int64)
+      snapshot%gpu%gpus(gpu_index)%memory_total_bytes = int(state%gpu_memory_total_bytes(gpu_index), int64)
+      snapshot%gpu%gpus(gpu_index)%power_valid = state%gpu_power_valid(gpu_index) /= 0_c_int
+      snapshot%gpu%gpus(gpu_index)%power_watts = real(state%gpu_power_watts(gpu_index), real64)
+      snapshot%gpu%gpus(gpu_index)%power_limit_watts = real(state%gpu_power_limit_watts(gpu_index), real64)
+      snapshot%gpu%gpus(gpu_index)%core_clock_valid = state%gpu_core_clock_valid(gpu_index) /= 0_c_int
+      snapshot%gpu%gpus(gpu_index)%clock_core_mhz = real(state%gpu_clock_core_mhz(gpu_index), real64)
+      snapshot%gpu%gpus(gpu_index)%clock_max_core_mhz = real(state%gpu_clock_max_core_mhz(gpu_index), real64)
+      snapshot%gpu%gpus(gpu_index)%memory_clock_valid = state%gpu_memory_clock_valid(gpu_index) /= 0_c_int
+      snapshot%gpu%gpus(gpu_index)%clock_memory_mhz = real(state%gpu_clock_memory_mhz(gpu_index), real64)
+      snapshot%gpu%gpus(gpu_index)%fan_valid = state%gpu_fan_valid(gpu_index) /= 0_c_int
+      snapshot%gpu%gpus(gpu_index)%fan_speed_percent = real(state%gpu_fan_speed_percent(gpu_index), real64)
+      snapshot%gpu%gpus(gpu_index)%encoder_valid = state%gpu_encoder_valid(gpu_index) /= 0_c_int
+      snapshot%gpu%gpus(gpu_index)%encoder_utilization_percent = &
+        real(state%gpu_encoder_utilization_percent(gpu_index), real64)
+      snapshot%gpu%gpus(gpu_index)%decoder_valid = state%gpu_decoder_valid(gpu_index) /= 0_c_int
+      snapshot%gpu%gpus(gpu_index)%decoder_utilization_percent = &
+        real(state%gpu_decoder_utilization_percent(gpu_index), real64)
+      snapshot%gpu%gpus(gpu_index)%driver_version_valid = state%gpu_driver_version_valid(gpu_index) /= 0_c_int
+      call copy_c_chars_to_fortran(state%gpu_driver_version(:, gpu_index), state%gpu_driver_version_valid(gpu_index), &
+                                   snapshot%gpu%gpus(gpu_index)%driver_version, string_valid)
+    end do
+
+    success = .true.
+  end function copy_gpu
+
   logical function copy_history(state, snapshot) result(success)
     type(collector_shared_state), intent(in) :: state
     type(collector_snapshot), intent(inout) :: snapshot
@@ -1219,6 +1421,12 @@ contains
 
     bounded = max(0, min(FTOP_COLLECTOR_MAX_DISK_IO, io_count))
   end function bounded_disk_io_count
+
+  integer function bounded_gpu_count(gpu_count) result(bounded)
+    integer, intent(in) :: gpu_count
+
+    bounded = max(0, min(FTOP_COLLECTOR_MAX_GPUS, gpu_count))
+  end function bounded_gpu_count
 
   integer function bounded_process_history_count(history_count) result(bounded)
     integer, intent(in) :: history_count
@@ -1313,7 +1521,7 @@ contains
   end function should_stop
 
   subroutine publish_sample(state, topology, total_cpu, core_cpus, warming_up, memory, load_average, system_uptime, &
-                            processes, network, disk)
+                            processes, network, disk, gpu)
     type(collector_shared_state), intent(inout) :: state
     type(cpu_topology_info), intent(in) :: topology
     type(cpu_core_info), intent(in) :: total_cpu
@@ -1325,6 +1533,7 @@ contains
     type(process_table), intent(in) :: processes
     type(network_table), intent(in) :: network
     type(disk_table), intent(in) :: disk
+    type(gpu_table), intent(in) :: gpu
     type(ftop_mutex_handle) :: mutex
     integer :: core_count
     integer :: physical_core_count
@@ -1369,6 +1578,7 @@ contains
     call publish_processes(state, processes)
     call publish_network(state, network)
     call publish_disk(state, disk)
+    call publish_gpu(state, gpu)
     call append_history(state, real(state%cpu_usage_percent, real64), memory_usage_percent(memory), core_cpus, core_count)
 
     if (.not. ftop_mutex_unlock(mutex)) return
@@ -1721,6 +1931,67 @@ contains
     state%disk_latency_avg_write_us(io_index) = real(max(0.0_real64, latency%avg_write_latency_us), c_double)
     state%disk_latency_p99_us(io_index) = real(max(0.0_real64, latency%p99_latency_us), c_double)
   end subroutine publish_disk_latency
+
+  subroutine publish_gpu(state, gpu)
+    type(collector_shared_state), intent(inout) :: state
+    type(gpu_table), intent(in) :: gpu
+    integer :: gpu_count
+    integer :: gpu_index
+
+    call clear_gpu_state(state)
+    state%gpu_table_valid = merge(1_c_int, 0_c_int, gpu%valid)
+    if (.not. gpu%valid) return
+    if (.not. allocated(gpu%gpus)) return
+
+    gpu_count = bounded_gpu_count(size(gpu%gpus))
+    state%gpu_count = int(gpu_count, c_int)
+    do gpu_index = 1, gpu_count
+      call publish_gpu_info(state, gpu_index, gpu%gpus(gpu_index))
+    end do
+  end subroutine publish_gpu
+
+  subroutine publish_gpu_info(state, gpu_index, gpu)
+    type(collector_shared_state), intent(inout) :: state
+    integer, intent(in) :: gpu_index
+    type(gpu_info), intent(in) :: gpu
+    integer(c_int) :: string_valid
+
+    state%gpu_valid(gpu_index) = merge(1_c_int, 0_c_int, gpu%valid)
+    call copy_fortran_string_to_c_chars(gpu%vendor, len_trim(gpu%vendor) > 0, &
+                                        state%gpu_vendor(:, gpu_index), string_valid)
+    call copy_fortran_string_to_c_chars(gpu%name, len_trim(gpu%name) > 0, &
+                                        state%gpu_name(:, gpu_index), string_valid)
+    call copy_fortran_string_to_c_chars(gpu%pci_id, len_trim(gpu%pci_id) > 0, &
+                                        state%gpu_pci_id(:, gpu_index), string_valid)
+    state%gpu_utilization_valid(gpu_index) = merge(1_c_int, 0_c_int, gpu%utilization_valid)
+    state%gpu_utilization_percent(gpu_index) = real(clamp_percent(gpu%utilization_percent), c_double)
+    state%gpu_memory_utilization_valid(gpu_index) = merge(1_c_int, 0_c_int, gpu%memory_utilization_valid)
+    state%gpu_memory_utilization_percent(gpu_index) = real(clamp_percent(gpu%memory_utilization_percent), c_double)
+    state%gpu_temperature_valid(gpu_index) = merge(1_c_int, 0_c_int, gpu%temperature_valid)
+    state%gpu_temp_celsius(gpu_index) = real(max(-100.0_real64, min(200.0_real64, gpu%temp_celsius)), c_double)
+    state%gpu_temp_max_celsius(gpu_index) = real(max(0.0_real64, gpu%temp_max_celsius), c_double)
+    state%gpu_memory_valid(gpu_index) = merge(1_c_int, 0_c_int, gpu%memory_valid)
+    state%gpu_memory_total_bytes(gpu_index) = int(max(0_int64, gpu%memory_total_bytes), c_long_long)
+    state%gpu_memory_used_bytes(gpu_index) = &
+      int(clamp_memory_value(gpu%memory_used_bytes, gpu%memory_total_bytes), c_long_long)
+    state%gpu_power_valid(gpu_index) = merge(1_c_int, 0_c_int, gpu%power_valid)
+    state%gpu_power_watts(gpu_index) = real(max(0.0_real64, gpu%power_watts), c_double)
+    state%gpu_power_limit_watts(gpu_index) = real(max(0.0_real64, gpu%power_limit_watts), c_double)
+    state%gpu_core_clock_valid(gpu_index) = merge(1_c_int, 0_c_int, gpu%core_clock_valid)
+    state%gpu_clock_core_mhz(gpu_index) = real(max(0.0_real64, gpu%clock_core_mhz), c_double)
+    state%gpu_clock_max_core_mhz(gpu_index) = real(max(0.0_real64, gpu%clock_max_core_mhz), c_double)
+    state%gpu_memory_clock_valid(gpu_index) = merge(1_c_int, 0_c_int, gpu%memory_clock_valid)
+    state%gpu_clock_memory_mhz(gpu_index) = real(max(0.0_real64, gpu%clock_memory_mhz), c_double)
+    state%gpu_fan_valid(gpu_index) = merge(1_c_int, 0_c_int, gpu%fan_valid)
+    state%gpu_fan_speed_percent(gpu_index) = real(clamp_percent(gpu%fan_speed_percent), c_double)
+    state%gpu_encoder_valid(gpu_index) = merge(1_c_int, 0_c_int, gpu%encoder_valid)
+    state%gpu_encoder_utilization_percent(gpu_index) = real(clamp_percent(gpu%encoder_utilization_percent), c_double)
+    state%gpu_decoder_valid(gpu_index) = merge(1_c_int, 0_c_int, gpu%decoder_valid)
+    state%gpu_decoder_utilization_percent(gpu_index) = real(clamp_percent(gpu%decoder_utilization_percent), c_double)
+    call copy_fortran_string_to_c_chars(gpu%driver_version, gpu%driver_version_valid, &
+                                        state%gpu_driver_version(:, gpu_index), &
+                                        state%gpu_driver_version_valid(gpu_index))
+  end subroutine publish_gpu_info
 
   subroutine copy_process_history_to_state(state, process_index, process)
     type(collector_shared_state), intent(inout) :: state
