@@ -5,7 +5,8 @@ module ftop_app
     clear_decoder_state, &
     decode_next_event, &
     event_text, &
-    has_pending_input
+    has_pending_input, &
+    named_key_event
   use fgof_keys_types, only : &
     FGOF_KEY_BACKSPACE, &
     FGOF_KEY_DELETE, &
@@ -40,6 +41,7 @@ module ftop_app
   use fgof_termios, only : bind_guard, enter_raw_mode, get_terminal_size, restore_guard
   use fgof_termios_types, only : FGOF_TERMIOS_ERR_NONE, terminal_size, termios_guard
   use ftop_collector, only : collector, collector_snapshot
+  use ftop_cpu, only : cpu_core_scroll_limit
   use ftop_dashboard, only : render_dashboard
   use ftop_help, only : render_help_overlay
   use ftop_layout, only : &
@@ -72,6 +74,8 @@ module ftop_app
     network_table_cycle_state_filter, &
     network_table_page_delta, &
     network_table_select_delta, &
+    network_table_sort_direction_label, &
+    network_table_sort_key_label, &
     network_table_state, &
     network_table_status, &
     network_table_toggle_sort_direction
@@ -196,6 +200,7 @@ module ftop_app
     integer :: last_process_click_count = 0
     integer :: last_process_fuzzy_input_count = 0
     integer :: last_process_click_row = 0
+    integer :: cpu_core_scroll_offset = 0
     integer :: clock_rate = 0
     real :: render_fps = 0.0
     logical :: guard_bound = .false.
@@ -204,6 +209,8 @@ module ftop_app
     logical :: layout_loaded = .false.
     logical :: zoomed = .false.
     logical :: help_visible = .false.
+    logical :: cpu_core_active = .false.
+    logical :: network_table_active = .false.
     logical :: process_tree_active = .false.
     logical :: paused = .false.
     logical :: running = .true.
@@ -259,8 +266,8 @@ contains
 
     status = start_terminal_session(session)
     if (status /= 0) then
-      call stop_terminal_session(session)
       call log_info("ftop shutting down")
+      call stop_terminal_session(session)
       call log_shutdown()
       return
     end if
@@ -284,8 +291,8 @@ contains
       if (session%dirty) call render_session(session)
     end do
 
-    call stop_terminal_session(session)
     call log_info("ftop shutting down")
+    call stop_terminal_session(session)
     call log_shutdown()
   end function run_ftop
 
@@ -417,13 +424,19 @@ contains
                                session%status_text, session%layout, focus, session%zoomed, &
                                layout_name=trim(session%layout_preset_name), render_fps=session%render_fps, &
                                process_state=session%process_state, &
-                               network_state=session%network_state, paused=session%paused)
+                               network_state=session%network_state, paused=session%paused, &
+                               cpu_core_scroll_offset=session%cpu_core_scroll_offset, &
+                               cpu_core_active=session%cpu_core_active, process_tree_active=session%process_tree_active, &
+                               network_table_active=session%network_table_active)
     else
       call render_dashboard(session%current, snapshot, session%refresh_ms, session%frame_count, &
                                session%status_text, focused_widget=focus, zoomed=session%zoomed, &
                                layout_name=trim(session%layout_preset_name), render_fps=session%render_fps, &
                                process_state=session%process_state, &
-                               network_state=session%network_state, paused=session%paused)
+                               network_state=session%network_state, paused=session%paused, &
+                               cpu_core_scroll_offset=session%cpu_core_scroll_offset, &
+                               cpu_core_active=session%cpu_core_active, process_tree_active=session%process_tree_active, &
+                               network_table_active=session%network_table_active)
     end if
     if (session%help_visible) call render_help_overlay(session%current, focus)
   end subroutine draw_frame
@@ -571,6 +584,8 @@ contains
 
     session%focus_index = 1
     session%last_focus_index = 0
+    session%cpu_core_active = .false.
+    session%network_table_active = .false.
     session%process_tree_active = .false.
     if (old_zoomed .and. layout_contains_widget(session%layout, old_focus)) then
       session%zoomed = .false.
@@ -776,6 +791,33 @@ contains
     rect = layout%process_panel
   end function current_process_panel_rect
 
+  function current_cpu_panel_rect(session) result(rect)
+    type(terminal_session), intent(in) :: session
+    type(widget_rect) :: rect
+    type(dashboard_layout) :: layout
+    integer :: height
+    integer :: width
+
+    width = session%current%size%width
+    height = session%current%size%height
+    rect = widget_rect(0, 0, 0, 0)
+    if (width <= 0 .or. height <= 0) return
+
+    if (session%zoomed) then
+      if (focused_widget_name(session) == "cpu") then
+        rect = widget_rect(3, 3, max(0, width - 4), max(0, height - 5))
+      end if
+      return
+    end if
+
+    if (session%layout_loaded) then
+      layout = dashboard_layout_from_grid(width, height, session%layout)
+    else
+      layout = default_dashboard_layout(width, height)
+    end if
+    rect = layout%cpu_panel
+  end function current_cpu_panel_rect
+
   logical function focus_widget_named(session, name) result(focused)
     type(terminal_session), intent(inout) :: session
     character(len=*), intent(in) :: name
@@ -813,6 +855,8 @@ contains
     bounded = max(1, min(count, index))
     if (bounded /= session%focus_index) then
       session%last_focus_index = session%focus_index
+      session%cpu_core_active = .false.
+      session%network_table_active = .false.
       session%process_tree_active = .false.
     end if
     session%focus_index = bounded
@@ -867,7 +911,10 @@ contains
     end if
 
     session%zoomed = .not. session%zoomed
+    session%cpu_core_active = .false.
+    session%network_table_active = .false.
     session%process_tree_active = .false.
+    session%needs_full_render = .true.
     if (session%zoomed) then
       call set_status(session, "zoom " // focus)
     else
@@ -896,6 +943,11 @@ contains
     if (session%help_visible .and. (input_bytes == achar(27) .or. input_bytes == "?")) then
       session%help_visible = .false.
       call set_status(session, "help closed")
+      return
+    end if
+
+    if (input_bytes == achar(27)) then
+      call handle_key_event(session, named_key_event(FGOF_KEY_ESCAPE, raw_bytes=input_bytes, escape_sequence=.true.))
       return
     end if
 
@@ -1033,6 +1085,9 @@ contains
         continue
       else if (handle_refresh_printable_key(session, text)) then
         continue
+      else if (text == "q" .and. .not. text_input_active(session)) then
+        call set_status(session, "q")
+        session%running = .false.
       else if (handle_process_printable_key(session, text)) then
         continue
       else if (handle_global_printable_key(session, text)) then
@@ -1045,9 +1100,6 @@ contains
         continue
       else if (text == "z") then
         call toggle_zoom(session)
-      else if (text == "q") then
-        call set_status(session, "q")
-        session%running = .false.
       else if (len(text) > 0) then
         call set_status(session, "key: " // text)
       end if
@@ -1061,7 +1113,10 @@ contains
       call toggle_pause(session)
       return
     end if
+    if (handle_zoom_escape_key(session, event%key_name)) return
+    if (handle_cpu_core_mode_key(session, event%key_name)) return
     if (handle_process_tree_mode_key(session, event%key_name)) return
+    if (handle_network_table_mode_key(session, event%key_name)) return
     if (handle_directional_focus_key(session, event%key_name)) return
     if (handle_process_named_key(session, event%key_name)) return
     if (handle_network_named_key(session, event%key_name)) return
@@ -1082,6 +1137,80 @@ contains
       call set_status(session, "key: " // event%key_name)
     end select
   end subroutine handle_key_event
+
+  logical function handle_zoom_escape_key(session, key_name) result(handled)
+    type(terminal_session), intent(inout) :: session
+    character(len=*), intent(in) :: key_name
+
+    handled = .false.
+    if (key_name /= FGOF_KEY_ESCAPE) return
+    if (.not. session%zoomed) return
+
+    call toggle_zoom(session)
+    handled = .true.
+  end function handle_zoom_escape_key
+
+  logical function handle_cpu_core_mode_key(session, key_name) result(handled)
+    type(terminal_session), intent(inout) :: session
+    character(len=*), intent(in) :: key_name
+
+    handled = .false.
+    if (.not. cpu_widget_focused(session)) return
+    if (text_input_active(session)) return
+
+    select case (key_name)
+    case (FGOF_KEY_ENTER)
+      if (session%zoomed) then
+        call toggle_zoom(session)
+      else if (session%cpu_core_active) then
+        session%cpu_core_active = .false.
+        call toggle_zoom(session)
+      else
+        session%cpu_core_active = .true.
+        call set_status(session, "cpu cores active")
+      end if
+      handled = .true.
+    case (FGOF_KEY_ESCAPE)
+      if (.not. session%cpu_core_active) return
+      session%cpu_core_active = .false.
+      call set_status(session, "focus cpu")
+      handled = .true.
+    case (FGOF_KEY_UP)
+      if (.not. session%zoomed .and. .not. session%cpu_core_active) return
+      call scroll_cpu_cores(session, -1)
+      handled = .true.
+    case (FGOF_KEY_DOWN)
+      if (.not. session%zoomed .and. .not. session%cpu_core_active) return
+      call scroll_cpu_cores(session, 1)
+      handled = .true.
+    end select
+  end function handle_cpu_core_mode_key
+
+  subroutine scroll_cpu_cores(session, delta)
+    type(terminal_session), intent(inout) :: session
+    integer, intent(in) :: delta
+    type(widget_rect) :: panel
+    integer :: limit
+    integer :: next_offset
+
+    panel = current_cpu_panel_rect(session)
+    limit = cpu_core_scroll_limit(panel, session%last_snapshot)
+    if (limit <= 0) then
+      session%cpu_core_scroll_offset = 0
+      call set_status(session, "cpu core scroll all visible")
+      return
+    end if
+
+    next_offset = max(0, min(limit, session%cpu_core_scroll_offset + delta))
+    session%cpu_core_scroll_offset = next_offset
+    if (next_offset == 0 .and. delta < 0) then
+      call set_status(session, "cpu core scroll top")
+    else if (next_offset == limit .and. delta > 0) then
+      call set_status(session, "cpu core scroll bottom")
+    else
+      call set_status(session, "cpu core scroll " // integer_text(next_offset + 1) // "/" // integer_text(limit + 1))
+    end if
+  end subroutine scroll_cpu_cores
 
   logical function handle_process_tree_mode_key(session, key_name) result(handled)
     type(terminal_session), intent(inout) :: session
@@ -1110,6 +1239,64 @@ contains
       handled = .true.
     end select
   end function handle_process_tree_mode_key
+
+  logical function handle_network_table_mode_key(session, key_name) result(handled)
+    type(terminal_session), intent(inout) :: session
+    character(len=*), intent(in) :: key_name
+
+    handled = .false.
+    if (.not. network_widget_focused(session)) return
+    if (text_input_active(session)) return
+
+    select case (key_name)
+    case (FGOF_KEY_ENTER)
+      if (session%zoomed) then
+        call toggle_zoom(session)
+      else if (session%network_table_active) then
+        session%network_table_active = .false.
+        call toggle_zoom(session)
+      else
+        session%network_table_active = .true.
+        call set_status(session, "network table active")
+      end if
+      handled = .true.
+    case (FGOF_KEY_ESCAPE)
+      if (.not. session%network_table_active) return
+      session%network_table_active = .false.
+      call set_status(session, "focus network")
+      handled = .true.
+    case (FGOF_KEY_UP, FGOF_KEY_DOWN, FGOF_KEY_LEFT, FGOF_KEY_RIGHT, &
+          FGOF_KEY_PAGEUP, FGOF_KEY_PAGEDOWN, FGOF_KEY_HOME, FGOF_KEY_END)
+      if (.not. session%zoomed .and. .not. session%network_table_active) return
+      call handle_active_network_table_key(session, key_name)
+      handled = .true.
+    end select
+  end function handle_network_table_mode_key
+
+  subroutine handle_active_network_table_key(session, key_name)
+    type(terminal_session), intent(inout) :: session
+    character(len=*), intent(in) :: key_name
+
+    select case (key_name)
+    case (FGOF_KEY_UP)
+      call network_table_select_delta(session%network_state, -1)
+    case (FGOF_KEY_DOWN)
+      call network_table_select_delta(session%network_state, 1)
+    case (FGOF_KEY_PAGEUP)
+      call network_table_page_delta(session%network_state, -1)
+    case (FGOF_KEY_PAGEDOWN)
+      call network_table_page_delta(session%network_state, 1)
+    case (FGOF_KEY_HOME)
+      call network_table_select_delta(session%network_state, -session%network_state%row_count)
+    case (FGOF_KEY_END)
+      call network_table_select_delta(session%network_state, session%network_state%row_count)
+    case (FGOF_KEY_LEFT)
+      call network_table_cycle_sort_key(session%network_state, -1)
+    case (FGOF_KEY_RIGHT)
+      call network_table_cycle_sort_key(session%network_state, 1)
+    end select
+    call set_status(session, "network table navigate " // network_table_status(session%network_state))
+  end subroutine handle_active_network_table_key
 
   logical function handle_directional_focus_key(session, key_name) result(handled)
     type(terminal_session), intent(inout) :: session
@@ -1145,7 +1332,14 @@ contains
       fallback_grid = default_dashboard_grid(stacked=session%current%size%width < 96)
       next_widget = layout_directional_focus_widget(fallback_grid, viewport, current_widget, direction)
     end if
-    if (len(next_widget) <= 0) return
+    if (len(next_widget) <= 0) then
+      if (direction == LAYOUT_DIRECTION_DOWN .and. process_widget_focused(session)) then
+        session%process_tree_active = .true.
+        call set_status(session, "process tree active")
+        handled = .true.
+      end if
+      return
+    end if
 
     focused = focus_widget_named(session, next_widget)
     if (.not. focused) return
@@ -1755,21 +1949,28 @@ contains
   logical function handle_network_printable_key(session, text) result(handled)
     type(terminal_session), intent(inout) :: session
     character(len=*), intent(in) :: text
+    character(len=:), allocatable :: status
 
     handled = .false.
     if (.not. network_widget_focused(session)) return
     select case (text)
     case ("j", "k", "g", "G")
       call network_table_select_delta(session%network_state, vim_navigation_delta(text, session%network_state%row_count))
+      status = network_table_status(session%network_state)
     case ("f")
       call network_table_cycle_state_filter(session%network_state)
+      status = network_table_status(session%network_state)
+      if (.not. session%zoomed) status = status // " (preview updated; zoom for full table)"
     case ("s")
       call network_table_toggle_sort_direction(session%network_state)
+      status = "network table sort " // network_table_sort_key_label(session%network_state) // " " // &
+               network_table_sort_direction_label(session%network_state)
+      if (.not. session%zoomed) status = status // " (preview updated; zoom for full table)"
     case default
       return
     end select
     handled = .true.
-    call set_status(session, network_table_status(session%network_state))
+    call set_status(session, status)
   end function handle_network_printable_key
 
   logical function handle_network_named_key(session, key_name) result(handled)
@@ -1810,6 +2011,12 @@ contains
 
     focused = focused_widget_name(session) == "process"
   end function process_widget_focused
+
+  logical function cpu_widget_focused(session) result(focused)
+    type(terminal_session), intent(in) :: session
+
+    focused = focused_widget_name(session) == "cpu"
+  end function cpu_widget_focused
 
   logical function network_widget_focused(session) result(focused)
     type(terminal_session), intent(in) :: session

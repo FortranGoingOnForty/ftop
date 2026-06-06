@@ -141,7 +141,7 @@ contains
 
     snapshot%memory%valid = .true.
     snapshot%memory%total_bytes = 16_int64 * GIB
-    snapshot%memory%used_bytes = 6_int64 * GIB
+    snapshot%memory%used_bytes = 8_int64 * GIB
     snapshot%memory%free_bytes = 4_int64 * GIB
     snapshot%memory%available_bytes = 8_int64 * GIB
     snapshot%memory%cached_bytes = 2_int64 * GIB

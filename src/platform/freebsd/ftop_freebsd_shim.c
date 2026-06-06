@@ -970,8 +970,8 @@ static int ftop_freebsd_swap_info(long long *total_bytes, long long *used_bytes,
   return 0;
 }
 
-int ftop_freebsd_memory_info(long long *total_bytes, long long *available_bytes, long long *swap_total_bytes,
-    long long *swap_used_bytes, int *sys_errno) {
+int ftop_freebsd_memory_info(long long *total_bytes, long long *free_bytes, long long *available_bytes,
+    long long *swap_total_bytes, long long *swap_used_bytes, int *sys_errno) {
   unsigned long physical_memory;
   unsigned int free_pages;
   unsigned int inactive_pages;
@@ -981,12 +981,13 @@ int ftop_freebsd_memory_info(long long *total_bytes, long long *available_bytes,
   long long page_size;
   int swap_errno;
 
-  if (total_bytes == NULL || available_bytes == NULL || swap_total_bytes == NULL || swap_used_bytes == NULL ||
-      sys_errno == NULL) {
+  if (total_bytes == NULL || free_bytes == NULL || available_bytes == NULL || swap_total_bytes == NULL ||
+      swap_used_bytes == NULL || sys_errno == NULL) {
     return -1;
   }
 
   *total_bytes = 0;
+  *free_bytes = 0;
   *available_bytes = 0;
   *swap_total_bytes = 0;
   *swap_used_bytes = 0;
@@ -1010,11 +1011,13 @@ int ftop_freebsd_memory_info(long long *total_bytes, long long *available_bytes,
   available_pages += ftop_optional_sysctl_uint("vm.stats.vm.v_laundry_count");
 
   *total_bytes = (long long)physical_memory;
+  *free_bytes = (long long)free_pages * page_size;
   *available_bytes = (long long)available_pages * page_size;
   if (*total_bytes <= 0) {
     *sys_errno = EINVAL;
     return -1;
   }
+  if (*free_bytes > *total_bytes) *free_bytes = *total_bytes;
   if (*available_bytes > *total_bytes) *available_bytes = *total_bytes;
   swap_total = 0;
   swap_used = 0;

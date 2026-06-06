@@ -1,11 +1,14 @@
 program test_dashboard
   use, intrinsic :: iso_fortran_env, only : int64, real64
   use fgof_screen, only : allocate_screen
-  use fgof_screen_types, only : screen_buffer
+  use fgof_screen_types, only : screen_buffer, screen_style
   use ftop_collector, only : collector_snapshot
+  use ftop_color, only : rgb, style_from_rgb
   use ftop_dashboard, only : dashboard_layout, default_dashboard_layout, render_dashboard
-  use ftop_network, only : network_table_state
+  use ftop_network, only : NETWORK_SORT_PID, NETWORK_SORT_PROCESS, network_table_state, network_table_toggle_sort_direction, &
+    render_network_panel
   use ftop_services, only : load_service_cache_from_text
+  use ftop_widgets, only : widget_rect
   implicit none
 
   integer(int64), parameter :: GIB = 1024_int64 * 1024_int64 * 1024_int64
@@ -14,9 +17,11 @@ program test_dashboard
 
   call test_default_layout()
   call test_dashboard_renders_metrics()
+  call test_dashboard_scrolls_cpu_cores()
   call test_dashboard_renders_paused_indicator()
   call test_dashboard_renders_zoomed_widget()
   call test_dashboard_renders_zoomed_network_table()
+  call test_network_preview_uses_sort_state()
   call test_dashboard_handles_large_network_table()
   call test_dashboard_renders_network_process_bandwidth()
   call test_tiny_dashboard()
@@ -65,28 +70,47 @@ contains
     call require(index(text, "Network") > 0, "dashboard should render network panel")
     call require(index(text, "Processes") > 0, "dashboard should render process panel by default")
     call require(index(text, "42.5%") > 0, "dashboard should render cpu usage")
-    call require(index(text, "37.5%") > 0, "dashboard should render memory usage")
-    call require(index(text, "6.0 GiB / 16.0 GiB") > 0, "dashboard should render memory bytes")
+    call require(index(text, "50.0%") > 0, "dashboard should render memory usage")
+    call require(index(text, "8.0 GiB / 16.0 GiB") > 0, "dashboard should render memory bytes")
     call require(index(text, "cores 4 threads 8") > 0, "dashboard should render cpu topology")
+    call require(index(text, "1m/5m/15m") > 0, "dashboard should label cpu load averages")
     call require(index(text, "Test CPU") > 0, "dashboard should render cpu model")
     call require(index(text, "uptime 1d 02:03:04") > 0, "dashboard should render uptime")
     call require(index(text, "c0") > 0, "dashboard should render core labels")
-    call require(index(text, "available 8.0 GiB") > 0, "dashboard should render available memory")
+    call require(index(text, "headroom 8.0 GiB") > 0, "dashboard should render memory headroom")
+    call require(index(text, "pressure high") > 0, "dashboard should render memory pressure")
     call require(index(text, "swap 1.0 GiB / 2.0 GiB") > 0, "dashboard should render swap")
     call require(index(text, "Interfaces 1") > 0, "dashboard should render network summary")
     call require(index(text, "eth0 ^ up") > 0, "dashboard should render network interface")
     call require(index(text, "Connections 1") > 0, "dashboard should render network connection count")
     call require(index(text, "127.0.0.1:8080") > 0, "dashboard should render network endpoint")
     call require(index(text, "8080(web)") > 0, "dashboard should render service names")
-    call require(index(text, "refresh 1000ms frame 7 fps 1.0 samples 3") > 0, &
-                 "dashboard should render footer")
-    call require(index(text, "P layout 1-4 presets") > 0, "dashboard should render layout key hints")
+    call require(index(text, "KEYS") > 0, "dashboard should render footer keybar")
+    call require(index(text, "STAT ready") > 0, "dashboard should render footer status")
+    call require(index(text, "1000ms | samples 3") > 0, "dashboard should render compact timing")
+    call require(index(text, "z/Enter zoom") > 0, "dashboard should render mode-aware key hints")
     call require(index(text, "ready") > 0, "dashboard should render status")
 
     call render_dashboard(buffer, snapshot, 1000, 7, "ready", layout_name="network")
     text = buffer_text(buffer)
-    call require(index(text, "layout network") > 0, "dashboard should render active layout name")
+    call require(index(text, "network") > 0, "dashboard should render active layout name")
   end subroutine test_dashboard_renders_metrics
+
+  subroutine test_dashboard_scrolls_cpu_cores()
+    type(screen_buffer) :: buffer
+    type(collector_snapshot) :: snapshot
+    character(len=:), allocatable :: text
+
+    snapshot = large_cpu_snapshot(8)
+    buffer = allocate_screen(60, 16)
+    call render_dashboard(buffer, snapshot, 1000, 1, "ready", focused_widget="cpu", zoomed=.true., &
+                          cpu_core_scroll_offset=3)
+    text = buffer_text(buffer)
+
+    call require(index(text, "1m/5m/15m") > 0, "zoomed cpu should label load averages")
+    call require(index(text, "c3") > 0, "cpu scroll offset should render requested first core")
+    call require(index(text, "c0") == 0, "cpu scroll offset should hide earlier cores")
+  end subroutine test_dashboard_scrolls_cpu_cores
 
   subroutine test_dashboard_renders_paused_indicator()
     type(screen_buffer) :: buffer
@@ -114,7 +138,7 @@ contains
 
     call require(index(text, "Memory") > 0, "zoomed dashboard should render focused memory widget")
     call require(index(text, "CPU 42.5%") == 0, "zoomed dashboard should hide unfocused cpu widget")
-    call require(index(text, "zoom memory") > 0, "zoomed dashboard should render zoom status")
+    call require(index(text, "memory zoom") > 0, "zoomed dashboard should render zoom status")
   end subroutine test_dashboard_renders_zoomed_widget
 
   subroutine test_dashboard_renders_zoomed_network_table()
@@ -137,6 +161,7 @@ contains
     call require(index(text, "STATE") > 0, "zoomed network should render state column")
     call require(index(text, "PROCESS") > 0, "zoomed network should render process column")
     call require(index(text, "filter ESTABLISHED") > 0, "zoomed network should render active state filter")
+    call require(index(text, "sort state asc") > 0, "zoomed network should render active sort")
     call require(index(text, "curl") > 0, "zoomed network should render matching connection")
     call require(index(text, "443(https)") > 0, "zoomed network should render remote service names")
     call require(index(text, "sshd") == 0, "zoomed network should hide filtered listen connection")
@@ -144,7 +169,50 @@ contains
     call require(network_state%row_count == 1, "network table state should track filtered rows")
     call require(network_state%total_row_count == 3, "network table state should track total rows")
     call require(network_state%viewport_rows > 0, "network table state should track viewport rows")
+
+    call network_table_toggle_sort_direction(network_state)
+    call render_dashboard(buffer, snapshot, 1000, 7, "network-test", focused_widget="network", zoomed=.true., &
+                          network_state=network_state)
+    text = buffer_text(buffer)
+    call require(index(text, "sort state desc") > 0, "zoomed network should render flipped sort")
   end subroutine test_dashboard_renders_zoomed_network_table
+
+  subroutine test_network_preview_uses_sort_state()
+    type(screen_buffer) :: buffer
+    type(collector_snapshot) :: snapshot
+    type(network_table_state) :: network_state
+    type(screen_style) :: dim_style
+    type(screen_style) :: title_style
+    character(len=:), allocatable :: text
+
+    title_style = style_from_rgb(fg=rgb(1, 2, 3))
+    snapshot = network_table_snapshot()
+    network_state%sort_key = NETWORK_SORT_PROCESS
+    call network_table_toggle_sort_direction(network_state)
+    buffer = allocate_screen(80, 12)
+    call render_network_panel(buffer, widget_rect(1, 1, 80, 12), snapshot, dim_style, title_style, dim_style, &
+                              network_state, expanded=.false.)
+    text = buffer_text(buffer)
+
+    call require(index(text, "Connections 3 sort process desc") > 0, &
+                 "network preview should render active sort")
+    call require(index(text, "sshd") > 0 .and. index(text, "dnsmasq") > 0 .and. index(text, "curl") > 0, &
+                 "network preview should render connection rows")
+    call require(index(text, "sshd") < index(text, "dnsmasq") .and. index(text, "dnsmasq") < index(text, "curl"), &
+                 "network preview should sort connection rows")
+
+    snapshot = large_network_table_snapshot(6)
+    network_state = network_table_state()
+    network_state%sort_key = NETWORK_SORT_PID
+    network_state%selected_row = 4
+    buffer = allocate_screen(80, 7)
+    call render_network_panel(buffer, widget_rect(1, 1, 80, 7), snapshot, dim_style, title_style, dim_style, &
+                              network_state, expanded=.false.)
+    text = buffer_text(buffer)
+    call require(index(text, "proc4") > 0, "network preview should render scrolled selected row")
+    call require(index(text, "proc1") == 0, "network preview should not always render from first row")
+    call require(text_cell_has_fg(buffer, "proc4"), "network preview should highlight selected row")
+  end subroutine test_network_preview_uses_sort_state
 
   subroutine test_dashboard_handles_large_network_table()
     integer, parameter :: connection_count = 2048
@@ -263,7 +331,7 @@ contains
 
     snapshot%memory%valid = .true.
     snapshot%memory%total_bytes = 16_int64 * GIB
-    snapshot%memory%used_bytes = 6_int64 * GIB
+    snapshot%memory%used_bytes = 8_int64 * GIB
     snapshot%memory%free_bytes = 4_int64 * GIB
     snapshot%memory%available_bytes = 8_int64 * GIB
     snapshot%memory%cached_bytes = 2_int64 * GIB
@@ -294,6 +362,26 @@ contains
     snapshot%network%connections(1)%pid = 1234
     snapshot%network%connections(1)%process_name = "curl"
   end function sample_snapshot
+
+  function large_cpu_snapshot(core_count) result(snapshot)
+    integer, intent(in) :: core_count
+    type(collector_snapshot) :: snapshot
+    integer :: core_index
+
+    snapshot = sample_snapshot()
+    if (allocated(snapshot%cpu_cores)) deallocate(snapshot%cpu_cores)
+    if (allocated(snapshot%cpu_core_usage_history)) deallocate(snapshot%cpu_core_usage_history)
+
+    snapshot%cpu_total%core_count = core_count
+    snapshot%cpu_total%thread_count = core_count
+    allocate(snapshot%cpu_cores(core_count))
+    allocate(snapshot%cpu_core_usage_history(core_count, 4))
+    do core_index = 1, core_count
+      snapshot%cpu_cores(core_index)%valid = .true.
+      snapshot%cpu_cores(core_index)%usage_percent = real(core_index * 10, real64)
+      snapshot%cpu_core_usage_history(core_index, :) = real(core_index * 10, real64)
+    end do
+  end function large_cpu_snapshot
 
   function network_table_snapshot() result(snapshot)
     type(collector_snapshot) :: snapshot
@@ -386,6 +474,23 @@ contains
       end if
     end do
   end function row_text
+
+  logical function text_cell_has_fg(buffer, needle) result(found)
+    type(screen_buffer), intent(in) :: buffer
+    character(len=*), intent(in) :: needle
+    character(len=:), allocatable :: line
+    integer :: col
+    integer :: row
+
+    found = .false.
+    do row = 1, buffer%size%height
+      line = row_text(buffer, row)
+      col = index(line, needle)
+      if (col <= 0) cycle
+      found = buffer%cells(row, col)%style%fg_truecolor
+      return
+    end do
+  end function text_cell_has_fg
 
   subroutine require(condition, message)
     logical, intent(in) :: condition

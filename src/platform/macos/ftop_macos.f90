@@ -406,10 +406,9 @@ contains
     if (rc == 0_c_int .and. total_bytes > 0_c_long_long) then
       info%valid = .true.
       info%total_bytes = int(total_bytes, int64)
-      info%used_bytes = int(max(0_c_long_long, min(total_bytes, used_bytes)), int64)
       info%free_bytes = int(max(0_c_long_long, min(total_bytes, free_bytes)), int64)
       info%available_bytes = int(max(0_c_long_long, min(total_bytes, available_bytes)), int64)
-      info%cached_bytes = max(0_int64, info%available_bytes - info%free_bytes)
+      info%used_bytes = max(0_int64, info%total_bytes - info%available_bytes)
       swap_total_bytes = max(0_c_long_long, swap_total_bytes)
       info%swap_total_bytes = int(swap_total_bytes, int64)
       info%swap_used_bytes = int(max(0_c_long_long, min(swap_total_bytes, swap_used_bytes)), int64)

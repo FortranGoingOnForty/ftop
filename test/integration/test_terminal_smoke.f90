@@ -82,9 +82,49 @@ program test_terminal_smoke
   match = wait_for_string(session, "focus CPU", SMOKE_TIMEOUT_MS)
   if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not focus CPU before arrow right"
 
+  if (.not. send_text(session, achar(13))) error stop "failed to activate CPU core scroll"
+  match = wait_for_string(session, "cpu cores active", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "enter did not activate CPU core scroll"
+
+  if (.not. send_text(session, achar(27) // "[B")) error stop "failed to scroll CPU cores in grid"
+  match = wait_for_string(session, "scroll", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "CPU grid arrow down did not scroll cores"
+
+  if (.not. send_text(session, achar(13))) error stop "failed to zoom active CPU core scroll"
+  match = wait_for_string(session, "zoom cpu", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "second enter did not zoom CPU"
+
+  if (.not. send_text(session, achar(27) // "[B")) error stop "failed to scroll zoomed CPU cores"
+  match = wait_for_string(session, "scroll", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "zoomed CPU arrow down did not scroll cores"
+
+  if (.not. send_text(session, achar(27))) error stop "failed to escape CPU zoom"
+  match = wait_for_string(session, "grid cpu", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "escape did not return from CPU zoom"
+
   if (.not. send_text(session, achar(27) // "[C")) error stop "failed to send arrow right"
   match = wait_for_string(session, "focus memory", SMOKE_TIMEOUT_MS)
   if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop arrow right did not focus memory"
+
+  if (.not. send_text(session, "n")) error stop "failed to focus network before table active mode"
+  match = wait_for_string(session, "focus Network", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not focus network before table active mode"
+
+  if (.not. send_text(session, achar(13))) error stop "failed to activate network table"
+  match = wait_for_string(session, "network table active", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "enter did not activate network table mode"
+
+  if (.not. send_text(session, achar(27) // "[B")) error stop "failed to navigate active network table"
+  match = wait_for_string(session, "navigate", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "active network arrow down did not navigate table"
+
+  if (.not. send_text(session, achar(13))) error stop "failed to zoom active network table"
+  match = wait_for_string(session, "zoom network", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "second enter did not zoom network table"
+
+  if (.not. send_text(session, achar(27))) error stop "failed to escape network zoom"
+  match = wait_for_string(session, "grid network", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "escape did not return from network zoom"
 
   if (.not. send_text(session, "c")) error stop "failed to send CPU focus key before arrow down"
   match = wait_for_string(session, "focus CPU", SMOKE_TIMEOUT_MS)
@@ -102,9 +142,25 @@ program test_terminal_smoke
   match = wait_for_string(session, "focus Process", SMOKE_TIMEOUT_MS)
   if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not refocus process before tree active mode"
 
-  if (.not. send_text(session, achar(13))) error stop "failed to activate process tree"
+  if (.not. send_text(session, achar(27) // "[B")) error stop "failed to activate process tree with bottom down"
   match = wait_for_string(session, "process tree active", SMOKE_TIMEOUT_MS)
-  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "enter did not activate process tree mode"
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "bottom process down did not activate process tree mode"
+
+  if (.not. send_text(session, achar(27))) error stop "failed to escape process tree active mode"
+  match = wait_for_string(session, "focus process", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "escape did not leave process tree active mode"
+
+  if (.not. send_text(session, achar(27) // "[A")) error stop "failed to send inactive process arrow up after escape"
+  match = wait_for_string(session, "focus memory", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "escaped process arrow up did not focus memory"
+
+  if (.not. send_text(session, "p")) error stop "failed to refocus process before active process navigation"
+  match = wait_for_string(session, "focus Process", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not refocus process before active navigation"
+
+  if (.not. send_text(session, achar(13))) error stop "failed to reactivate process tree"
+  match = wait_for_string(session, "process tree active", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "enter did not reactivate process tree mode"
 
   if (.not. send_text(session, achar(27) // "[A")) error stop "failed to send active process arrow up"
   match = wait_for_string(session, "navigate", SMOKE_TIMEOUT_MS)
@@ -114,9 +170,9 @@ program test_terminal_smoke
   match = wait_for_string(session, "zoom process", SMOKE_TIMEOUT_MS)
   if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "second enter did not zoom process tree"
 
-  if (.not. send_text(session, achar(13))) error stop "failed to unzoom process tree"
+  if (.not. send_text(session, achar(27))) error stop "failed to escape process zoom"
   match = wait_for_string(session, "grid process", SMOKE_TIMEOUT_MS)
-  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "enter did not return from process zoom"
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "escape did not return from process zoom"
 
   if (.not. send_text(session, achar(27) // "[Z")) error stop "failed to send Shift+Tab after arrow down"
   match = wait_for_string(session, "focus memory", SMOKE_TIMEOUT_MS)
@@ -156,9 +212,17 @@ program test_terminal_smoke
   match = wait_for_string(session, "zoom memory", SMOKE_TIMEOUT_MS)
   if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not zoom focused widget"
 
-  if (.not. send_text(session, "z")) error stop "failed to send unzoom key"
+  if (.not. send_text(session, achar(27))) error stop "failed to escape memory zoom"
   match = wait_for_string(session, "grid memory", SMOKE_TIMEOUT_MS)
-  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not return to grid view"
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "escape did not return from memory zoom"
+
+  if (.not. send_text(session, achar(13))) error stop "failed to enter memory zoom"
+  match = wait_for_string(session, "zoom memory", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "enter did not zoom focused memory widget"
+
+  if (.not. send_text(session, achar(27))) error stop "failed to escape entered memory zoom"
+  match = wait_for_string(session, "grid memory", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "escape did not return from entered memory zoom"
 
   resized_size%rows = 18
   resized_size%cols = 60
@@ -252,7 +316,7 @@ contains
     filter_match = wait_for_string(filter_session, "1 tagged", SMOKE_TIMEOUT_MS)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not tag selected process"
     if (.not. send_text(filter_session, achar(27) // "[20~")) error stop "failed to send process F9"
-    filter_match = wait_for_string(filter_session, "Send SIGTERM to 1 tagged?", SMOKE_TIMEOUT_MS)
+    filter_match = wait_for_string(filter_session, "Enter send", SMOKE_TIMEOUT_MS)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not open tagged process signal prompt"
     if (.not. send_text(filter_session, achar(27) // achar(27))) error stop "failed to cancel tagged process signal prompt"
     filter_match = wait_for_string(filter_session, "cancelled", SMOKE_TIMEOUT_MS)
@@ -299,11 +363,11 @@ contains
     if (.not. send_text(filter_session, achar(27) // achar(27))) error stop "failed to clear old tree key fuzzy query"
 
     if (.not. send_text(filter_session, achar(27) // "OQ")) error stop "failed to open process signal prompt"
-    filter_match = wait_for_string(filter_session, "signal SIGTERM pid", SMOKE_TIMEOUT_MS)
+    filter_match = wait_for_string(filter_session, "SIGTERM", SMOKE_TIMEOUT_MS)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not open process signal prompt"
 
     if (.not. send_text(filter_session, achar(27) // "[C")) error stop "failed to cycle process signal prompt"
-    filter_match = wait_for_string(filter_session, "signal SIGKILL pid", SMOKE_TIMEOUT_MS)
+    filter_match = wait_for_string(filter_session, "SIGKILL", SMOKE_TIMEOUT_MS)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not cycle process signal prompt"
 
     if (.not. send_text(filter_session, achar(13))) error stop "failed to confirm process signal prompt"

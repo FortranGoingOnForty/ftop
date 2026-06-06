@@ -134,32 +134,106 @@ contains
       line_index = line_index + 1
     end do
 
-    call render_connection_rows(buffer, content, line_index, snapshot, dim_style)
+    if (present(state)) then
+      call render_connection_rows(buffer, content, line_index, snapshot, dim_style, title_style, state)
+    else
+      call render_connection_rows(buffer, content, line_index, snapshot, dim_style)
+    end if
   end subroutine render_network_panel
 
-  subroutine render_connection_rows(buffer, content, line_index, snapshot, dim_style)
+  subroutine render_connection_rows(buffer, content, line_index, snapshot, dim_style, selected_style, state)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: content
     integer, intent(inout) :: line_index
     type(collector_snapshot), intent(in) :: snapshot
     type(screen_style), intent(in) :: dim_style
-    integer :: connection_index
+    type(screen_style), intent(in), optional :: selected_style
+    type(network_table_state), intent(inout), optional :: state
+    type(network_table_state) :: active_state
+    type(net_connection), allocatable :: connections(:)
+    type(screen_style) :: row_style
+    integer :: actual_index
+    integer :: preview_row
+    integer :: start_index
+    integer :: total_count
+    integer :: viewport_rows
+    logical :: stateful
 
     if (line_index > content%height) return
     if (.not. allocated(snapshot%network%connections)) return
-    if (valid_connection_count(snapshot) <= 0) return
+    total_count = valid_connection_count(snapshot)
+    if (total_count <= 0) return
+    active_state = network_table_state()
+    stateful = present(state)
+
+    if (stateful) then
+      active_state = state
+      active_state%total_row_count = total_count
+      connections = visible_connections(snapshot, active_state)
+      call sort_connections(connections, active_state)
+      viewport_rows = max(0, content%height - line_index)
+      call normalize_network_table_state(active_state, size(connections), viewport_rows)
+      state = active_state
+    else
+      connections = valid_connections(snapshot)
+    end if
 
     call render_text(buffer, content_line_rect(content, line_index), &
-                     "Connections " // integer_text(valid_connection_count(snapshot)), dim_style)
+                     compact_connection_summary_text(total_count, size(connections), active_state, stateful), dim_style)
     line_index = line_index + 1
-    do connection_index = 1, size(snapshot%network%connections)
+    if (stateful) then
+      start_index = active_state%scroll_row
+    else
+      start_index = 1
+    end if
+    do preview_row = 1, max(0, content%height - line_index + 1)
+      actual_index = start_index + preview_row - 1
+      if (actual_index > size(connections)) exit
       if (line_index > content%height) exit
-      if (.not. snapshot%network%connections(connection_index)%valid) cycle
+      row_style = dim_style
+      if (stateful .and. actual_index == active_state%selected_row .and. present(selected_style)) row_style = selected_style
       call render_text(buffer, content_line_rect(content, line_index), &
-                       connection_text(snapshot, connection_index), dim_style)
+                       connection_row_text(connections(actual_index)), row_style)
       line_index = line_index + 1
     end do
   end subroutine render_connection_rows
+
+  function valid_connections(snapshot) result(connections)
+    type(collector_snapshot), intent(in) :: snapshot
+    type(net_connection), allocatable :: connections(:)
+    integer :: connection_index
+    integer :: row
+
+    allocate(connections(valid_connection_count(snapshot)))
+    row = 0
+    if (.not. allocated(snapshot%network%connections)) return
+    do connection_index = 1, size(snapshot%network%connections)
+      if (.not. snapshot%network%connections(connection_index)%valid) cycle
+      row = row + 1
+      connections(row) = snapshot%network%connections(connection_index)
+    end do
+  end function valid_connections
+
+  function compact_connection_summary_text(total_count, visible_count, state, stateful) result(text)
+    integer, intent(in) :: total_count
+    integer, intent(in) :: visible_count
+    type(network_table_state), intent(in) :: state
+    logical, intent(in) :: stateful
+    character(len=:), allocatable :: text
+
+    if (.not. stateful) then
+      text = "Connections " // integer_text(max(0, total_count))
+      return
+    end if
+
+    if (visible_count /= total_count .or. len_trim(state%state_filter) > 0) then
+      text = "Connections " // integer_text(max(0, visible_count)) // "/" // integer_text(max(0, total_count))
+    else
+      text = "Connections " // integer_text(max(0, total_count))
+    end if
+    text = text // " sort " // network_table_sort_key_label(state) // " " // network_table_sort_direction_label(state)
+    if (len_trim(state%state_filter) > 0) text = text // " filter " // network_state_filter_label(state)
+  end function compact_connection_summary_text
 
   subroutine render_network_table_panel(buffer, content, snapshot, text_style, title_style, dim_style, state)
     type(screen_buffer), intent(inout) :: buffer
@@ -234,7 +308,8 @@ contains
     character(len=:), allocatable :: text
 
     text = network_summary_text(snapshot) // "  Connections " // integer_text(valid_connection_count(snapshot)) // &
-           "  filter " // network_state_filter_label(state)
+           "  filter " // network_state_filter_label(state) // "  sort " // network_table_sort_key_label(state) // &
+           " " // network_table_sort_direction_label(state)
   end function network_expanded_summary_text
 
   function network_state_filter_label(state) result(text)
@@ -620,22 +695,15 @@ contains
     rate = max(0.0_real64, process%rx_bytes_per_sec) + max(0.0_real64, process%tx_bytes_per_sec)
   end function process_bandwidth_rate
 
-  function connection_text(snapshot, connection_index) result(text)
-    type(collector_snapshot), intent(in) :: snapshot
-    integer, intent(in) :: connection_index
+  function connection_row_text(connection) result(text)
+    type(net_connection), intent(in) :: connection
     character(len=:), allocatable :: text
-    character(len=:), allocatable :: owner
 
-    owner = connection_owner_text(snapshot, connection_index)
-    text = trim(snapshot%network%connections(connection_index)%protocol) // " " // &
-           endpoint_text(snapshot%network%connections(connection_index)%local_addr, &
-                         snapshot%network%connections(connection_index)%local_port, &
-                         snapshot%network%connections(connection_index)%protocol) // &
-           " -> " // endpoint_text(snapshot%network%connections(connection_index)%remote_addr, &
-                                    snapshot%network%connections(connection_index)%remote_port, &
-                                    snapshot%network%connections(connection_index)%protocol) // &
-           " " // trim(snapshot%network%connections(connection_index)%state) // owner
-  end function connection_text
+    text = trim(connection%protocol) // " " // &
+           endpoint_text(connection%local_addr, connection%local_port, connection%protocol) // &
+           " -> " // endpoint_text(connection%remote_addr, connection%remote_port, connection%protocol) // &
+           " " // trim(connection%state) // connection_owner_text(connection)
+  end function connection_row_text
 
   function endpoint_text(address, port, protocol) result(text)
     character(len=*), intent(in) :: address
@@ -663,16 +731,15 @@ contains
     if (len_trim(service_name) > 0) text = text // "(" // service_name // ")"
   end function port_text
 
-  function connection_owner_text(snapshot, connection_index) result(text)
-    type(collector_snapshot), intent(in) :: snapshot
-    integer, intent(in) :: connection_index
+  function connection_owner_text(connection) result(text)
+    type(net_connection), intent(in) :: connection
     character(len=:), allocatable :: text
 
     text = ""
-    if (snapshot%network%connections(connection_index)%pid <= 0) return
-    text = " pid " // integer_text(snapshot%network%connections(connection_index)%pid)
-    if (len_trim(snapshot%network%connections(connection_index)%process_name) > 0) then
-      text = text // " " // trim(snapshot%network%connections(connection_index)%process_name)
+    if (connection%pid <= 0) return
+    text = " pid " // integer_text(connection%pid)
+    if (len_trim(connection%process_name) > 0) then
+      text = text // " " // trim(connection%process_name)
     end if
   end function connection_owner_text
 

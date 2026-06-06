@@ -1,7 +1,13 @@
 program test_metric_data
   use, intrinsic :: iso_fortran_env, only : int64, real64
   use ftop_cpu_data, only : cpu_core_info, cpu_history, cpu_total_info
-  use ftop_mem_data, only : memory_history, memory_info, memory_usage_percent
+  use ftop_mem_data, only : &
+    memory_history, &
+    memory_info, &
+    memory_pressure_label, &
+    memory_reclaimable_bytes, &
+    memory_usage_percent, &
+    memory_used_bytes
   implicit none
 
   call test_cpu_info_defaults()
@@ -77,13 +83,18 @@ contains
 
     info%valid = .true.
     info%total_bytes = 1000_int64
-    info%used_bytes = 250_int64
+    info%available_bytes = 750_int64
+    info%free_bytes = 250_int64
     call require_close(memory_usage_percent(info), 25.0_real64, "memory usage percent mismatch")
+    call require(memory_used_bytes(info) == 250_int64, "memory used bytes mismatch")
+    call require(memory_reclaimable_bytes(info) == 500_int64, "memory reclaimable bytes mismatch")
+    call require(memory_pressure_label(info) == "low", "memory pressure label mismatch")
 
-    info%used_bytes = 1500_int64
+    info%available_bytes = -500_int64
     call require_close(memory_usage_percent(info), 100.0_real64, "memory usage percent must clamp high")
+    call require(memory_pressure_label(info) == "critical", "memory pressure critical label mismatch")
 
-    info%used_bytes = -10_int64
+    info%available_bytes = 1500_int64
     call require_close(memory_usage_percent(info), 0.0_real64, "memory usage percent must clamp low")
   end subroutine test_memory_usage_percent
 
@@ -100,7 +111,7 @@ contains
 
     info%valid = .true.
     info%total_bytes = 1000_int64
-    info%used_bytes = 250_int64
+    info%available_bytes = 750_int64
     call require(history%push_info(info), "memory info push failed")
     call require(history%push_usage(90.0_real64), "memory usage push failed")
     call require(history%push_usage(110.0_real64), "memory usage wrap push failed")

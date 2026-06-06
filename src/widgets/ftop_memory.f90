@@ -12,7 +12,13 @@ module ftop_memory
     rgb, &
     style_from_rgb
   use ftop_graph, only : render_graph
-  use ftop_mem_data, only : memory_info, memory_usage_percent
+  use ftop_mem_data, only : &
+    memory_info, &
+    memory_pressure_label, &
+    memory_pressure_percent, &
+    memory_reclaimable_bytes, &
+    memory_usage_percent, &
+    memory_used_bytes
   use ftop_meter, only : METER_FILL_SHADED, meter_empty_cell_style, meter_label_cell_style, render_meter
   use ftop_text, only : &
     TEXT_ALIGN_CENTER, &
@@ -38,21 +44,25 @@ contains
     size_value%height = 8
   end function memory_panel_min_size
 
-  subroutine render_memory_panel(buffer, panel, snapshot, border_style, title_style, dim_style)
+  subroutine render_memory_panel(buffer, panel, snapshot, border_style, title_style, dim_style, expanded)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: panel
     type(collector_snapshot), intent(in) :: snapshot
     type(screen_style), intent(in) :: border_style
     type(screen_style), intent(in) :: title_style
     type(screen_style), intent(in) :: dim_style
+    logical, intent(in), optional :: expanded
     type(color_gradient) :: memory_gradient
     type(screen_style) :: text_style
     type(widget_rect) :: content
     integer :: graph_height
     integer :: graph_line
+    logical :: expanded_view
 
     memory_gradient = gradient_blue_cyan()
     text_style = style_from_rgb(fg=COLOR_BRIGHT_WHITE)
+    expanded_view = .false.
+    if (present(expanded)) expanded_view = expanded
 
     call draw_box(buffer, panel, BOX_STYLE_ROUNDED, border_style, "Memory", title_style)
     content = box_content_rect(panel)
@@ -60,28 +70,42 @@ contains
 
     call render_text(buffer, content_line_rect(content, 1), memory_summary_text(snapshot), text_style)
     call render_memory_bar(buffer, content_line_rect(content, 2), snapshot%memory, text_style)
-    call render_swap_line(buffer, content_line_rect(content, 3), snapshot, memory_gradient, dim_style, text_style)
-    call render_text(buffer, content_line_rect(content, 4), memory_available_text(snapshot), dim_style)
-    call render_text(buffer, content_line_rect(content, 5), memory_cache_text(snapshot), dim_style)
-    call render_text(buffer, content_line_rect(content, 6), memory_breakdown_text(snapshot), dim_style)
+    call render_text(buffer, content_line_rect(content, 3), memory_pressure_text(snapshot), dim_style)
+    call render_text(buffer, content_line_rect(content, 4), memory_headroom_text(snapshot), dim_style)
+    call render_text(buffer, content_line_rect(content, 5), memory_reclaimable_text(snapshot), dim_style)
+    call render_swap_line(buffer, content_line_rect(content, 6), snapshot, memory_gradient, dim_style, text_style)
 
     graph_line = 7
     graph_height = max(0, content%height - graph_line + 1)
     if (graph_height > 0 .and. allocated(snapshot%memory_usage_history)) then
-      call render_graph(buffer, content_block_rect(content, graph_line, graph_height), &
-                        real(snapshot%memory_usage_history), gradient=memory_gradient, &
-                        min_value=0.0, max_value=100.0, area_fill=.true., style=dim_style)
+      call render_memory_history_graph(buffer, content_block_rect(content, graph_line, graph_height), &
+                                       real(snapshot%memory_usage_history), memory_gradient, dim_style, expanded_view)
     end if
   end subroutine render_memory_panel
+
+  subroutine render_memory_history_graph(buffer, rect, values, memory_gradient, dim_style, expanded)
+    type(screen_buffer), intent(inout) :: buffer
+    type(widget_rect), intent(in) :: rect
+    real, intent(in) :: values(:)
+    type(color_gradient), intent(in) :: memory_gradient
+    type(screen_style), intent(in) :: dim_style
+    logical, intent(in) :: expanded
+
+    if (expanded) then
+      call render_graph(buffer, rect, values, gradient=memory_gradient, &
+                        min_value=0.0, max_value=100.0, area_fill=.true., style=dim_style)
+    else
+      call render_graph(buffer, rect, values, gradient=memory_gradient, area_fill=.true., style=dim_style)
+    end if
+  end subroutine render_memory_history_graph
 
   subroutine render_memory_bar(buffer, rect, info, label_style)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: rect
     type(memory_info), intent(in) :: info
     type(screen_style), intent(in) :: label_style
-    integer(int64) :: cached_bytes
     integer(int64) :: free_bytes
-    integer(int64) :: buffer_bytes
+    integer(int64) :: reclaimable_bytes
     integer(int64) :: used_bytes
     integer :: col
     logical :: free_position
@@ -94,15 +118,14 @@ contains
       return
     end if
 
-    free_bytes = bounded_bytes(info%free_bytes, info%total_bytes)
-    cached_bytes = bounded_bytes(info%cached_bytes, info%total_bytes - free_bytes)
-    buffer_bytes = bounded_bytes(info%buffers_bytes, info%total_bytes - free_bytes - cached_bytes)
-    used_bytes = max(0_int64, info%total_bytes - free_bytes - cached_bytes - buffer_bytes)
+    used_bytes = memory_used_bytes(info)
+    reclaimable_bytes = memory_reclaimable_bytes(info)
+    free_bytes = bounded_bytes(info%free_bytes, max(0_int64, info%total_bytes - used_bytes - reclaimable_bytes))
 
     do col = 1, rect%width
       position = real(info%total_bytes, real64) * (real(col, real64) - 0.5_real64) / real(rect%width, real64)
-      segment_style = memory_segment_style(position, used_bytes, buffer_bytes, cached_bytes)
-      free_position = memory_position_is_free(position, used_bytes, buffer_bytes, cached_bytes)
+      segment_style = memory_segment_style(position, used_bytes, reclaimable_bytes)
+      free_position = memory_position_is_free(position, used_bytes, reclaimable_bytes)
       if (free_position) then
         call put_glyph(buffer, rect%row, rect%col + col - 1, "░", meter_empty_cell_style(segment_style))
       else
@@ -110,18 +133,17 @@ contains
       end if
     end do
     call render_memory_bar_label(buffer, rect, format_percent(real(memory_usage_percent(info))), label_style, &
-                                 info%total_bytes, used_bytes, buffer_bytes, cached_bytes)
+                                 info%total_bytes, used_bytes, reclaimable_bytes)
   end subroutine render_memory_bar
 
-  subroutine render_memory_bar_label(buffer, rect, label, label_style, total_bytes, used_bytes, buffer_bytes, cached_bytes)
+  subroutine render_memory_bar_label(buffer, rect, label, label_style, total_bytes, used_bytes, reclaimable_bytes)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: rect
     character(len=*), intent(in) :: label
     type(screen_style), intent(in) :: label_style
     integer(int64), intent(in) :: total_bytes
     integer(int64), intent(in) :: used_bytes
-    integer(int64), intent(in) :: buffer_bytes
-    integer(int64), intent(in) :: cached_bytes
+    integer(int64), intent(in) :: reclaimable_bytes
     character(len=:), allocatable :: clipped
     type(screen_style) :: segment_style
     integer :: draw_col
@@ -150,8 +172,8 @@ contains
       if (target_col >= rect%col) then
         segment_col = target_col - rect%col + 1
         position = real(total_bytes, real64) * (real(segment_col, real64) - 0.5_real64) / real(rect%width, real64)
-        segment_style = memory_segment_style(position, used_bytes, buffer_bytes, cached_bytes)
-        free_position = memory_position_is_free(position, used_bytes, buffer_bytes, cached_bytes)
+        segment_style = memory_segment_style(position, used_bytes, reclaimable_bytes)
+        free_position = memory_position_is_free(position, used_bytes, reclaimable_bytes)
         if (free_position) segment_style = meter_empty_cell_style(segment_style)
         call put_glyph(buffer, rect%row, target_col, clipped(i:i + glyph_bytes - 1), &
                        meter_label_cell_style(label_style, segment_style))
@@ -161,39 +183,33 @@ contains
     end do
   end subroutine render_memory_bar_label
 
-  function memory_segment_style(position, used_bytes, buffer_bytes, cached_bytes) result(style)
+  function memory_segment_style(position, used_bytes, reclaimable_bytes) result(style)
     real(real64), intent(in) :: position
     integer(int64), intent(in) :: used_bytes
-    integer(int64), intent(in) :: buffer_bytes
-    integer(int64), intent(in) :: cached_bytes
+    integer(int64), intent(in) :: reclaimable_bytes
     type(screen_style) :: style
     real(real64) :: used_limit
-    real(real64) :: buffers_limit
-    real(real64) :: cached_limit
+    real(real64) :: reclaimable_limit
 
     used_limit = real(used_bytes, real64)
-    buffers_limit = used_limit + real(buffer_bytes, real64)
-    cached_limit = buffers_limit + real(cached_bytes, real64)
+    reclaimable_limit = used_limit + real(reclaimable_bytes, real64)
     if (position <= used_limit) then
       style = style_from_rgb(fg=rgb(231, 76, 60))
-    else if (position <= buffers_limit) then
-      style = style_from_rgb(fg=rgb(241, 196, 15))
-    else if (position <= cached_limit) then
+    else if (position <= reclaimable_limit) then
       style = style_from_rgb(fg=rgb(52, 152, 219))
     else
       style = style_from_rgb(fg=COLOR_UI_DIM)
     end if
   end function memory_segment_style
 
-  logical function memory_position_is_free(position, used_bytes, buffer_bytes, cached_bytes) result(is_free)
+  logical function memory_position_is_free(position, used_bytes, reclaimable_bytes) result(is_free)
     real(real64), intent(in) :: position
     integer(int64), intent(in) :: used_bytes
-    integer(int64), intent(in) :: buffer_bytes
-    integer(int64), intent(in) :: cached_bytes
-    real(real64) :: cached_limit
+    integer(int64), intent(in) :: reclaimable_bytes
+    real(real64) :: reclaimable_limit
 
-    cached_limit = real(used_bytes + buffer_bytes + cached_bytes, real64)
-    is_free = position > cached_limit
+    reclaimable_limit = real(used_bytes + reclaimable_bytes, real64)
+    is_free = position > reclaimable_limit
   end function memory_position_is_free
 
   subroutine render_swap_line(buffer, rect, snapshot, memory_gradient, dim_style, text_style)
@@ -244,7 +260,7 @@ contains
     character(len=:), allocatable :: text
 
     if (snapshot%memory%valid) then
-      text = "Memory " // format_bytes(snapshot%memory%used_bytes) // " / " // &
+      text = "Memory " // format_bytes(memory_used_bytes(snapshot%memory)) // " / " // &
              format_bytes(snapshot%memory%total_bytes) // " (" // &
              format_percent(real(memory_usage_percent(snapshot%memory))) // ")"
     else
@@ -252,41 +268,52 @@ contains
     end if
   end function memory_summary_text
 
-  function memory_available_text(snapshot) result(text)
+  function memory_pressure_text(snapshot) result(text)
     type(collector_snapshot), intent(in) :: snapshot
     character(len=:), allocatable :: text
 
     if (snapshot%memory%valid) then
-      text = "available " // format_bytes(snapshot%memory%available_bytes) // &
-             "  free " // format_bytes(snapshot%memory%free_bytes)
+      text = "pressure " // memory_pressure_label(snapshot%memory)
     else
-      text = "available unknown"
+      text = "pressure unknown"
     end if
-  end function memory_available_text
+  end function memory_pressure_text
 
-  function memory_cache_text(snapshot) result(text)
+  function memory_headroom_text(snapshot) result(text)
     type(collector_snapshot), intent(in) :: snapshot
     character(len=:), allocatable :: text
+    integer(int64) :: free_bytes
+    integer(int64) :: headroom_bytes
 
     if (snapshot%memory%valid) then
-      text = "cache " // format_bytes(snapshot%memory%cached_bytes) // &
-             "  buffers " // format_bytes(snapshot%memory%buffers_bytes)
+      headroom_bytes = bounded_bytes(snapshot%memory%available_bytes, snapshot%memory%total_bytes)
+      free_bytes = bounded_bytes(snapshot%memory%free_bytes, headroom_bytes)
+      text = "headroom " // format_bytes(headroom_bytes)
+      if (free_bytes < headroom_bytes) text = text // "  free " // format_bytes(free_bytes)
     else
-      text = "cache unknown"
+      text = "headroom unknown"
     end if
-  end function memory_cache_text
+  end function memory_headroom_text
 
-  function memory_breakdown_text(snapshot) result(text)
+  function memory_reclaimable_text(snapshot) result(text)
     type(collector_snapshot), intent(in) :: snapshot
     character(len=:), allocatable :: text
+    integer(int64) :: cache_bytes
+    integer(int64) :: reclaimable_bytes
 
     if (snapshot%memory%valid) then
-      text = "used " // format_bytes(snapshot%memory%used_bytes) // &
-             "  free " // format_bytes(snapshot%memory%free_bytes)
+      reclaimable_bytes = memory_reclaimable_bytes(snapshot%memory)
+      cache_bytes = max(0_int64, snapshot%memory%cached_bytes + snapshot%memory%buffers_bytes)
+      if (reclaimable_bytes > 0_int64) then
+        text = "reclaim " // format_bytes(reclaimable_bytes)
+        if (cache_bytes > 0_int64) text = text // "  cache " // format_bytes(cache_bytes)
+      else
+        text = "reclaim none"
+      end if
     else
-      text = "used unknown"
+      text = "reclaim unknown"
     end if
-  end function memory_breakdown_text
+  end function memory_reclaimable_text
 
   function swap_text(snapshot) result(text)
     type(collector_snapshot), intent(in) :: snapshot

@@ -17,6 +17,7 @@ module ftop_cpu
   private
 
   public :: cpu_panel_min_size
+  public :: cpu_core_scroll_limit
   public :: render_cpu_panel
 
 contains
@@ -28,19 +29,21 @@ contains
     size_value%height = 9
   end function cpu_panel_min_size
 
-  subroutine render_cpu_panel(buffer, panel, snapshot, border_style, title_style, dim_style)
+  subroutine render_cpu_panel(buffer, panel, snapshot, border_style, title_style, dim_style, core_scroll_offset)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: panel
     type(collector_snapshot), intent(in) :: snapshot
     type(screen_style), intent(in) :: border_style
     type(screen_style), intent(in) :: title_style
     type(screen_style), intent(in) :: dim_style
+    integer, intent(in), optional :: core_scroll_offset
     type(color_gradient) :: usage_gradient
     type(screen_style) :: text_style
     type(widget_rect) :: content
     integer :: core_start_line
     integer :: graph_height
     integer :: graph_line
+    integer :: scroll_offset
 
     usage_gradient = gradient_green_yellow_red()
     text_style = style_from_rgb(fg=COLOR_BRIGHT_WHITE)
@@ -59,7 +62,7 @@ contains
     call render_text(buffer, content_line_rect(content, 6), cpu_frequency_temp_text(snapshot), dim_style)
 
     graph_line = 7
-    graph_height = min(4, max(0, content%height - graph_line - 1))
+    graph_height = cpu_graph_height(content, graph_line, snapshot)
     if (graph_height > 0 .and. allocated(snapshot%cpu_usage_history)) then
       call render_cpu_history(buffer, content, graph_line, graph_height, snapshot, usage_gradient, dim_style)
       core_start_line = graph_line + graph_height
@@ -67,8 +70,33 @@ contains
       core_start_line = graph_line
     end if
 
-    call render_core_sparklines(buffer, content, core_start_line, snapshot, usage_gradient, dim_style)
+    scroll_offset = 0
+    if (present(core_scroll_offset)) scroll_offset = core_scroll_offset
+    call render_core_sparklines(buffer, content, core_start_line, snapshot, usage_gradient, dim_style, scroll_offset)
   end subroutine render_cpu_panel
+
+  integer function cpu_core_scroll_limit(panel, snapshot) result(limit)
+    type(widget_rect), intent(in) :: panel
+    type(collector_snapshot), intent(in) :: snapshot
+    type(widget_rect) :: content
+    integer :: core_count
+    integer :: start_line
+    integer :: visible_rows
+
+    limit = 0
+    if (.not. allocated(snapshot%cpu_cores)) return
+    core_count = size(snapshot%cpu_cores)
+    if (core_count <= 0) return
+
+    content = box_content_rect(panel)
+    if (content%height <= 0 .or. content%width <= 0) return
+
+    start_line = cpu_core_start_line(content, snapshot)
+    visible_rows = cpu_core_visible_rows(content, start_line)
+    if (visible_rows <= 0) return
+
+    limit = max(0, core_count - visible_rows)
+  end function cpu_core_scroll_limit
 
   subroutine render_cpu_history(buffer, content, start_line, height, snapshot, usage_gradient, dim_style)
     type(screen_buffer), intent(inout) :: buffer
@@ -91,50 +119,105 @@ contains
     end if
   end subroutine render_cpu_history
 
-  subroutine render_core_sparklines(buffer, content, start_line, snapshot, usage_gradient, dim_style)
+  subroutine render_core_sparklines(buffer, content, start_line, snapshot, usage_gradient, dim_style, core_scroll_offset)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: content
     integer, intent(in) :: start_line
     type(collector_snapshot), intent(in) :: snapshot
     type(color_gradient), intent(in) :: usage_gradient
     type(screen_style), intent(in) :: dim_style
+    integer, intent(in) :: core_scroll_offset
     type(widget_rect) :: label_rect
     type(widget_rect) :: line
     type(widget_rect) :: spark_rect
+    integer :: actual_core_index
     integer :: core_count
     integer :: core_index
     integer :: label_width
+    integer :: scroll_offset
     integer :: visible_count
+    integer :: visible_rows
 
     if (.not. allocated(snapshot%cpu_cores)) return
     core_count = size(snapshot%cpu_cores)
     if (core_count <= 0 .or. start_line > content%height) return
 
     label_width = min(5, content%width)
-    visible_count = min(core_count, content%height - start_line + 1)
+    visible_rows = cpu_core_visible_rows(content, start_line)
+    scroll_offset = bounded_cpu_core_scroll_offset(snapshot, visible_rows, core_scroll_offset)
+    visible_count = min(core_count - scroll_offset, visible_rows)
     do core_index = 1, visible_count
+      actual_core_index = scroll_offset + core_index
       line = content_line_rect(content, start_line + core_index - 1)
       if (line%width <= 0) cycle
       label_rect = widget_rect(line%row, line%col, label_width, 1)
-      call render_text(buffer, label_rect, "c" // integer_text(core_index - 1), dim_style)
+      call render_text(buffer, label_rect, "c" // integer_text(actual_core_index - 1), dim_style)
       if (line%width <= label_width + 1) cycle
 
       spark_rect = widget_rect(line%row, line%col + label_width + 1, &
                                line%width - label_width - 1, 1)
       if (allocated(snapshot%cpu_core_usage_history)) then
-        if (core_index <= size(snapshot%cpu_core_usage_history, 1)) then
+        if (actual_core_index <= size(snapshot%cpu_core_usage_history, 1)) then
           call render_sparkline(buffer, spark_rect, &
-                                real(snapshot%cpu_core_usage_history(core_index, :)), &
+                                real(snapshot%cpu_core_usage_history(actual_core_index, :)), &
                                 gradient=usage_gradient, min_value=0.0, max_value=100.0, &
                                 style=dim_style)
         end if
       else
-        call render_meter(buffer, spark_rect, core_usage_fraction(snapshot, core_index), &
+        call render_meter(buffer, spark_rect, core_usage_fraction(snapshot, actual_core_index), &
                           gradient=usage_gradient, fill_mode=METER_FILL_SHADED, &
                           empty_style=dim_style, label_style=dim_style)
       end if
     end do
   end subroutine render_core_sparklines
+
+  integer function cpu_core_start_line(content, snapshot) result(start_line)
+    type(widget_rect), intent(in) :: content
+    type(collector_snapshot), intent(in) :: snapshot
+    integer :: graph_line
+    integer :: height
+
+    graph_line = 7
+    height = cpu_graph_height(content, graph_line, snapshot)
+    if (height > 0 .and. allocated(snapshot%cpu_usage_history)) then
+      start_line = graph_line + height
+    else
+      start_line = graph_line
+    end if
+  end function cpu_core_start_line
+
+  integer function cpu_graph_height(content, graph_line, snapshot) result(height)
+    type(widget_rect), intent(in) :: content
+    integer, intent(in) :: graph_line
+    type(collector_snapshot), intent(in) :: snapshot
+
+    height = 0
+    if (.not. allocated(snapshot%cpu_usage_history)) return
+    height = min(4, max(0, content%height - graph_line - 1))
+  end function cpu_graph_height
+
+  integer function cpu_core_visible_rows(content, start_line) result(rows)
+    type(widget_rect), intent(in) :: content
+    integer, intent(in) :: start_line
+
+    rows = max(0, content%height - start_line + 1)
+  end function cpu_core_visible_rows
+
+  integer function bounded_cpu_core_scroll_offset(snapshot, visible_rows, requested_offset) result(offset)
+    type(collector_snapshot), intent(in) :: snapshot
+    integer, intent(in) :: visible_rows
+    integer, intent(in) :: requested_offset
+    integer :: core_count
+    integer :: limit
+
+    offset = 0
+    if (.not. allocated(snapshot%cpu_cores)) return
+    core_count = size(snapshot%cpu_cores)
+    if (core_count <= 0 .or. visible_rows <= 0) return
+
+    limit = max(0, core_count - visible_rows)
+    offset = max(0, min(limit, requested_offset))
+  end function bounded_cpu_core_scroll_offset
 
   function content_line_rect(content, line_index) result(line)
     type(widget_rect), intent(in) :: content
@@ -192,7 +275,7 @@ contains
 
     text = "cores " // integer_text(snapshot%cpu_total%core_count) // &
            " threads " // integer_text(snapshot%cpu_total%thread_count)
-    if (snapshot%cpu_total%load_valid) text = text // "  " // format_load(snapshot%cpu_total%load_avg)
+    if (snapshot%cpu_total%load_valid) text = text // " " // format_load(snapshot%cpu_total%load_avg)
   end function cpu_detail_text
 
   function cpu_model_text(snapshot) result(text)
@@ -309,8 +392,8 @@ contains
     real(real64), intent(in) :: load_avg(3)
     character(len=:), allocatable :: text
 
-    text = "load " // real_text(load_avg(1)) // " " // real_text(load_avg(2)) // &
-           " " // real_text(load_avg(3))
+    text = "1m/5m/15m " // real_text(load_avg(1)) // "/" // real_text(load_avg(2)) // &
+           "/" // real_text(load_avg(3))
   end function format_load
 
   function real_text(value) result(text)

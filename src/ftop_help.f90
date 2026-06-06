@@ -26,19 +26,19 @@ module ftop_help
       "c/m/n/p: focus CPU/Memory/Network/Process", &
       "d/g: disk/GPU placeholder status", &
       "P: cycle layout   1-4: jump layouts", &
-      "arrows: focus panes; process Enter activates tree", &
+      "arrows: focus panes; Enter activates CPU/network modes", &
       "Tab: next focus   Shift+Tab: last focus", &
       "z: zoom   Enter: activate/zoom focus", &
       "Ctrl+L: redraw   Ctrl+R: refresh", &
-      "?/F1: help"]), &
-    help_section("Process", "process", 5, [character(len=HELP_LINE_LEN) :: &
+      "?/F1: help   Esc: leave zoom/help"]), &
+    help_section("Process", "process", 7, [character(len=HELP_LINE_LEN) :: &
       "F2: signal   F3: tree   F4: filter   F5: sort dir", &
       "F6: sparklines   F7: pause   F8: follow", &
       "F9: signal tags   F10: command detail", &
       "Space: tag   U: clear tags", &
-      "Enter: tree active/zoom   Page/Home/End/j/k/g/G: navigate", &
-      "", &
-      "", &
+      "Enter/Down: tree active   Enter again: zoom", &
+      "Page/Home/End/j/k/g/G: navigate", &
+      "Esc: return arrows/leave zoom", &
       ""]), &
     help_section("Network", "network", 2, [character(len=HELP_LINE_LEN) :: &
       "f: state filter   s: sort direction", &

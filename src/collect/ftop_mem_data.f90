@@ -32,7 +32,11 @@ module ftop_mem_data
     final :: memory_history_finalize
   end type memory_history
 
+  public :: memory_pressure_label
+  public :: memory_pressure_percent
+  public :: memory_reclaimable_bytes
   public :: memory_usage_percent
+  public :: memory_used_bytes
 
 contains
 
@@ -42,9 +46,68 @@ contains
     usage_percent = 0.0_real64
     if (.not. info%valid) return
     if (info%total_bytes <= 0_int64) return
-    usage_percent = 100.0_real64 * real(info%used_bytes, real64) / real(info%total_bytes, real64)
+    usage_percent = 100.0_real64 * real(memory_used_bytes(info), real64) / real(info%total_bytes, real64)
     usage_percent = max(0.0_real64, min(100.0_real64, usage_percent))
   end function memory_usage_percent
+
+  integer(int64) function memory_used_bytes(info) result(bytes)
+    type(memory_info), intent(in) :: info
+    integer(int64) :: available_bytes
+
+    bytes = 0_int64
+    if (.not. info%valid) return
+    if (info%total_bytes <= 0_int64) return
+    available_bytes = bounded_bytes(info%available_bytes, info%total_bytes)
+    bytes = max(0_int64, info%total_bytes - available_bytes)
+  end function memory_used_bytes
+
+  integer(int64) function memory_reclaimable_bytes(info) result(bytes)
+    type(memory_info), intent(in) :: info
+    integer(int64) :: available_bytes
+    integer(int64) :: free_bytes
+
+    bytes = 0_int64
+    if (.not. info%valid) return
+    if (info%total_bytes <= 0_int64) return
+    available_bytes = bounded_bytes(info%available_bytes, info%total_bytes)
+    free_bytes = bounded_bytes(info%free_bytes, available_bytes)
+    bytes = max(0_int64, available_bytes - free_bytes)
+  end function memory_reclaimable_bytes
+
+  real(real64) function memory_pressure_percent(info) result(pressure_percent)
+    type(memory_info), intent(in) :: info
+
+    pressure_percent = memory_usage_percent(info)
+  end function memory_pressure_percent
+
+  function memory_pressure_label(info) result(label)
+    type(memory_info), intent(in) :: info
+    character(len=:), allocatable :: label
+    real(real64) :: available_fraction
+    real(real64) :: swap_fraction
+
+    label = "unknown"
+    if (.not. info%valid) return
+    if (info%total_bytes <= 0_int64) return
+
+    available_fraction = real(bounded_bytes(info%available_bytes, info%total_bytes), real64) / &
+                         real(info%total_bytes, real64)
+    swap_fraction = 0.0_real64
+    if (info%swap_total_bytes > 0_int64) then
+      swap_fraction = real(max(0_int64, min(info%swap_total_bytes, info%swap_used_bytes)), real64) / &
+                      real(info%swap_total_bytes, real64)
+    end if
+
+    if (available_fraction <= 0.05_real64 .or. swap_fraction >= 0.80_real64) then
+      label = "critical"
+    else if (available_fraction <= 0.10_real64 .or. swap_fraction >= 0.50_real64) then
+      label = "high"
+    else if (available_fraction <= 0.20_real64 .or. swap_fraction >= 0.25_real64) then
+      label = "medium"
+    else
+      label = "low"
+    end if
+  end function memory_pressure_label
 
   logical function memory_history_init(self, history_capacity) result(success)
     class(memory_history), intent(inout) :: self
@@ -128,5 +191,12 @@ contains
 
     clamped = max(0.0_real64, min(100.0_real64, value))
   end function clamp_percent
+
+  integer(int64) function bounded_bytes(bytes, limit) result(bounded)
+    integer(int64), intent(in) :: bytes
+    integer(int64), intent(in) :: limit
+
+    bounded = max(0_int64, min(max(0_int64, limit), bytes))
+  end function bounded_bytes
 
 end module ftop_mem_data
