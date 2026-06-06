@@ -71,8 +71,11 @@ module ftop_disk_data
     logical :: valid = .false.
     type(filesystem_info), allocatable :: filesystems(:)
     type(disk_io_info), allocatable :: io(:)
+    type(disk_io_rate_info), allocatable :: io_rates(:)
+    type(disk_latency_info), allocatable :: latencies(:)
   end type disk_table
 
+  public :: assign_disk_io_metrics
   public :: disk_table_from_c
   public :: disk_io_latency_from_delta
   public :: disk_io_rate_from_delta
@@ -154,6 +157,33 @@ contains
     percent = max(0.0_real64, min(100.0_real64, percent))
   end function filesystem_usage_percent
 
+  subroutine assign_disk_io_metrics(current, previous, elapsed_ms)
+    type(disk_table), intent(inout) :: current
+    type(disk_table), intent(in) :: previous
+    integer(int64), intent(in) :: elapsed_ms
+    integer :: io_index
+    integer :: previous_index
+    integer :: io_count
+
+    io_count = 0
+    if (allocated(current%io)) io_count = size(current%io)
+    if (allocated(current%io_rates)) deallocate(current%io_rates)
+    if (allocated(current%latencies)) deallocate(current%latencies)
+    allocate(current%io_rates(io_count))
+    allocate(current%latencies(io_count))
+
+    do io_index = 1, io_count
+      current%io_rates(io_index)%device = current%io(io_index)%device
+      current%latencies(io_index)%device = current%io(io_index)%device
+      previous_index = matching_disk_io_index(previous, current%io(io_index)%device)
+      if (previous_index <= 0) cycle
+      current%io_rates(io_index) = disk_io_rate_from_delta(previous%io(previous_index), current%io(io_index), elapsed_ms)
+      current%latencies(io_index) = disk_io_latency_from_delta(previous%io(previous_index), current%io(io_index))
+      if (len_trim(current%io_rates(io_index)%device) <= 0) current%io_rates(io_index)%device = current%io(io_index)%device
+      if (len_trim(current%latencies(io_index)%device) <= 0) current%latencies(io_index)%device = current%io(io_index)%device
+    end do
+  end subroutine assign_disk_io_metrics
+
   function disk_io_rate_from_delta(previous, current, elapsed_ms) result(rate)
     type(disk_io_info), intent(in) :: previous
     type(disk_io_info), intent(in) :: current
@@ -229,6 +259,22 @@ contains
                 current%io_time_ms < previous%io_time_ms .or. &
                 current%weighted_io_time_ms < previous%weighted_io_time_ms
   end function any_disk_io_counter_regressed
+
+  integer function matching_disk_io_index(table, device) result(match_index)
+    type(disk_table), intent(in) :: table
+    character(len=*), intent(in) :: device
+    integer :: io_index
+
+    match_index = 0
+    if (len_trim(device) <= 0) return
+    if (.not. allocated(table%io)) return
+    do io_index = 1, size(table%io)
+      if (table%io(io_index)%valid .and. trim(table%io(io_index)%device) == trim(device)) then
+        match_index = io_index
+        return
+      end if
+    end do
+  end function matching_disk_io_index
 
   logical function filesystem_pseudo_type(fstype) result(pseudo)
     character(len=*), intent(in) :: fstype

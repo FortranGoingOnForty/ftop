@@ -5,8 +5,8 @@ program test_disk
   use fgof_screen_types, only : screen_buffer, screen_style
   use ftop_collector, only : collector_snapshot
   use ftop_disk, only : disk_table_state, disk_table_status, render_disk_panel
-  use ftop_disk_data, only : c_filesystem_info, disk_io_info, disk_io_latency_from_delta, disk_io_rate_from_delta, &
-    disk_io_rate_info, disk_latency_info, disk_table_from_c, filesystem_usage_percent
+  use ftop_disk_data, only : assign_disk_io_metrics, c_filesystem_info, disk_io_info, disk_io_latency_from_delta, &
+    disk_io_rate_from_delta, disk_io_rate_info, disk_latency_info, disk_table, disk_table_from_c, filesystem_usage_percent
   use ftop_widgets, only : widget_rect
   implicit none
 
@@ -16,6 +16,7 @@ program test_disk
   call test_disk_table_filters_pseudo_filesystems()
   call test_disk_io_rates_from_delta()
   call test_disk_io_latency_from_delta()
+  call test_assign_disk_io_metrics()
   call test_disk_io_delta_rejects_mismatched_samples()
   call test_disk_panel_renders_compact_and_expanded()
 
@@ -87,6 +88,33 @@ contains
     call require_close(latency%avg_read_latency_us, 4000.0_real64, "disk read latency mismatch")
     call require_close(latency%avg_write_latency_us, 6000.0_real64, "disk write latency mismatch")
   end subroutine test_disk_io_latency_from_delta
+
+  subroutine test_assign_disk_io_metrics()
+    type(disk_table) :: previous
+    type(disk_table) :: current
+
+    previous%valid = .true.
+    allocate(previous%io(1))
+    previous%io(1) = disk_io_sample("sda", 1000_int64, 2000_int64, 10_int64, 20_int64, 100_int64, 200_int64, 50_int64)
+    current%valid = .true.
+    allocate(current%io(2))
+    current%io(1) = disk_io_sample("sda", 3000_int64, 5000_int64, 30_int64, 40_int64, 160_int64, 260_int64, 80_int64)
+    current%io(2) = disk_io_sample("sdb", 100_int64, 200_int64, 1_int64, 2_int64, 3_int64, 4_int64, 5_int64)
+
+    call assign_disk_io_metrics(current, previous, 1000_int64)
+    call require(allocated(current%io_rates), "disk table should allocate IO rates")
+    call require(allocated(current%latencies), "disk table should allocate latencies")
+    call require(size(current%io_rates) == 2, "disk table IO rate count mismatch")
+    call require(size(current%latencies) == 2, "disk table latency count mismatch")
+    call require(current%io_rates(1)%valid, "matching disk IO rate should be valid")
+    call require_close(current%io_rates(1)%read_bytes_per_sec, 2000.0_real64, "assigned disk read rate mismatch")
+    call require(current%latencies(1)%valid, "matching disk latency should be valid")
+    call require_close(current%latencies(1)%avg_read_latency_us, 3000.0_real64, "assigned disk read latency mismatch")
+    call require(.not. current%io_rates(2)%valid, "unmatched disk IO rate should be invalid")
+    call require(trim(current%io_rates(2)%device) == "sdb", "unmatched disk IO rate should keep device name")
+    call require(.not. current%latencies(2)%valid, "unmatched disk latency should be invalid")
+    call require(trim(current%latencies(2)%device) == "sdb", "unmatched disk latency should keep device name")
+  end subroutine test_assign_disk_io_metrics
 
   subroutine test_disk_io_delta_rejects_mismatched_samples()
     type(disk_io_info) :: previous

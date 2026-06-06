@@ -287,6 +287,10 @@ contains
     call require(snapshot%disk%valid, "collector disk table must be valid")
     call require(allocated(snapshot%disk%filesystems), "collector disk filesystems must be allocated")
     call require(allocated(snapshot%disk%io), "collector disk IO must be allocated")
+    call require(allocated(snapshot%disk%io_rates), "collector disk IO rates must be allocated")
+    call require(allocated(snapshot%disk%latencies), "collector disk latencies must be allocated")
+    call require(size(snapshot%disk%io_rates) == size(snapshot%disk%io), "collector disk IO rate size mismatch")
+    call require(size(snapshot%disk%latencies) == size(snapshot%disk%io), "collector disk latency size mismatch")
     do io_index = 1, size(snapshot%disk%io)
       if (.not. snapshot%disk%io(io_index)%valid) cycle
       call require(len_trim(snapshot%disk%io(io_index)%device) > 0, "collector disk IO device must not be empty")
@@ -295,6 +299,36 @@ contains
       call require(snapshot%disk%io(io_index)%read_ops >= 0, "collector disk IO read ops must not be negative")
       call require(snapshot%disk%io(io_index)%write_ops >= 0, "collector disk IO write ops must not be negative")
       call require(snapshot%disk%io(io_index)%sector_size_bytes > 0, "collector disk IO sector size must be positive")
+      call require(trim(snapshot%disk%io_rates(io_index)%device) == trim(snapshot%disk%io(io_index)%device), &
+                   "collector disk IO rate device mismatch")
+      call require(trim(snapshot%disk%latencies(io_index)%device) == trim(snapshot%disk%io(io_index)%device), &
+                   "collector disk latency device mismatch")
+      if (snapshot%disk%io_rates(io_index)%valid) then
+        call require(snapshot%disk%io_rates(io_index)%read_bytes_per_sec >= 0.0_real64, &
+                     "collector disk read rate must not be negative")
+        call require(snapshot%disk%io_rates(io_index)%write_bytes_per_sec >= 0.0_real64, &
+                     "collector disk write rate must not be negative")
+        call require(snapshot%disk%io_rates(io_index)%read_ops_per_sec >= 0.0_real64, &
+                     "collector disk read op rate must not be negative")
+        call require(snapshot%disk%io_rates(io_index)%write_ops_per_sec >= 0.0_real64, &
+                     "collector disk write op rate must not be negative")
+        call require(snapshot%disk%io_rates(io_index)%busy_percent >= 0.0_real64, &
+                     "collector disk busy percent must not be negative")
+        call require(snapshot%disk%io_rates(io_index)%busy_percent <= 100.0_real64, &
+                     "collector disk busy percent must not exceed 100")
+      end if
+      if (snapshot%disk%latencies(io_index)%valid) then
+        if (snapshot%disk%latencies(io_index)%read_valid) then
+          call require(snapshot%disk%latencies(io_index)%avg_read_latency_us >= 0.0_real64, &
+                       "collector disk read latency must not be negative")
+        end if
+        if (snapshot%disk%latencies(io_index)%write_valid) then
+          call require(snapshot%disk%latencies(io_index)%avg_write_latency_us >= 0.0_real64, &
+                       "collector disk write latency must not be negative")
+        end if
+        call require(snapshot%disk%latencies(io_index)%p99_latency_us >= 0.0_real64, &
+                     "collector disk latency p99 proxy must not be negative")
+      end if
     end do
   end subroutine validate_disk_snapshot
 

@@ -23,7 +23,10 @@ module ftop_collector
     DISK_FSTYPE_LEN, &
     DISK_IO_CAPACITY, &
     DISK_MOUNTPOINT_LEN, &
+    assign_disk_io_metrics, &
     disk_io_info, &
+    disk_io_rate_info, &
+    disk_latency_info, &
     disk_table
   use ftop_mem_data, only : metric_memory_info => memory_info
   use ftop_net_data, only : &
@@ -204,6 +207,18 @@ module ftop_collector
     integer(c_long_long) :: disk_io_io_time_ms(FTOP_COLLECTOR_MAX_DISK_IO)
     integer(c_long_long) :: disk_io_weighted_io_time_ms(FTOP_COLLECTOR_MAX_DISK_IO)
     integer(c_long_long) :: disk_io_sector_size_bytes(FTOP_COLLECTOR_MAX_DISK_IO)
+    integer(c_int) :: disk_io_rate_valid(FTOP_COLLECTOR_MAX_DISK_IO)
+    real(c_double) :: disk_io_read_bytes_per_sec(FTOP_COLLECTOR_MAX_DISK_IO)
+    real(c_double) :: disk_io_write_bytes_per_sec(FTOP_COLLECTOR_MAX_DISK_IO)
+    real(c_double) :: disk_io_read_ops_per_sec(FTOP_COLLECTOR_MAX_DISK_IO)
+    real(c_double) :: disk_io_write_ops_per_sec(FTOP_COLLECTOR_MAX_DISK_IO)
+    real(c_double) :: disk_io_busy_percent(FTOP_COLLECTOR_MAX_DISK_IO)
+    integer(c_int) :: disk_latency_valid(FTOP_COLLECTOR_MAX_DISK_IO)
+    integer(c_int) :: disk_latency_read_valid(FTOP_COLLECTOR_MAX_DISK_IO)
+    integer(c_int) :: disk_latency_write_valid(FTOP_COLLECTOR_MAX_DISK_IO)
+    real(c_double) :: disk_latency_avg_read_us(FTOP_COLLECTOR_MAX_DISK_IO)
+    real(c_double) :: disk_latency_avg_write_us(FTOP_COLLECTOR_MAX_DISK_IO)
+    real(c_double) :: disk_latency_p99_us(FTOP_COLLECTOR_MAX_DISK_IO)
     integer(c_int) :: history_start
     integer(c_int) :: history_count
     real(c_double) :: cpu_usage_history(FTOP_COLLECTOR_HISTORY_CAPACITY)
@@ -447,11 +462,13 @@ contains
     type(network_table) :: empty_network
     type(network_table) :: previous_network
     type(disk_table) :: disk
+    type(disk_table) :: previous_disk
     type(system_uptime_info) :: system_uptime
     integer(c_long_long) :: deadline_ms
     integer(c_long_long) :: metadata_refresh_ms
     integer(c_long_long) :: previous_network_sample_ms
     integer(c_long_long) :: previous_process_sample_ms
+    integer(c_long_long) :: previous_disk_sample_ms
     integer(c_long_long) :: process_refresh_ms
     logical :: warming_up
 
@@ -480,8 +497,10 @@ contains
     deadline_ms = monotonic_ms()
     previous_processes = processes
     previous_network = network
+    previous_disk = disk
     previous_process_sample_ms = deadline_ms
     previous_network_sample_ms = deadline_ms
+    previous_disk_sample_ms = deadline_ms
     call publish_sample(state, topology, total_cpu, core_cpus, .true., memory, load_average, system_uptime, processes, &
                         network, disk)
 
@@ -533,6 +552,9 @@ contains
       previous_network = network
       previous_network_sample_ms = deadline_ms
       disk = backend%get_disk_table()
+      call assign_disk_io_metrics(disk, previous_disk, int(max(0_c_long_long, deadline_ms - previous_disk_sample_ms), int64))
+      previous_disk = disk
+      previous_disk_sample_ms = deadline_ms
       call merge_cpu_metadata(core_cpus, cpu_metadata)
 
       call publish_sample(state, topology, total_cpu, core_cpus, warming_up, memory, load_average, system_uptime, &
@@ -1056,6 +1078,10 @@ contains
     if (allocation_status /= 0) return
     allocate(snapshot%disk%io(io_count), stat=allocation_status)
     if (allocation_status /= 0) return
+    allocate(snapshot%disk%io_rates(io_count), stat=allocation_status)
+    if (allocation_status /= 0) return
+    allocate(snapshot%disk%latencies(io_count), stat=allocation_status)
+    if (allocation_status /= 0) return
 
     do filesystem_index = 1, filesystem_count
       snapshot%disk%filesystems(filesystem_index)%valid = state%disk_filesystem_valid(filesystem_index) /= 0_c_int
@@ -1093,6 +1119,20 @@ contains
       snapshot%disk%io(io_index)%io_time_ms = int(state%disk_io_io_time_ms(io_index), int64)
       snapshot%disk%io(io_index)%weighted_io_time_ms = int(state%disk_io_weighted_io_time_ms(io_index), int64)
       snapshot%disk%io(io_index)%sector_size_bytes = int(state%disk_io_sector_size_bytes(io_index), int64)
+      snapshot%disk%io_rates(io_index)%valid = state%disk_io_rate_valid(io_index) /= 0_c_int
+      snapshot%disk%io_rates(io_index)%device = snapshot%disk%io(io_index)%device
+      snapshot%disk%io_rates(io_index)%read_bytes_per_sec = real(state%disk_io_read_bytes_per_sec(io_index), real64)
+      snapshot%disk%io_rates(io_index)%write_bytes_per_sec = real(state%disk_io_write_bytes_per_sec(io_index), real64)
+      snapshot%disk%io_rates(io_index)%read_ops_per_sec = real(state%disk_io_read_ops_per_sec(io_index), real64)
+      snapshot%disk%io_rates(io_index)%write_ops_per_sec = real(state%disk_io_write_ops_per_sec(io_index), real64)
+      snapshot%disk%io_rates(io_index)%busy_percent = real(state%disk_io_busy_percent(io_index), real64)
+      snapshot%disk%latencies(io_index)%valid = state%disk_latency_valid(io_index) /= 0_c_int
+      snapshot%disk%latencies(io_index)%read_valid = state%disk_latency_read_valid(io_index) /= 0_c_int
+      snapshot%disk%latencies(io_index)%write_valid = state%disk_latency_write_valid(io_index) /= 0_c_int
+      snapshot%disk%latencies(io_index)%device = snapshot%disk%io(io_index)%device
+      snapshot%disk%latencies(io_index)%avg_read_latency_us = real(state%disk_latency_avg_read_us(io_index), real64)
+      snapshot%disk%latencies(io_index)%avg_write_latency_us = real(state%disk_latency_avg_write_us(io_index), real64)
+      snapshot%disk%latencies(io_index)%p99_latency_us = real(state%disk_latency_p99_us(io_index), real64)
     end do
 
     success = .true.
@@ -1580,6 +1620,18 @@ contains
     state%disk_io_io_time_ms = 0_c_long_long
     state%disk_io_weighted_io_time_ms = 0_c_long_long
     state%disk_io_sector_size_bytes = 0_c_long_long
+    state%disk_io_rate_valid = 0_c_int
+    state%disk_io_read_bytes_per_sec = 0.0_c_double
+    state%disk_io_write_bytes_per_sec = 0.0_c_double
+    state%disk_io_read_ops_per_sec = 0.0_c_double
+    state%disk_io_write_ops_per_sec = 0.0_c_double
+    state%disk_io_busy_percent = 0.0_c_double
+    state%disk_latency_valid = 0_c_int
+    state%disk_latency_read_valid = 0_c_int
+    state%disk_latency_write_valid = 0_c_int
+    state%disk_latency_avg_read_us = 0.0_c_double
+    state%disk_latency_avg_write_us = 0.0_c_double
+    state%disk_latency_p99_us = 0.0_c_double
     if (.not. disk%valid) return
 
     if (allocated(disk%filesystems)) then
@@ -1612,6 +1664,12 @@ contains
       state%disk_io_count = int(io_count, c_int)
       do io_index = 1, io_count
         call publish_disk_io(state, io_index, disk%io(io_index))
+        if (allocated(disk%io_rates) .and. io_index <= size(disk%io_rates)) then
+          call publish_disk_io_rate(state, io_index, disk%io_rates(io_index))
+        end if
+        if (allocated(disk%latencies) .and. io_index <= size(disk%latencies)) then
+          call publish_disk_latency(state, io_index, disk%latencies(io_index))
+        end if
       end do
     end if
   end subroutine publish_disk
@@ -1637,6 +1695,32 @@ contains
     state%disk_io_weighted_io_time_ms(io_index) = int(max(0_int64, io%weighted_io_time_ms), c_long_long)
     state%disk_io_sector_size_bytes(io_index) = int(max(0_int64, io%sector_size_bytes), c_long_long)
   end subroutine publish_disk_io
+
+  subroutine publish_disk_io_rate(state, io_index, rate)
+    type(collector_shared_state), intent(inout) :: state
+    integer, intent(in) :: io_index
+    type(disk_io_rate_info), intent(in) :: rate
+
+    state%disk_io_rate_valid(io_index) = merge(1_c_int, 0_c_int, rate%valid)
+    state%disk_io_read_bytes_per_sec(io_index) = real(max(0.0_real64, rate%read_bytes_per_sec), c_double)
+    state%disk_io_write_bytes_per_sec(io_index) = real(max(0.0_real64, rate%write_bytes_per_sec), c_double)
+    state%disk_io_read_ops_per_sec(io_index) = real(max(0.0_real64, rate%read_ops_per_sec), c_double)
+    state%disk_io_write_ops_per_sec(io_index) = real(max(0.0_real64, rate%write_ops_per_sec), c_double)
+    state%disk_io_busy_percent(io_index) = real(max(0.0_real64, min(100.0_real64, rate%busy_percent)), c_double)
+  end subroutine publish_disk_io_rate
+
+  subroutine publish_disk_latency(state, io_index, latency)
+    type(collector_shared_state), intent(inout) :: state
+    integer, intent(in) :: io_index
+    type(disk_latency_info), intent(in) :: latency
+
+    state%disk_latency_valid(io_index) = merge(1_c_int, 0_c_int, latency%valid)
+    state%disk_latency_read_valid(io_index) = merge(1_c_int, 0_c_int, latency%read_valid)
+    state%disk_latency_write_valid(io_index) = merge(1_c_int, 0_c_int, latency%write_valid)
+    state%disk_latency_avg_read_us(io_index) = real(max(0.0_real64, latency%avg_read_latency_us), c_double)
+    state%disk_latency_avg_write_us(io_index) = real(max(0.0_real64, latency%avg_write_latency_us), c_double)
+    state%disk_latency_p99_us(io_index) = real(max(0.0_real64, latency%p99_latency_us), c_double)
+  end subroutine publish_disk_latency
 
   subroutine copy_process_history_to_state(state, process_index, process)
     type(collector_shared_state), intent(inout) :: state
