@@ -19,11 +19,8 @@
 *.exe
 *.out
 
-# Local reference clones
-.docs/refs/
-
-# Local sprint planning docs
-.docs/sprints/
+# Local project docs
+/.docs/
 
 # Local agent instructions
 /AGENTS.md
