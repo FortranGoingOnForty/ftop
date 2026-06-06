@@ -221,6 +221,11 @@ if(FTOP_PLATFORM STREQUAL "linux")
   target_link_libraries(ftop_linux_amdgpu_test PRIVATE ftop_core)
 
   add_test(NAME ftop_linux_amdgpu COMMAND ftop_linux_amdgpu_test)
+
+  add_executable(ftop_linux_intelgpu_test unit/test_linux_intelgpu.f90 unit/ftop_intelgpu_sysfs_fixture.c)
+  target_link_libraries(ftop_linux_intelgpu_test PRIVATE ftop_core)
+
+  add_test(NAME ftop_linux_intelgpu COMMAND ftop_linux_intelgpu_test)
 endif()
 
 if(FTOP_PLATFORM STREQUAL "macos")

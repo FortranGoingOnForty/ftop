@@ -6,6 +6,7 @@ module ftop_platform
   use ftop_gpu_data, only : GPU_CAPACITY, empty_gpu_table, gpu_info, gpu_table
   use ftop_linux_amdgpu, only : linux_amdgpu_snapshot
   use ftop_linux_diskstats, only : linux_diskstats_filter_whole_devices, linux_diskstats_parse
+  use ftop_linux_intelgpu, only : linux_intelgpu_snapshot
   use ftop_linux_loadavg, only : linux_loadavg_parse
   use ftop_linux_meminfo, only : linux_meminfo_parse
   use ftop_linux_nvml, only : linux_nvml_gpu_snapshot
@@ -557,6 +558,7 @@ contains
     table = empty_gpu_table()
     if (linux_nvml_gpu_snapshot(backend_table)) call append_gpu_table(table, backend_table)
     if (linux_amdgpu_snapshot(backend_table)) call append_gpu_table(table, backend_table)
+    if (linux_intelgpu_snapshot(backend_table)) call append_gpu_table(table, backend_table)
   end function linux_get_gpu_table
 
   subroutine append_gpu_table(destination, source)
