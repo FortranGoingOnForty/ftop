@@ -209,6 +209,13 @@ if(FTOP_PLATFORM STREQUAL "linux")
   target_link_libraries(ftop_linux_platform_test PRIVATE ftop_core)
 
   add_test(NAME ftop_linux_platform COMMAND ftop_linux_platform_test)
+
+  add_library(ftop_nvml_fixture SHARED unit/ftop_nvml_fixture.c)
+
+  add_executable(ftop_linux_nvml_test unit/test_linux_nvml.f90)
+  target_link_libraries(ftop_linux_nvml_test PRIVATE ftop_core)
+
+  add_test(NAME ftop_linux_nvml COMMAND ftop_linux_nvml_test $<TARGET_FILE:ftop_nvml_fixture>)
 endif()
 
 if(FTOP_PLATFORM STREQUAL "macos")

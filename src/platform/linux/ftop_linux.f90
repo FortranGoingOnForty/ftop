@@ -7,6 +7,7 @@ module ftop_platform
   use ftop_linux_diskstats, only : linux_diskstats_filter_whole_devices, linux_diskstats_parse
   use ftop_linux_loadavg, only : linux_loadavg_parse
   use ftop_linux_meminfo, only : linux_meminfo_parse
+  use ftop_linux_nvml, only : linux_nvml_gpu_snapshot
   use ftop_linux_proc_stat, only : linux_proc_stat_parse
   use ftop_mem_data, only : metric_memory_info => memory_info
   use ftop_net_data, only : &
@@ -551,7 +552,7 @@ contains
     associate(unused => self)
     end associate
 
-    table = empty_gpu_table()
+    if (.not. linux_nvml_gpu_snapshot(table)) table = empty_gpu_table()
   end function linux_get_gpu_table
 
   logical function linux_disk_snapshot(table, error_code) result(success)
