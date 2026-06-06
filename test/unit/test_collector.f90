@@ -60,18 +60,37 @@ contains
     call require(allocated(snapshot%cpu_usage_history), "collector CPU history must be allocated")
     call require(allocated(snapshot%cpu_core_usage_history), "collector CPU core history must be allocated")
     call require(allocated(snapshot%memory_usage_history), "collector memory history must be allocated")
+    call require(allocated(snapshot%gpu%gpus), "collector GPU table must allocate rows")
+    call require(allocated(snapshot%gpu_utilization_history), "collector GPU utilization history must be allocated")
+    call require(allocated(snapshot%gpu_temperature_history), "collector GPU temperature history must be allocated")
     call require(size(snapshot%cpu_usage_history) == snapshot%sample_count, "collector CPU history size mismatch")
     call require(size(snapshot%cpu_core_usage_history, 1) == size(snapshot%cpu_cores), &
                  "collector CPU core history core size mismatch")
     call require(size(snapshot%cpu_core_usage_history, 2) == snapshot%sample_count, &
                  "collector CPU core history sample size mismatch")
     call require(size(snapshot%memory_usage_history) == snapshot%sample_count, "collector memory history size mismatch")
+    call require(size(snapshot%gpu_utilization_history, 1) == size(snapshot%gpu%gpus), &
+                 "collector GPU utilization history row size mismatch")
+    call require(size(snapshot%gpu_utilization_history, 2) == snapshot%sample_count, &
+                 "collector GPU utilization history sample size mismatch")
+    call require(size(snapshot%gpu_temperature_history, 1) == size(snapshot%gpu%gpus), &
+                 "collector GPU temperature history row size mismatch")
+    call require(size(snapshot%gpu_temperature_history, 2) == snapshot%sample_count, &
+                 "collector GPU temperature history sample size mismatch")
     call require(all(snapshot%cpu_usage_history >= 0.0_real64), "collector CPU history must not be negative")
     call require(all(snapshot%cpu_usage_history <= 100.0_real64), "collector CPU history must not exceed 100")
     call require(all(snapshot%cpu_core_usage_history >= 0.0_real64), "collector CPU core history must not be negative")
     call require(all(snapshot%cpu_core_usage_history <= 100.0_real64), "collector CPU core history must not exceed 100")
     call require(all(snapshot%memory_usage_history >= 0.0_real64), "collector memory history must not be negative")
     call require(all(snapshot%memory_usage_history <= 100.0_real64), "collector memory history must not exceed 100")
+    call require(all(snapshot%gpu_utilization_history >= 0.0_real64), &
+                 "collector GPU utilization history must not be negative")
+    call require(all(snapshot%gpu_utilization_history <= 100.0_real64), &
+                 "collector GPU utilization history must not exceed 100")
+    call require(all(snapshot%gpu_temperature_history >= -100.0_real64), &
+                 "collector GPU temperature history must not be too low")
+    call require(all(snapshot%gpu_temperature_history <= 200.0_real64), &
+                 "collector GPU temperature history must not be too high")
     call require(snapshot%cpu_total%usage_percent >= 0.0_real64, "collector CPU usage must not be negative")
     call require(snapshot%cpu_total%usage_percent <= 100.0_real64, "collector CPU usage must not exceed 100")
     call require(snapshot%cpu_total%user_percent >= 0.0_real64, "collector CPU user must not be negative")
@@ -128,6 +147,10 @@ contains
     call require(size(later_snapshot%cpu_core_usage_history, 2) > first_history_size, &
                  "collector CPU core history did not grow")
     call require(size(later_snapshot%memory_usage_history) > first_history_size, "collector memory history did not grow")
+    call require(size(later_snapshot%gpu_utilization_history, 2) > first_history_size, &
+                 "collector GPU utilization history did not grow")
+    call require(size(later_snapshot%gpu_temperature_history, 2) > first_history_size, &
+                 "collector GPU temperature history did not grow")
     call require(metrics%stop(), "collector initial stop failed")
     call require(.not. metrics%running(), "collector still running after initial stop")
 
@@ -138,6 +161,10 @@ contains
     call require(size(snapshot%cpu_core_usage_history, 2) == snapshot%sample_count, &
                  "collector CPU core history did not reset on restart")
     call require(size(snapshot%memory_usage_history) == snapshot%sample_count, "collector memory history did not reset on restart")
+    call require(size(snapshot%gpu_utilization_history, 2) == snapshot%sample_count, &
+                 "collector GPU utilization history did not reset on restart")
+    call require(size(snapshot%gpu_temperature_history, 2) == snapshot%sample_count, &
+                 "collector GPU temperature history did not reset on restart")
     call require(metrics%stop(), "collector restarted stop failed")
     call require(metrics%destroy(), "collector restarted destroy failed")
   end subroutine test_collector_restart
@@ -155,12 +182,24 @@ contains
                  "collector CPU core history must cap at configured depth")
     call require(size(snapshot%memory_usage_history) == FTOP_COLLECTOR_HISTORY_CAPACITY, &
                  "collector memory history must cap at configured depth")
+    call require(size(snapshot%gpu_utilization_history, 2) == FTOP_COLLECTOR_HISTORY_CAPACITY, &
+                 "collector GPU utilization history must cap at configured depth")
+    call require(size(snapshot%gpu_temperature_history, 2) == FTOP_COLLECTOR_HISTORY_CAPACITY, &
+                 "collector GPU temperature history must cap at configured depth")
     call require(all(snapshot%cpu_usage_history >= 0.0_real64), "capped CPU history must not be negative")
     call require(all(snapshot%cpu_usage_history <= 100.0_real64), "capped CPU history must not exceed 100")
     call require(all(snapshot%cpu_core_usage_history >= 0.0_real64), "capped CPU core history must not be negative")
     call require(all(snapshot%cpu_core_usage_history <= 100.0_real64), "capped CPU core history must not exceed 100")
     call require(all(snapshot%memory_usage_history >= 0.0_real64), "capped memory history must not be negative")
     call require(all(snapshot%memory_usage_history <= 100.0_real64), "capped memory history must not exceed 100")
+    call require(all(snapshot%gpu_utilization_history >= 0.0_real64), &
+                 "capped GPU utilization history must not be negative")
+    call require(all(snapshot%gpu_utilization_history <= 100.0_real64), &
+                 "capped GPU utilization history must not exceed 100")
+    call require(all(snapshot%gpu_temperature_history >= -100.0_real64), &
+                 "capped GPU temperature history must not be too low")
+    call require(all(snapshot%gpu_temperature_history <= 200.0_real64), &
+                 "capped GPU temperature history must not be too high")
     call require(metrics%stop(), "collector capacity stop failed")
     call require(metrics%destroy(), "collector capacity destroy failed")
   end subroutine test_collector_history_capacity

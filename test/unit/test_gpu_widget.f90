@@ -13,6 +13,7 @@ program test_gpu_widget
   call test_gpu_unavailable_state()
   call test_gpu_empty_state()
   call test_gpu_metrics_render()
+  call test_gpu_temperature_history_render()
 
 contains
 
@@ -61,10 +62,33 @@ contains
     call require(index(text, "GPUs 1") > 0, "gpu panel should render GPU count")
     call require(index(text, "nvidia Test RTX") > 0, "gpu panel should render vendor and name")
     call require(index(text, "GPU 72.5%") > 0, "gpu panel should render utilization label")
+    call require(index(text, "util") > 0, "gpu panel should render utilization history label")
     call require(index(text, "VRAM 6.0 GiB / 12.0 GiB") > 0, "gpu panel should render VRAM usage")
     call require(index(text, "temp 63.5 C") > 0, "gpu panel should render temperature")
     call require(index(text, "power 120.0 W / 250.0 W") > 0, "gpu panel should render power draw")
   end subroutine test_gpu_metrics_render
+
+  subroutine test_gpu_temperature_history_render()
+    type(screen_buffer) :: buffer
+    type(collector_snapshot) :: snapshot
+    type(screen_style) :: style
+    character(len=:), allocatable :: text
+
+    style = clear_screen_style()
+    snapshot%gpu%valid = .true.
+    allocate(snapshot%gpu%gpus(1))
+    snapshot%gpu%gpus(1)%valid = .true.
+    snapshot%gpu%gpus(1)%name = "Thermal GPU"
+    snapshot%gpu%gpus(1)%temperature_valid = .true.
+    snapshot%gpu%gpus(1)%temp_celsius = 61.0_real64
+    allocate(snapshot%gpu_temperature_history(1, 3))
+    snapshot%gpu_temperature_history(1, :) = [48.0_real64, 55.0_real64, 61.0_real64]
+    buffer = allocate_screen(48, 6)
+    call render_gpu_panel(buffer, widget_rect(1, 1, 48, 6), snapshot, style, style, style)
+    text = buffer_text(buffer)
+
+    call require(index(text, "temp") > 0, "gpu panel should render temperature history label")
+  end subroutine test_gpu_temperature_history_render
 
   subroutine populate_gpu_snapshot(snapshot)
     type(collector_snapshot), intent(out) :: snapshot
@@ -84,6 +108,10 @@ contains
     snapshot%gpu%gpus(1)%power_valid = .true.
     snapshot%gpu%gpus(1)%power_watts = 120.0_real64
     snapshot%gpu%gpus(1)%power_limit_watts = 250.0_real64
+    allocate(snapshot%gpu_utilization_history(1, 4))
+    snapshot%gpu_utilization_history(1, :) = [10.0_real64, 35.0_real64, 55.0_real64, 72.5_real64]
+    allocate(snapshot%gpu_temperature_history(1, 4))
+    snapshot%gpu_temperature_history(1, :) = [42.0_real64, 51.0_real64, 58.0_real64, 63.5_real64]
   end subroutine populate_gpu_snapshot
 
   function buffer_text(buffer) result(text)

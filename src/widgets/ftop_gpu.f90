@@ -3,9 +3,14 @@ module ftop_gpu
   use fgof_screen_types, only : screen_buffer, screen_style
   use ftop_box, only : BOX_STYLE_ROUNDED, box_content_rect, draw_box
   use ftop_collector, only : collector_snapshot
-  use ftop_color, only : COLOR_BRIGHT_WHITE, gradient_green_yellow_red, style_from_rgb
+  use ftop_color, only : &
+    COLOR_BRIGHT_WHITE, &
+    color_gradient, &
+    gradient_green_yellow_red, &
+    style_from_rgb
   use ftop_gpu_data, only : gpu_info, gpu_table
   use ftop_meter, only : METER_FILL_SHADED, render_meter
+  use ftop_sparkline, only : render_sparkline
   use ftop_text, only : TEXT_ALIGN_CENTER, format_bytes, format_percent, render_text
   use ftop_widgets, only : widget_rect, widget_size
   implicit none
@@ -68,6 +73,11 @@ contains
       call render_gpu_utilization(buffer, content_line_rect(content, line_index), snapshot%gpu%gpus(gpu_index), dim_style)
       line_index = line_index + 1
       if (line_index > content%height) cycle
+      if (gpu_history_available(snapshot, gpu_index)) then
+        call render_gpu_history(buffer, content_line_rect(content, line_index), snapshot, gpu_index, dim_style)
+        line_index = line_index + 1
+      end if
+      if (line_index > content%height) cycle
       call render_text(buffer, content_line_rect(content, line_index), gpu_metric_text(snapshot%gpu%gpus(gpu_index)), dim_style)
       line_index = line_index + 1
     end do
@@ -91,6 +101,61 @@ contains
                       label="GPU " // format_percent(real(gpu%utilization_percent)), &
                       fill_mode=METER_FILL_SHADED, empty_style=dim_style, label_style=dim_style)
   end subroutine render_gpu_utilization
+
+  subroutine render_gpu_history(buffer, rect, snapshot, gpu_index, dim_style)
+    type(screen_buffer), intent(inout) :: buffer
+    type(widget_rect), intent(in) :: rect
+    type(collector_snapshot), intent(in) :: snapshot
+    integer, intent(in) :: gpu_index
+    type(screen_style), intent(in) :: dim_style
+    type(color_gradient) :: gpu_gradient
+    type(widget_rect) :: label_rect
+    type(widget_rect) :: spark_rect
+    type(widget_rect) :: temp_label_rect
+    type(widget_rect) :: temp_rect
+    integer :: half_width
+    integer :: label_width
+    logical :: has_temp_history
+    logical :: has_util_history
+
+    if (rect%width <= 0 .or. rect%height <= 0) return
+    has_util_history = gpu_utilization_history_available(snapshot, gpu_index)
+    has_temp_history = gpu_temperature_history_available(snapshot, gpu_index)
+    if (.not. has_util_history .and. .not. has_temp_history) return
+
+    gpu_gradient = gradient_green_yellow_red()
+    if (has_util_history .and. has_temp_history .and. rect%width >= 18) then
+      half_width = rect%width / 2
+      label_width = min(5, half_width)
+      label_rect = widget_rect(rect%row, rect%col, label_width, 1)
+      spark_rect = widget_rect(rect%row, rect%col + label_width, half_width - label_width, 1)
+      temp_label_rect = widget_rect(rect%row, rect%col + half_width, label_width, 1)
+      temp_rect = widget_rect(rect%row, rect%col + half_width + label_width, &
+                              rect%width - half_width - label_width, 1)
+      call render_text(buffer, label_rect, "util", dim_style)
+      call render_sparkline(buffer, spark_rect, real(snapshot%gpu_utilization_history(gpu_index, :)), &
+                            gradient=gpu_gradient, min_value=0.0, max_value=100.0, style=dim_style)
+      call render_text(buffer, temp_label_rect, "temp", dim_style)
+      call render_sparkline(buffer, temp_rect, real(snapshot%gpu_temperature_history(gpu_index, :)), &
+                            gradient=gpu_gradient, min_value=0.0, &
+                            max_value=gpu_temperature_history_max(snapshot%gpu%gpus(gpu_index)), style=dim_style)
+      return
+    end if
+
+    label_width = min(5, rect%width)
+    label_rect = widget_rect(rect%row, rect%col, label_width, 1)
+    spark_rect = widget_rect(rect%row, rect%col + label_width, rect%width - label_width, 1)
+    if (has_util_history) then
+      call render_text(buffer, label_rect, "util", dim_style)
+      call render_sparkline(buffer, spark_rect, real(snapshot%gpu_utilization_history(gpu_index, :)), &
+                            gradient=gpu_gradient, min_value=0.0, max_value=100.0, style=dim_style)
+    else
+      call render_text(buffer, label_rect, "temp", dim_style)
+      call render_sparkline(buffer, spark_rect, real(snapshot%gpu_temperature_history(gpu_index, :)), &
+                            gradient=gpu_gradient, min_value=0.0, &
+                            max_value=gpu_temperature_history_max(snapshot%gpu%gpus(gpu_index)), style=dim_style)
+    end if
+  end subroutine render_gpu_history
 
   function gpu_summary_text(table) result(text)
     type(gpu_table), intent(in) :: table
@@ -169,6 +234,52 @@ contains
       if (table%gpus(gpu_index)%valid) count = count + 1
     end do
   end function valid_gpu_count
+
+  logical function gpu_history_available(snapshot, gpu_index) result(available)
+    type(collector_snapshot), intent(in) :: snapshot
+    integer, intent(in) :: gpu_index
+
+    available = gpu_utilization_history_available(snapshot, gpu_index) .or. &
+                gpu_temperature_history_available(snapshot, gpu_index)
+  end function gpu_history_available
+
+  logical function gpu_utilization_history_available(snapshot, gpu_index) result(available)
+    type(collector_snapshot), intent(in) :: snapshot
+    integer, intent(in) :: gpu_index
+
+    available = .false.
+    if (.not. allocated(snapshot%gpu%gpus)) return
+    if (gpu_index < 1 .or. gpu_index > size(snapshot%gpu%gpus)) return
+    if (.not. snapshot%gpu%gpus(gpu_index)%utilization_valid) return
+    if (.not. allocated(snapshot%gpu_utilization_history)) return
+    if (gpu_index > size(snapshot%gpu_utilization_history, 1)) return
+    if (size(snapshot%gpu_utilization_history, 2) <= 0) return
+
+    available = .true.
+  end function gpu_utilization_history_available
+
+  logical function gpu_temperature_history_available(snapshot, gpu_index) result(available)
+    type(collector_snapshot), intent(in) :: snapshot
+    integer, intent(in) :: gpu_index
+
+    available = .false.
+    if (.not. allocated(snapshot%gpu%gpus)) return
+    if (gpu_index < 1 .or. gpu_index > size(snapshot%gpu%gpus)) return
+    if (.not. snapshot%gpu%gpus(gpu_index)%temperature_valid) return
+    if (.not. allocated(snapshot%gpu_temperature_history)) return
+    if (gpu_index > size(snapshot%gpu_temperature_history, 1)) return
+    if (size(snapshot%gpu_temperature_history, 2) <= 0) return
+
+    available = .true.
+  end function gpu_temperature_history_available
+
+  real function gpu_temperature_history_max(gpu) result(max_value)
+    type(gpu_info), intent(in) :: gpu
+
+    max_value = 100.0
+    if (gpu%temp_max_celsius > 0.0_real64) max_value = real(gpu%temp_max_celsius)
+    max_value = max(1.0, max_value)
+  end function gpu_temperature_history_max
 
   function content_line_rect(content, line_index) result(rect)
     type(widget_rect), intent(in) :: content

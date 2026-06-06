@@ -265,6 +265,8 @@ module ftop_collector
     real(c_double) :: cpu_usage_history(FTOP_COLLECTOR_HISTORY_CAPACITY)
     real(c_double) :: cpu_core_usage_history(FTOP_COLLECTOR_MAX_CPU_CORES, FTOP_COLLECTOR_HISTORY_CAPACITY)
     real(c_double) :: memory_usage_history(FTOP_COLLECTOR_HISTORY_CAPACITY)
+    real(c_double) :: gpu_utilization_history(FTOP_COLLECTOR_MAX_GPUS, FTOP_COLLECTOR_HISTORY_CAPACITY)
+    real(c_double) :: gpu_temperature_history(FTOP_COLLECTOR_MAX_GPUS, FTOP_COLLECTOR_HISTORY_CAPACITY)
     type(c_ptr) :: mutex
   end type collector_shared_state
 
@@ -284,6 +286,8 @@ module ftop_collector
     real(real64), allocatable :: cpu_usage_history(:)
     real(real64), allocatable :: cpu_core_usage_history(:, :)
     real(real64), allocatable :: memory_usage_history(:)
+    real(real64), allocatable :: gpu_utilization_history(:, :)
+    real(real64), allocatable :: gpu_temperature_history(:, :)
   end type collector_snapshot
 
   type, public :: collector
@@ -800,6 +804,8 @@ contains
     state%cpu_usage_history = 0.0_c_double
     state%cpu_core_usage_history = 0.0_c_double
     state%memory_usage_history = 0.0_c_double
+    state%gpu_utilization_history = 0.0_c_double
+    state%gpu_temperature_history = 0.0_c_double
     state%mutex = c_null_ptr
   end subroutine clear_state
 
@@ -945,6 +951,8 @@ contains
     state%cpu_usage_history = 0.0_c_double
     state%cpu_core_usage_history = 0.0_c_double
     state%memory_usage_history = 0.0_c_double
+    state%gpu_utilization_history = 0.0_c_double
+    state%gpu_temperature_history = 0.0_c_double
   end subroutine clear_runtime_state
 
   subroutine clear_snapshot(snapshot)
@@ -1346,6 +1354,8 @@ contains
     integer :: allocation_status
     integer :: core_count
     integer :: core_index
+    integer :: gpu_count
+    integer :: gpu_index
     integer :: item_index
     integer :: source_index
     integer :: history_count
@@ -1353,11 +1363,16 @@ contains
     success = .false.
     history_count = max(0, min(int(state%history_count), FTOP_COLLECTOR_HISTORY_CAPACITY))
     core_count = bounded_core_count(int(state%cpu_core_count))
+    gpu_count = bounded_gpu_count(int(state%gpu_count))
     allocate(snapshot%cpu_usage_history(history_count), stat=allocation_status)
     if (allocation_status /= 0) return
     allocate(snapshot%cpu_core_usage_history(core_count, history_count), stat=allocation_status)
     if (allocation_status /= 0) return
     allocate(snapshot%memory_usage_history(history_count), stat=allocation_status)
+    if (allocation_status /= 0) return
+    allocate(snapshot%gpu_utilization_history(gpu_count, history_count), stat=allocation_status)
+    if (allocation_status /= 0) return
+    allocate(snapshot%gpu_temperature_history(gpu_count, history_count), stat=allocation_status)
     if (allocation_status /= 0) return
 
     do item_index = 1, history_count
@@ -1368,6 +1383,12 @@ contains
           real(state%cpu_core_usage_history(core_index, source_index), real64)
       end do
       snapshot%memory_usage_history(item_index) = real(state%memory_usage_history(source_index), real64)
+      do gpu_index = 1, gpu_count
+        snapshot%gpu_utilization_history(gpu_index, item_index) = &
+          real(state%gpu_utilization_history(gpu_index, source_index), real64)
+        snapshot%gpu_temperature_history(gpu_index, item_index) = &
+          real(state%gpu_temperature_history(gpu_index, source_index), real64)
+      end do
     end do
 
     success = .true.
@@ -1579,7 +1600,8 @@ contains
     call publish_network(state, network)
     call publish_disk(state, disk)
     call publish_gpu(state, gpu)
-    call append_history(state, real(state%cpu_usage_percent, real64), memory_usage_percent(memory), core_cpus, core_count)
+    call append_history(state, real(state%cpu_usage_percent, real64), memory_usage_percent(memory), core_cpus, core_count, &
+                        gpu)
 
     if (.not. ftop_mutex_unlock(mutex)) return
   end subroutine publish_sample
@@ -2100,13 +2122,16 @@ contains
     destination_valid = copied_len > 0
   end subroutine copy_c_chars_to_fortran
 
-  subroutine append_history(state, cpu_usage_percent, memory_usage_percent, core_cpus, core_count)
+  subroutine append_history(state, cpu_usage_percent, memory_usage_percent, core_cpus, core_count, gpu)
     type(collector_shared_state), intent(inout) :: state
     real(real64), intent(in) :: cpu_usage_percent
     real(real64), intent(in) :: memory_usage_percent
     type(cpu_core_info), intent(in) :: core_cpus(:)
     integer, intent(in) :: core_count
+    type(gpu_table), intent(in) :: gpu
     integer :: core_index
+    integer :: gpu_count
+    integer :: gpu_index
     integer :: index
 
     if (state%history_count < FTOP_COLLECTOR_HISTORY_CAPACITY) then
@@ -2123,6 +2148,23 @@ contains
       state%cpu_core_usage_history(core_index, index) = real(clamp_percent(core_cpus(core_index)%usage_percent), c_double)
     end do
     state%memory_usage_history(index) = real(clamp_percent(memory_usage_percent), c_double)
+    state%gpu_utilization_history(:, index) = 0.0_c_double
+    state%gpu_temperature_history(:, index) = 0.0_c_double
+    gpu_count = 0
+    if (gpu%valid) then
+      if (allocated(gpu%gpus)) gpu_count = bounded_gpu_count(size(gpu%gpus))
+    end if
+    do gpu_index = 1, gpu_count
+      if (.not. gpu%gpus(gpu_index)%valid) cycle
+      if (gpu%gpus(gpu_index)%utilization_valid) then
+        state%gpu_utilization_history(gpu_index, index) = &
+          real(clamp_percent(gpu%gpus(gpu_index)%utilization_percent), c_double)
+      end if
+      if (gpu%gpus(gpu_index)%temperature_valid) then
+        state%gpu_temperature_history(gpu_index, index) = &
+          real(max(-100.0_real64, min(200.0_real64, gpu%gpus(gpu_index)%temp_celsius)), c_double)
+      end if
+    end do
   end subroutine append_history
 
   pure real(real64) function clamp_percent(value) result(clamped)
