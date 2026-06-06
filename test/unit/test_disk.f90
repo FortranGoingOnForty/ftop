@@ -1,11 +1,12 @@
 program test_disk
   use, intrinsic :: iso_c_binding, only : c_char, c_int, c_long_long, c_null_char
-  use, intrinsic :: iso_fortran_env, only : int64
+  use, intrinsic :: iso_fortran_env, only : int64, real64
   use fgof_screen, only : allocate_screen, clear_screen_style
   use fgof_screen_types, only : screen_buffer, screen_style
   use ftop_collector, only : collector_snapshot
   use ftop_disk, only : disk_table_state, disk_table_status, render_disk_panel
-  use ftop_disk_data, only : c_filesystem_info, disk_table_from_c, filesystem_usage_percent
+  use ftop_disk_data, only : c_filesystem_info, disk_io_info, disk_io_latency_from_delta, disk_io_rate_from_delta, &
+    disk_io_rate_info, disk_latency_info, disk_table_from_c, filesystem_usage_percent
   use ftop_widgets, only : widget_rect
   implicit none
 
@@ -13,6 +14,9 @@ program test_disk
 
   call test_disk_usage_percent()
   call test_disk_table_filters_pseudo_filesystems()
+  call test_disk_io_rates_from_delta()
+  call test_disk_io_latency_from_delta()
+  call test_disk_io_delta_rejects_mismatched_samples()
   call test_disk_panel_renders_compact_and_expanded()
 
 contains
@@ -50,6 +54,59 @@ contains
     call require(size(snapshot%disk%filesystems) == 1, "disk table should filter pseudo filesystems")
     call require(trim(snapshot%disk%filesystems(1)%mountpoint) == "/", "disk table should keep real filesystem")
   end subroutine test_disk_table_filters_pseudo_filesystems
+
+  subroutine test_disk_io_rates_from_delta()
+    type(disk_io_info) :: previous
+    type(disk_io_info) :: current
+    type(disk_io_rate_info) :: rate
+
+    previous = disk_io_sample("nvme0n1", 1000_int64, 2000_int64, 10_int64, 20_int64, 100_int64, 200_int64, 50_int64)
+    current = disk_io_sample("nvme0n1", 3000_int64, 7000_int64, 30_int64, 50_int64, 160_int64, 260_int64, 125_int64)
+    rate = disk_io_rate_from_delta(previous, current, 500_int64)
+
+    call require(rate%valid, "disk rate should be valid")
+    call require_close(rate%read_bytes_per_sec, 4000.0_real64, "disk read rate mismatch")
+    call require_close(rate%write_bytes_per_sec, 10000.0_real64, "disk write rate mismatch")
+    call require_close(rate%read_ops_per_sec, 40.0_real64, "disk read ops rate mismatch")
+    call require_close(rate%write_ops_per_sec, 60.0_real64, "disk write ops rate mismatch")
+    call require_close(rate%busy_percent, 15.0_real64, "disk busy percent mismatch")
+  end subroutine test_disk_io_rates_from_delta
+
+  subroutine test_disk_io_latency_from_delta()
+    type(disk_io_info) :: previous
+    type(disk_io_info) :: current
+    type(disk_latency_info) :: latency
+
+    previous = disk_io_sample("sda", 0_int64, 0_int64, 10_int64, 20_int64, 100_int64, 200_int64, 0_int64)
+    current = disk_io_sample("sda", 0_int64, 0_int64, 14_int64, 25_int64, 116_int64, 230_int64, 0_int64)
+    latency = disk_io_latency_from_delta(previous, current)
+
+    call require(latency%valid, "disk latency should be valid")
+    call require(latency%read_valid, "disk read latency should be valid")
+    call require(latency%write_valid, "disk write latency should be valid")
+    call require_close(latency%avg_read_latency_us, 4000.0_real64, "disk read latency mismatch")
+    call require_close(latency%avg_write_latency_us, 6000.0_real64, "disk write latency mismatch")
+  end subroutine test_disk_io_latency_from_delta
+
+  subroutine test_disk_io_delta_rejects_mismatched_samples()
+    type(disk_io_info) :: previous
+    type(disk_io_info) :: current
+    type(disk_io_rate_info) :: rate
+    type(disk_latency_info) :: latency
+
+    previous = disk_io_sample("sda", 100_int64, 100_int64, 10_int64, 10_int64, 10_int64, 10_int64, 10_int64)
+    current = disk_io_sample("sdb", 200_int64, 200_int64, 20_int64, 20_int64, 20_int64, 20_int64, 20_int64)
+    rate = disk_io_rate_from_delta(previous, current, 1000_int64)
+    latency = disk_io_latency_from_delta(previous, current)
+    call require(.not. rate%valid, "mismatched disk rate samples should be invalid")
+    call require(.not. latency%valid, "mismatched disk latency samples should be invalid")
+
+    current = disk_io_sample("sda", 90_int64, 200_int64, 20_int64, 20_int64, 20_int64, 20_int64, 20_int64)
+    rate = disk_io_rate_from_delta(previous, current, 1000_int64)
+    latency = disk_io_latency_from_delta(previous, current)
+    call require(.not. rate%valid, "regressed disk rate samples should be invalid")
+    call require(.not. latency%valid, "regressed disk latency samples should be invalid")
+  end subroutine test_disk_io_delta_rejects_mismatched_samples
 
   subroutine test_disk_panel_renders_compact_and_expanded()
     type(screen_buffer) :: buffer
@@ -118,6 +175,31 @@ contains
     end do
   end subroutine put_c_text
 
+  function disk_io_sample(device, read_bytes, write_bytes, read_ops, write_ops, read_time_ms, write_time_ms, &
+                          io_time_ms) result(sample)
+    character(len=*), intent(in) :: device
+    integer(int64), intent(in) :: read_bytes
+    integer(int64), intent(in) :: write_bytes
+    integer(int64), intent(in) :: read_ops
+    integer(int64), intent(in) :: write_ops
+    integer(int64), intent(in) :: read_time_ms
+    integer(int64), intent(in) :: write_time_ms
+    integer(int64), intent(in) :: io_time_ms
+    type(disk_io_info) :: sample
+
+    sample = disk_io_info()
+    sample%valid = .true.
+    sample%device = device
+    sample%read_bytes = read_bytes
+    sample%write_bytes = write_bytes
+    sample%read_ops = read_ops
+    sample%write_ops = write_ops
+    sample%read_time_ms = read_time_ms
+    sample%write_time_ms = write_time_ms
+    sample%io_time_ms = io_time_ms
+    sample%weighted_io_time_ms = io_time_ms
+  end function disk_io_sample
+
   function buffer_text(buffer) result(text)
     type(screen_buffer), intent(in) :: buffer
     character(len=:), allocatable :: text
@@ -151,5 +233,13 @@ contains
 
     if (.not. condition) error stop message
   end subroutine require
+
+  subroutine require_close(actual, expected, message)
+    real(real64), intent(in) :: actual
+    real(real64), intent(in) :: expected
+    character(len=*), intent(in) :: message
+
+    if (abs(actual - expected) > 0.01_real64) error stop message
+  end subroutine require_close
 
 end program test_disk

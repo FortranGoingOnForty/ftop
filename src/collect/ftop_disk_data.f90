@@ -46,6 +46,26 @@ module ftop_disk_data
     integer(int64) :: sector_size_bytes = 512_int64
   end type disk_io_info
 
+  type, public :: disk_io_rate_info
+    logical :: valid = .false.
+    character(len=DISK_DEVICE_LEN) :: device = ""
+    real(real64) :: read_bytes_per_sec = 0.0_real64
+    real(real64) :: write_bytes_per_sec = 0.0_real64
+    real(real64) :: read_ops_per_sec = 0.0_real64
+    real(real64) :: write_ops_per_sec = 0.0_real64
+    real(real64) :: busy_percent = 0.0_real64
+  end type disk_io_rate_info
+
+  type, public :: disk_latency_info
+    logical :: valid = .false.
+    logical :: read_valid = .false.
+    logical :: write_valid = .false.
+    character(len=DISK_DEVICE_LEN) :: device = ""
+    real(real64) :: avg_read_latency_us = 0.0_real64
+    real(real64) :: avg_write_latency_us = 0.0_real64
+    real(real64) :: p99_latency_us = 0.0_real64
+  end type disk_latency_info
+
   type, public :: disk_table
     logical :: valid = .false.
     type(filesystem_info), allocatable :: filesystems(:)
@@ -53,6 +73,8 @@ module ftop_disk_data
   end type disk_table
 
   public :: disk_table_from_c
+  public :: disk_io_latency_from_delta
+  public :: disk_io_rate_from_delta
   public :: filesystem_usage_percent
   public :: filesystem_visible
   public :: real_filesystem_count
@@ -130,6 +152,82 @@ contains
               real(filesystem%total_bytes, real64)
     percent = max(0.0_real64, min(100.0_real64, percent))
   end function filesystem_usage_percent
+
+  function disk_io_rate_from_delta(previous, current, elapsed_ms) result(rate)
+    type(disk_io_info), intent(in) :: previous
+    type(disk_io_info), intent(in) :: current
+    integer(int64), intent(in) :: elapsed_ms
+    type(disk_io_rate_info) :: rate
+    real(real64) :: scale
+
+    rate = disk_io_rate_info()
+    if (.not. matching_disk_io_samples(previous, current)) return
+    if (elapsed_ms <= 0_int64) return
+    if (any_disk_io_counter_regressed(previous, current)) return
+
+    scale = 1000.0_real64 / real(elapsed_ms, real64)
+    rate%valid = .true.
+    rate%device = current%device
+    rate%read_bytes_per_sec = real(current%read_bytes - previous%read_bytes, real64) * scale
+    rate%write_bytes_per_sec = real(current%write_bytes - previous%write_bytes, real64) * scale
+    rate%read_ops_per_sec = real(current%read_ops - previous%read_ops, real64) * scale
+    rate%write_ops_per_sec = real(current%write_ops - previous%write_ops, real64) * scale
+    rate%busy_percent = max(0.0_real64, min(100.0_real64, &
+                         real(current%io_time_ms - previous%io_time_ms, real64) * 100.0_real64 / &
+                         real(elapsed_ms, real64)))
+  end function disk_io_rate_from_delta
+
+  function disk_io_latency_from_delta(previous, current) result(latency)
+    type(disk_io_info), intent(in) :: previous
+    type(disk_io_info), intent(in) :: current
+    type(disk_latency_info) :: latency
+    integer(int64) :: read_ops_delta
+    integer(int64) :: write_ops_delta
+    integer(int64) :: read_time_delta
+    integer(int64) :: write_time_delta
+
+    latency = disk_latency_info()
+    if (.not. matching_disk_io_samples(previous, current)) return
+    if (any_disk_io_counter_regressed(previous, current)) return
+
+    read_ops_delta = current%read_ops - previous%read_ops
+    write_ops_delta = current%write_ops - previous%write_ops
+    read_time_delta = current%read_time_ms - previous%read_time_ms
+    write_time_delta = current%write_time_ms - previous%write_time_ms
+
+    latency%device = current%device
+    if (read_ops_delta > 0_int64) then
+      latency%read_valid = .true.
+      latency%avg_read_latency_us = real(read_time_delta, real64) * 1000.0_real64 / real(read_ops_delta, real64)
+    end if
+    if (write_ops_delta > 0_int64) then
+      latency%write_valid = .true.
+      latency%avg_write_latency_us = real(write_time_delta, real64) * 1000.0_real64 / real(write_ops_delta, real64)
+    end if
+    latency%valid = latency%read_valid .or. latency%write_valid
+  end function disk_io_latency_from_delta
+
+  logical function matching_disk_io_samples(previous, current) result(matches)
+    type(disk_io_info), intent(in) :: previous
+    type(disk_io_info), intent(in) :: current
+
+    matches = previous%valid .and. current%valid .and. len_trim(current%device) > 0 .and. &
+              trim(previous%device) == trim(current%device)
+  end function matching_disk_io_samples
+
+  logical function any_disk_io_counter_regressed(previous, current) result(regressed)
+    type(disk_io_info), intent(in) :: previous
+    type(disk_io_info), intent(in) :: current
+
+    regressed = current%read_bytes < previous%read_bytes .or. &
+                current%write_bytes < previous%write_bytes .or. &
+                current%read_ops < previous%read_ops .or. &
+                current%write_ops < previous%write_ops .or. &
+                current%read_time_ms < previous%read_time_ms .or. &
+                current%write_time_ms < previous%write_time_ms .or. &
+                current%io_time_ms < previous%io_time_ms .or. &
+                current%weighted_io_time_ms < previous%weighted_io_time_ms
+  end function any_disk_io_counter_regressed
 
   logical function filesystem_pseudo_type(fstype) result(pseudo)
     character(len=*), intent(in) :: fstype
