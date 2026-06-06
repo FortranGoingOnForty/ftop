@@ -16,6 +16,7 @@ module ftop_network
     TABLE_SORT_DESCENDING, &
     TABLE_SORT_NONE, &
     TABLE_SEPARATOR_SPACE, &
+    TABLE_WIDTH_AUTO, &
     TABLE_WIDTH_FIXED, &
     TABLE_WIDTH_WEIGHT, &
     make_table_cell, &
@@ -37,6 +38,8 @@ module ftop_network
   integer, parameter :: NETWORK_TABLE_COLUMNS = 6
   integer, parameter :: NETWORK_FILTER_COUNT = 6
   integer, parameter :: NETWORK_PROCESS_BANDWIDTH_MAX_ROWS = 5
+  integer, parameter :: NETWORK_PROTOCOL_WIDTH = 5
+  integer, parameter :: NETWORK_PROTOCOL_SORT_WIDTH = 7
   character(len=NET_STATE_LEN), parameter :: NETWORK_FILTERS(NETWORK_FILTER_COUNT) = [ &
     character(len=NET_STATE_LEN) :: "", "ESTABLISHED", "LISTEN", "OPEN", "TIME_WAIT", "CLOSE_WAIT" &
   ]
@@ -467,13 +470,12 @@ contains
     if (size(columns) < NETWORK_TABLE_COLUMNS) return
     columns(1)%name = "PROTO"
     columns(1)%width_mode = TABLE_WIDTH_FIXED
-    columns(1)%width = 5
+    columns(1)%width = NETWORK_PROTOCOL_WIDTH
+    if (state%sort_key == NETWORK_SORT_PROTOCOL) columns(1)%width = NETWORK_PROTOCOL_SORT_WIDTH
     columns(2)%name = "LOCAL"
-    columns(2)%width_mode = TABLE_WIDTH_WEIGHT
-    columns(2)%weight = 2
+    columns(2)%width_mode = TABLE_WIDTH_AUTO
     columns(3)%name = "REMOTE"
-    columns(3)%width_mode = TABLE_WIDTH_WEIGHT
-    columns(3)%weight = 2
+    columns(3)%width_mode = TABLE_WIDTH_AUTO
     columns(4)%name = "STATE"
     columns(4)%width_mode = TABLE_WIDTH_FIXED
     columns(4)%width = 12

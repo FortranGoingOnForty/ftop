@@ -1,13 +1,14 @@
 program test_dashboard
   use, intrinsic :: iso_fortran_env, only : int64, real64
-  use fgof_screen, only : allocate_screen
+  use fgof_screen, only : allocate_screen, clear_screen_style
   use fgof_screen_types, only : screen_buffer, screen_style
   use ftop_collector, only : collector_snapshot
   use ftop_color, only : rgb, style_from_rgb
   use ftop_dashboard, only : dashboard_layout, default_dashboard_layout, render_dashboard
-  use ftop_network, only : NETWORK_SORT_PID, NETWORK_SORT_PROCESS, network_table_state, network_table_toggle_sort_direction, &
-    render_network_panel
+  use ftop_network, only : NETWORK_SORT_PID, NETWORK_SORT_PROCESS, NETWORK_SORT_PROTOCOL, network_table_state, &
+    network_table_toggle_sort_direction, render_network_panel
   use ftop_services, only : load_service_cache_from_text
+  use ftop_table, only : TABLE_SORT_ASCENDING, table_sort_indicator
   use ftop_widgets, only : widget_rect
   implicit none
 
@@ -21,6 +22,7 @@ program test_dashboard
   call test_dashboard_renders_paused_indicator()
   call test_dashboard_renders_zoomed_widget()
   call test_dashboard_renders_zoomed_network_table()
+  call test_network_table_column_sizing()
   call test_network_preview_uses_sort_state()
   call test_dashboard_handles_large_network_table()
   call test_dashboard_renders_network_process_bandwidth()
@@ -176,6 +178,33 @@ contains
     text = buffer_text(buffer)
     call require(index(text, "sort state desc") > 0, "zoomed network should render flipped sort")
   end subroutine test_dashboard_renders_zoomed_network_table
+
+  subroutine test_network_table_column_sizing()
+    type(screen_buffer) :: buffer
+    type(collector_snapshot) :: snapshot
+    type(network_table_state) :: network_state
+    type(screen_style) :: style
+    character(len=:), allocatable :: header
+    character(len=:), allocatable :: protocol_header
+    integer :: local_col
+    integer :: remote_col
+
+    snapshot = network_table_snapshot()
+    network_state%sort_key = NETWORK_SORT_PROTOCOL
+    style = clear_screen_style()
+    buffer = allocate_screen(140, 16)
+    call render_network_panel(buffer, widget_rect(1, 1, 140, 16), snapshot, style, style, style, network_state, &
+                              expanded=.true.)
+    header = first_row_containing(buffer, "PROTO")
+    protocol_header = "PROTO " // table_sort_indicator(TABLE_SORT_ASCENDING)
+    local_col = index(header, "LOCAL")
+    remote_col = index(header, "REMOTE")
+
+    call require(index(header, protocol_header) > 0, "network protocol header should keep active sort indicator")
+    call require(local_col > 0 .and. remote_col > local_col, "network table should render local and remote headers")
+    call require(remote_col - local_col <= len("192.0.2.10:53(domain)") + 1, &
+                 "network local column should not expand beyond endpoint width")
+  end subroutine test_network_table_column_sizing
 
   subroutine test_network_preview_uses_sort_state()
     type(screen_buffer) :: buffer
@@ -474,6 +503,19 @@ contains
       end if
     end do
   end function row_text
+
+  function first_row_containing(buffer, needle) result(text)
+    type(screen_buffer), intent(in) :: buffer
+    character(len=*), intent(in) :: needle
+    character(len=:), allocatable :: text
+    integer :: row
+
+    text = ""
+    do row = 1, buffer%size%height
+      text = row_text(buffer, row)
+      if (index(text, needle) > 0) return
+    end do
+  end function first_row_containing
 
   logical function text_cell_has_fg(buffer, needle) result(found)
     type(screen_buffer), intent(in) :: buffer
