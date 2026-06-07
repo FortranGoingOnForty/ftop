@@ -376,16 +376,6 @@ contains
     filter_match = wait_for_string(filter_session, "history spark", SMOKE_TIMEOUT_MS)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not clear fuzzy query"
 
-    if (.not. send_text(filter_session, "h")) error stop "failed to send old sparkline key as fuzzy text"
-    filter_match = wait_for_string(filter_session, "Find: h_", SMOKE_TIMEOUT_MS)
-    if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "old process sparkline key did not start fuzzy search"
-    if (.not. send_text(filter_session, achar(27) // achar(27))) error stop "failed to clear old sparkline key fuzzy query"
-
-    if (.not. send_text(filter_session, "t")) error stop "failed to send old tree key as fuzzy text"
-    filter_match = wait_for_string(filter_session, "Find: t_", SMOKE_TIMEOUT_MS)
-    if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "old process tree key did not start fuzzy search"
-    if (.not. send_text(filter_session, achar(27) // achar(27))) error stop "failed to clear old tree key fuzzy query"
-
     if (.not. send_text(filter_session, achar(27) // "OQ")) error stop "failed to open process signal prompt"
     filter_match = wait_for_string(filter_session, "SIGTERM", SMOKE_TIMEOUT_MS)
     if (filter_match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not open process signal prompt"

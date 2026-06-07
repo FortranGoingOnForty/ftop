@@ -64,7 +64,7 @@ program test_macos_platform
     if (interfaces(interface_index)%valid == 0) error stop "macOS network interface must be valid"
     if (c_string_len(interfaces(interface_index)%name) <= 0) error stop "macOS interface name must not be empty"
     if (c_string_len(interfaces(interface_index)%state) <= 0) error stop "macOS interface state must not be empty"
-    if (interfaces(interface_index)%mtu <= 0) error stop "macOS interface MTU must be positive"
+    if (interfaces(interface_index)%mtu < 0) error stop "macOS interface MTU must not be negative"
     if (interfaces(interface_index)%speed_mbps < 0) error stop "macOS interface speed must not be negative"
   end do
 

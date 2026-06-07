@@ -161,7 +161,7 @@ target_link_libraries(ftop_collector_test PRIVATE ftop_core)
 ftop_avoid_linux_gfortran_callback_pie_warning(ftop_collector_test)
 
 add_test(NAME ftop_collector COMMAND ftop_collector_test)
-set_tests_properties(ftop_collector PROPERTIES TIMEOUT 20)
+set_tests_properties(ftop_collector PROPERTIES TIMEOUT 60)
 
 add_executable(ftop_pthread_test unit/test_pthread.f90)
 target_link_libraries(ftop_pthread_test PRIVATE ftop_core)

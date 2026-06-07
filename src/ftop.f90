@@ -11,11 +11,14 @@ program ftop
   integer :: log_level
   integer :: refresh_ms
   integer :: status
+  logical :: config_set
   logical :: refresh_set
 
   refresh_ms = 0
+  config_path = ""
   log_level = LOG_LEVEL_INFO
   log_path = ""
+  config_set = .false.
   refresh_set = .false.
 
   argument_index = 1
@@ -53,6 +56,7 @@ program ftop
         stop 2
       end if
       config_path = trim(argument)
+      config_set = .true.
     case ("--log-file")
       if (argument_index + 1 > command_argument_count()) then
         write(error_unit, '(a)') "ftop: --log-file requires a path"
@@ -77,11 +81,11 @@ program ftop
     argument_index = argument_index + 1
   end do
 
-  if (refresh_set .and. allocated(config_path)) then
+  if (refresh_set .and. config_set) then
     status = run_ftop(refresh_ms, config_path, log_path=log_path, log_level=log_level)
   else if (refresh_set) then
     status = run_ftop(refresh_ms, log_path=log_path, log_level=log_level)
-  else if (allocated(config_path)) then
+  else if (config_set) then
     status = run_ftop(config_path=config_path, log_path=log_path, log_level=log_level)
   else
     status = run_ftop(log_path=log_path, log_level=log_level)

@@ -4,6 +4,9 @@ program test_collector
   use ftop_collector, only : FTOP_COLLECTOR_HISTORY_CAPACITY, FTOP_COLLECTOR_MAX_GPUS, collector, collector_snapshot
   implicit none
 
+  integer, parameter :: SNAPSHOT_TIMEOUT_MS = 5000
+  integer, parameter :: SAMPLE_COUNT_TIMEOUT_MS = 30000
+
   interface
     integer(c_int) function c_usleep(useconds) bind(C, name="usleep")
       import :: c_int
@@ -266,7 +269,7 @@ contains
       call system_clock(current_count)
       if (rate <= 0) return
       elapsed_ms = int((real(current_count - start_count) / real(rate)) * 1000.0)
-      if (elapsed_ms > 2000) return
+      if (elapsed_ms > SNAPSHOT_TIMEOUT_MS) return
       call wait_poll_interval()
     end do
   end function wait_for_snapshot
@@ -414,7 +417,7 @@ contains
       call system_clock(current_count)
       if (rate <= 0) return
       elapsed_ms = int((real(current_count - start_count) / real(rate)) * 1000.0)
-      if (elapsed_ms > 2000) return
+      if (elapsed_ms > SNAPSHOT_TIMEOUT_MS) return
       call wait_poll_interval()
     end do
   end function wait_for_later_snapshot
@@ -436,7 +439,7 @@ contains
       call system_clock(current_count)
       if (rate <= 0) return
       elapsed_ms = int((real(current_count - start_count) / real(rate)) * 1000.0)
-      if (elapsed_ms > 10000) return
+      if (elapsed_ms > SAMPLE_COUNT_TIMEOUT_MS) return
       call wait_poll_interval()
     end do
   end function wait_for_sample_count

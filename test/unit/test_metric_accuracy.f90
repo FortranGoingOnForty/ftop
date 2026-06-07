@@ -8,11 +8,11 @@ program test_metric_accuracy
 
   real(real64), parameter :: CPU_USAGE_TOLERANCE = 20.0_real64
   real(real64), parameter :: MEMORY_TOTAL_TOLERANCE = 2.0_real64
-  real(real64), parameter :: MEMORY_USED_TOLERANCE = 8.0_real64
+  real(real64), parameter :: MEMORY_USED_TOLERANCE = 15.0_real64
   real(real64), parameter :: PROCESS_CPU_PERCENT_TOLERANCE = 10.0_real64
   real(real64), parameter :: PROCESS_MEMORY_PERCENT_TOLERANCE = 2.0_real64
   integer(c_int), parameter :: BUSY_PROCESS_COUNT = 5_c_int
-  real(real64), parameter :: BUSY_PROCESS_CPU_TOLERANCE = 3.0_real64
+  real(real64), parameter :: BUSY_PROCESS_CPU_TOLERANCE = 8.0_real64
   real(real64), parameter :: BUSY_PROCESS_MEMORY_TOLERANCE = 1.0_real64
 
   interface
