@@ -28,7 +28,8 @@ contains
     type(network_table) :: with_loopback
     character(len=*), parameter :: text = &
       "Inter-|   Receive                                                |  Transmit" // new_line("a") // &
-      " face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed" // new_line("a") // &
+      " face |bytes    packets errs drop fifo frame compressed multicast|" // &
+      "bytes    packets errs drop fifo colls carrier compressed" // new_line("a") // &
       "    lo: 100 1 0 0 0 0 0 0 200 2 0 0 0 0 0 0" // new_line("a") // &
       "  eth0: 123456 789 1 2 3 4 5 6 654321 987 6 5 4 3 2 1" // new_line("a") // &
       " wlan0: 12 3 0 0 0 0 0 0 45 6 0 0 0 0 0 0"
@@ -84,13 +85,19 @@ contains
       new_line("a") // &
       "   0: 00000000:0035 00000000:0000 07 00000000:00000000 00:00000000 00000000 0 0 67890"
     character(len=*), parameter :: tcp6_text = &
-      "  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode" // &
+      "  sl  local_address                         remote_address                        " // &
+      "st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode" // &
       new_line("a") // &
-      "   0: B80D0120000000000000000001000000:1F90 00000000000000000000000001000000:01BB 01 00000000:00000000 00:00000000 00000000 1000 0 98765"
+      "   0: B80D0120000000000000000001000000:1F90 " // &
+      "00000000000000000000000001000000:01BB 01 00000000:00000000 " // &
+      "00:00000000 00000000 1000 0 98765"
     character(len=*), parameter :: udp6_text = &
-      "  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode" // &
+      "  sl  local_address                         remote_address                        " // &
+      "st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode" // &
       new_line("a") // &
-      "   0: 00000000000000000000000000000000:0035 00000000000000000000000000000000:0000 07 00000000:00000000 00:00000000 00000000 0 0 87654"
+      "   0: 00000000000000000000000000000000:0035 " // &
+      "00000000000000000000000000000000:0000 07 00000000:00000000 " // &
+      "00:00000000 00000000 0 0 87654"
 
     connections = parse_linux_proc_net_connections(tcp_text, udp_text, tcp6_text, udp6_text)
     call require(size(connections) == 5, "network connection parser should parse tcp, udp, tcp6, and udp6 rows")
