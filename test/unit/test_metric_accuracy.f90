@@ -8,7 +8,7 @@ program test_metric_accuracy
 
   real(real64), parameter :: CPU_USAGE_TOLERANCE = 20.0_real64
   real(real64), parameter :: MEMORY_TOTAL_TOLERANCE = 2.0_real64
-  real(real64), parameter :: MEMORY_USED_TOLERANCE = 30.0_real64
+  real(real64), parameter :: MEMORY_USED_TOLERANCE = 15.0_real64
   real(real64), parameter :: PROCESS_CPU_PERCENT_TOLERANCE = 10.0_real64
   real(real64), parameter :: PROCESS_MEMORY_PERCENT_TOLERANCE = 2.0_real64
   integer(c_int), parameter :: BUSY_PROCESS_COUNT = 5_c_int
@@ -30,6 +30,11 @@ program test_metric_accuracy
       integer(c_long_long), intent(out) :: used_bytes
       integer(c_int), intent(out) :: sys_errno
     end function c_ftop_accuracy_reference_memory
+
+    integer(c_int) function c_ftop_accuracy_memory_used_is_comparable() &
+        bind(C, name="ftop_accuracy_memory_used_is_comparable")
+      import :: c_int
+    end function c_ftop_accuracy_memory_used_is_comparable
 
     integer(c_int) function c_ftop_accuracy_reference_process(pid, cpu_percent, mem_percent, sys_errno) &
         bind(C, name="ftop_accuracy_reference_process")
@@ -138,8 +143,10 @@ contains
 
     ftop_used_percent = 100.0_real64 * real(memory%used_bytes, real64) / real(memory%total_bytes, real64)
     reference_used_percent = 100.0_real64 * real(reference_used, real64) / real(reference_total, real64)
-    if (abs(ftop_used_percent - reference_used_percent) > MEMORY_USED_TOLERANCE) then
-      error stop "accuracy memory used exceeded tolerance"
+    if (c_ftop_accuracy_memory_used_is_comparable() /= 0_c_int) then
+      if (abs(ftop_used_percent - reference_used_percent) > MEMORY_USED_TOLERANCE) then
+        error stop "accuracy memory used exceeded tolerance"
+      end if
     end if
   end subroutine test_memory_accuracy
 

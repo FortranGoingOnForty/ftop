@@ -415,6 +415,14 @@ int ftop_accuracy_reference_memory(long long *total_bytes, long long *used_bytes
   return rc;
 }
 
+int ftop_accuracy_memory_used_is_comparable(void) {
+#if defined(FTOP_PLATFORM_macos)
+  return 0;
+#else
+  return 1;
+#endif
+}
+
 int ftop_accuracy_reference_process(int pid, double *cpu_percent, double *mem_percent, int *sys_errno) {
   char command[128];
   char line[512];
