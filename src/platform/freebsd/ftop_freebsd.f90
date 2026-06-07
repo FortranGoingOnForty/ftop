@@ -23,6 +23,7 @@ module ftop_platform
     interface_info, &
     net_connection, &
     network_table
+  use ftop_nvidia_nvml, only : nvidia_nvml_gpu_snapshot
   use ftop_platform_types, only : &
     cpu_tick_sample, &
     cpu_topology_info, &
@@ -593,7 +594,7 @@ contains
     associate(unused => self)
     end associate
 
-    table = empty_gpu_table()
+    if (.not. nvidia_nvml_gpu_snapshot(table)) table = empty_gpu_table()
   end function freebsd_get_gpu_table
 
   logical function freebsd_disk_snapshot(table, error_code) result(success)

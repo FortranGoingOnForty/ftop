@@ -1,13 +1,13 @@
-program test_linux_nvml
+program test_nvidia_nvml
   use, intrinsic :: iso_fortran_env, only : int64, real64
   use ftop_gpu_data, only : gpu_table, gpu_table_count
-  use ftop_linux_nvml, only : linux_nvml_gpu_snapshot
+  use ftop_nvidia_nvml, only : nvidia_nvml_gpu_snapshot
   implicit none
 
   integer(int64), parameter :: GIB = 1024_int64 * 1024_int64 * 1024_int64
   character(len=512) :: fixture_path
 
-  if (command_argument_count() /= 1) error stop "usage: test_linux_nvml <fixture>"
+  if (command_argument_count() /= 1) error stop "usage: test_nvidia_nvml <fixture>"
   call get_command_argument(1, fixture_path)
 
   call test_missing_library()
@@ -18,7 +18,7 @@ contains
   subroutine test_missing_library()
     type(gpu_table) :: table
 
-    call require(.not. linux_nvml_gpu_snapshot(table, "/definitely/missing/libnvidia-ml.so.1"), &
+    call require(.not. nvidia_nvml_gpu_snapshot(table, "/definitely/missing/libnvidia-ml.so.1"), &
                  "missing NVML library should not produce a GPU snapshot")
     call require(table%valid, "missing NVML library should leave a valid empty GPU table")
     call require(allocated(table%gpus), "missing NVML library should allocate empty GPU array")
@@ -29,7 +29,7 @@ contains
     character(len=*), intent(in) :: path
     type(gpu_table) :: table
 
-    call require(linux_nvml_gpu_snapshot(table, path), "fixture NVML library should produce a GPU snapshot")
+    call require(nvidia_nvml_gpu_snapshot(table, path), "fixture NVML library should produce a GPU snapshot")
     call require(table%valid, "fixture snapshot should be valid")
     call require(gpu_table_count(table) == 1, "fixture snapshot should contain one GPU")
     call require(table%gpus(1)%valid, "fixture GPU should be valid")
@@ -77,4 +77,4 @@ contains
 
     if (.not. condition) error stop message
   end subroutine require
-end program test_linux_nvml
+end program test_nvidia_nvml

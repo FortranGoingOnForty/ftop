@@ -182,6 +182,13 @@ target_compile_definitions(ftop_metric_accuracy_test PRIVATE FTOP_PLATFORM_${FTO
 add_test(NAME ftop_metric_accuracy COMMAND ftop_metric_accuracy_test)
 set_tests_properties(ftop_metric_accuracy PROPERTIES TIMEOUT 60)
 
+if(FTOP_PLATFORM STREQUAL "linux" OR FTOP_PLATFORM STREQUAL "freebsd")
+  add_library(ftop_nvml_fixture SHARED unit/ftop_nvml_fixture.c)
+
+  add_executable(ftop_nvidia_nvml_test unit/test_nvidia_nvml.f90)
+  target_link_libraries(ftop_nvidia_nvml_test PRIVATE ftop_core)
+endif()
+
 if(FTOP_PLATFORM STREQUAL "freebsd")
   add_executable(ftop_freebsd_sysctl_test unit/test_freebsd_sysctl.f90)
   target_link_libraries(ftop_freebsd_sysctl_test PRIVATE ftop_core)
@@ -202,6 +209,8 @@ if(FTOP_PLATFORM STREQUAL "freebsd")
   target_link_libraries(ftop_freebsd_network_test PRIVATE ftop_core)
 
   add_test(NAME ftop_freebsd_network COMMAND ftop_freebsd_network_test)
+
+  add_test(NAME ftop_freebsd_nvml COMMAND ftop_nvidia_nvml_test $<TARGET_FILE:ftop_nvml_fixture>)
 endif()
 
 if(FTOP_PLATFORM STREQUAL "linux")
@@ -210,12 +219,7 @@ if(FTOP_PLATFORM STREQUAL "linux")
 
   add_test(NAME ftop_linux_platform COMMAND ftop_linux_platform_test)
 
-  add_library(ftop_nvml_fixture SHARED unit/ftop_nvml_fixture.c)
-
-  add_executable(ftop_linux_nvml_test unit/test_linux_nvml.f90)
-  target_link_libraries(ftop_linux_nvml_test PRIVATE ftop_core)
-
-  add_test(NAME ftop_linux_nvml COMMAND ftop_linux_nvml_test $<TARGET_FILE:ftop_nvml_fixture>)
+  add_test(NAME ftop_linux_nvml COMMAND ftop_nvidia_nvml_test $<TARGET_FILE:ftop_nvml_fixture>)
 
   add_executable(ftop_linux_amdgpu_test unit/test_linux_amdgpu.f90 unit/ftop_amdgpu_sysfs_fixture.c)
   target_link_libraries(ftop_linux_amdgpu_test PRIVATE ftop_core)

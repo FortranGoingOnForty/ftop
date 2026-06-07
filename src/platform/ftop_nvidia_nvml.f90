@@ -1,4 +1,4 @@
-module ftop_linux_nvml
+module ftop_nvidia_nvml
   use, intrinsic :: iso_c_binding, only : &
     c_associated, &
     c_char, &
@@ -144,11 +144,11 @@ module ftop_linux_nvml
     procedure(nvml_get_codec_utilization_fn), pointer, nopass :: get_decoder_utilization => null()
   end type nvml_api
 
-  public :: linux_nvml_gpu_snapshot
+  public :: nvidia_nvml_gpu_snapshot
 
 contains
 
-  logical function linux_nvml_gpu_snapshot(table, library_path) result(success)
+  logical function nvidia_nvml_gpu_snapshot(table, library_path) result(success)
     type(gpu_table), intent(out) :: table
     character(len=*), intent(in), optional :: library_path
     type(nvml_api) :: api
@@ -167,7 +167,7 @@ contains
     if (initialized) call shutdown_nvml(api)
     call close_nvml(api)
     if (.not. success) table = empty_gpu_table()
-  end function linux_nvml_gpu_snapshot
+  end function nvidia_nvml_gpu_snapshot
 
   logical function open_nvml(api, library_path) result(success)
     type(nvml_api), intent(out) :: api
@@ -179,6 +179,8 @@ contains
     else
       success = open_nvml_library(api, "libnvidia-ml.so.1")
       if (.not. success) success = open_nvml_library(api, "libnvidia-ml.so")
+      if (.not. success) success = open_nvml_library(api, "/usr/local/lib/libnvidia-ml.so.1")
+      if (.not. success) success = open_nvml_library(api, "/usr/local/lib/libnvidia-ml.so")
     end if
     if (.not. success) return
 
@@ -499,4 +501,4 @@ contains
     end associate
   end subroutine close_nvml
 
-end module ftop_linux_nvml
+end module ftop_nvidia_nvml

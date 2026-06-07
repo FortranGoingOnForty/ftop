@@ -9,7 +9,6 @@ module ftop_platform
   use ftop_linux_intelgpu, only : linux_intelgpu_snapshot
   use ftop_linux_loadavg, only : linux_loadavg_parse
   use ftop_linux_meminfo, only : linux_meminfo_parse
-  use ftop_linux_nvml, only : linux_nvml_gpu_snapshot
   use ftop_linux_proc_stat, only : linux_proc_stat_parse
   use ftop_mem_data, only : metric_memory_info => memory_info
   use ftop_net_data, only : &
@@ -20,6 +19,7 @@ module ftop_platform
     parse_linux_proc_net_connections, &
     parse_linux_proc_net_dev, &
     process_bandwidth
+  use ftop_nvidia_nvml, only : nvidia_nvml_gpu_snapshot
   use ftop_platform_types, only : &
     cpu_tick_sample, &
     cpu_topology_info, &
@@ -556,7 +556,7 @@ contains
     end associate
 
     table = empty_gpu_table()
-    if (linux_nvml_gpu_snapshot(backend_table)) call append_gpu_table(table, backend_table)
+    if (nvidia_nvml_gpu_snapshot(backend_table)) call append_gpu_table(table, backend_table)
     if (linux_amdgpu_snapshot(backend_table)) call append_gpu_table(table, backend_table)
     if (linux_intelgpu_snapshot(backend_table)) call append_gpu_table(table, backend_table)
   end function linux_get_gpu_table
