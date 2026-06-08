@@ -21,6 +21,7 @@ program test_dashboard
 
   call test_default_layout()
   call test_dashboard_renders_metrics()
+  call test_dashboard_renders_default_at_80x24()
   call test_dashboard_scrolls_cpu_cores()
   call test_dashboard_renders_paused_indicator()
   call test_dashboard_renders_zoomed_widget()
@@ -55,17 +56,16 @@ contains
     call require(layout%footer%row == 22, "wide layout footer should stay above bottom border")
 
     layout = default_dashboard_layout(80, 24)
-    call require(layout%cpu_panel%col == layout%memory_panel%col, "narrow layout should stack panels")
-    call require(layout%memory_panel%row > layout%cpu_panel%row, "narrow layout memory panel should follow cpu")
-    call require(layout%memory_panel%width == layout%cpu_panel%width, "narrow panels should share width")
-    call require(layout%network_panel%row > layout%memory_panel%row, "narrow layout network panel should follow memory")
-    call require(layout%network_panel%width == layout%cpu_panel%width, "narrow network panel should share width")
-    call require(layout%disk_panel%row > layout%network_panel%row, "narrow layout disk panel should follow network")
-    call require(layout%disk_panel%width == layout%cpu_panel%width, "narrow disk panel should share width")
-    call require(layout%gpu_panel%row > layout%disk_panel%row, "narrow layout gpu panel should follow disk")
-    call require(layout%gpu_panel%width == layout%cpu_panel%width, "narrow gpu panel should share width")
-    call require(layout%process_panel%row > layout%gpu_panel%row, "narrow layout process panel should follow gpu")
-    call require(layout%process_panel%width == layout%cpu_panel%width, "narrow process panel should share width")
+    call require(layout%memory_panel%row == layout%cpu_panel%row, "narrow layout should pair cpu and memory")
+    call require(layout%memory_panel%col > layout%cpu_panel%col, "narrow layout memory panel should sit right of cpu")
+    call require(layout%network_panel%row > layout%cpu_panel%row, "narrow layout network panel should start second row")
+    call require(layout%disk_panel%row == layout%network_panel%row, "narrow layout disk panel should share second row")
+    call require(layout%disk_panel%col > layout%network_panel%col, "narrow layout disk panel should sit right of network")
+    call require(layout%gpu_panel%row == layout%network_panel%row, "narrow layout gpu panel should share second row")
+    call require(layout%gpu_panel%col > layout%disk_panel%col, "narrow layout gpu panel should sit right of disk")
+    call require(layout%process_panel%row > layout%gpu_panel%row, "narrow layout process panel should follow overview rows")
+    call require(layout%process_panel%width == layout%cpu_panel%width + layout%memory_panel%width, &
+                 "narrow process panel should span the body")
     call require(layout%process_panel%row + layout%process_panel%height <= layout%footer%row, &
                  "narrow process panel should stay above footer")
   end subroutine test_default_layout
@@ -115,6 +115,25 @@ contains
     text = buffer_text(buffer)
     call require(index(text, "network") > 0, "dashboard should render active layout name")
   end subroutine test_dashboard_renders_metrics
+
+  subroutine test_dashboard_renders_default_at_80x24()
+    type(screen_buffer) :: buffer
+    type(collector_snapshot) :: snapshot
+    character(len=:), allocatable :: text
+
+    snapshot = sample_snapshot()
+    buffer = allocate_screen(80, 24)
+    call render_dashboard(buffer, snapshot, 1000, 7, "ready", layout_name="full")
+    text = buffer_text(buffer)
+
+    call require(index(text, "CPU") > 0, "80x24 default should render cpu")
+    call require(index(text, "Memory") > 0, "80x24 default should render memory")
+    call require(index(text, "Network") > 0, "80x24 default should render network")
+    call require(index(text, "Disk") > 0, "80x24 default should render disk")
+    call require(index(text, "GPU") > 0, "80x24 default should render gpu")
+    call require(index(text, "Processes") > 0, "80x24 default should render processes")
+    call require(index(row_text(buffer, 22), "KEYS") > 0, "80x24 default should keep footer visible")
+  end subroutine test_dashboard_renders_default_at_80x24
 
   subroutine test_dashboard_scrolls_cpu_cores()
     type(screen_buffer) :: buffer

@@ -24,7 +24,7 @@ program test_dashboard_snapshots
   integer, parameter :: GPU_PANEL_HEIGHT = 8
   integer, parameter :: PANEL_WIDTH = 44
   integer, parameter :: GRID_HEIGHT = 24
-  integer, parameter :: GRID_WIDTH = 72
+  integer, parameter :: GRID_WIDTH = 80
   integer(int64), parameter :: GIB = 1024_int64 * 1024_int64 * 1024_int64
 
   character(len=512) :: command

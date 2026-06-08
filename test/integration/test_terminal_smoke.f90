@@ -131,12 +131,16 @@ program test_terminal_smoke
   if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not focus CPU before arrow down"
 
   if (.not. send_text(session, achar(27) // "[B")) error stop "failed to send arrow down"
+  match = wait_for_string(session, "focus network", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop arrow down did not focus network"
+
+  if (.not. send_text(session, achar(27) // "[B")) error stop "failed to send second arrow down"
   match = wait_for_string(session, "focus process", SMOKE_TIMEOUT_MS)
-  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop arrow down did not focus process"
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop second arrow down did not focus process"
 
   if (.not. send_text(session, achar(27) // "[A")) error stop "failed to send inactive process arrow up"
-  match = wait_for_string(session, "focus memory", SMOKE_TIMEOUT_MS)
-  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "inactive process arrow up did not focus memory"
+  match = wait_for_string(session, "focus disk", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "inactive process arrow up did not focus disk"
 
   if (.not. send_text(session, "p")) error stop "failed to refocus process before tree active mode"
   match = wait_for_string(session, "focus Process", SMOKE_TIMEOUT_MS)
@@ -151,8 +155,8 @@ program test_terminal_smoke
   if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "escape did not leave process tree active mode"
 
   if (.not. send_text(session, achar(27) // "[A")) error stop "failed to send inactive process arrow up after escape"
-  match = wait_for_string(session, "focus memory", SMOKE_TIMEOUT_MS)
-  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "escaped process arrow up did not focus memory"
+  match = wait_for_string(session, "focus disk", SMOKE_TIMEOUT_MS)
+  if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "escaped process arrow up did not focus disk"
 
   if (.not. send_text(session, "p")) error stop "failed to refocus process before active process navigation"
   match = wait_for_string(session, "focus Process", SMOKE_TIMEOUT_MS)
@@ -175,7 +179,7 @@ program test_terminal_smoke
   if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "escape did not return from process zoom"
 
   if (.not. send_text(session, achar(27) // "[Z")) error stop "failed to send Shift+Tab after arrow down"
-  match = wait_for_string(session, "focus memory", SMOKE_TIMEOUT_MS)
+  match = wait_for_string(session, "focus disk", SMOKE_TIMEOUT_MS)
   if (match%status /= FGOF_EXPECT_STATUS_MATCHED) error stop "ftop did not leave process focus after arrow down"
 
   if (.not. send_text(session, "3")) error stop "failed to send direct layout key"

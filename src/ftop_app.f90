@@ -53,6 +53,7 @@ module ftop_app
     dashboard_layout, &
     dashboard_layout_from_grid, &
     default_dashboard_grid, &
+    default_dashboard_grid_for_width, &
     default_dashboard_layout, &
     LAYOUT_DIRECTION_DOWN, &
     LAYOUT_DIRECTION_LEFT, &
@@ -167,7 +168,7 @@ module ftop_app
   integer, parameter :: DOUBLE_CLICK_MS = 500
   integer, parameter :: PROCESS_FUZZY_IDLE_MS = 1000
   integer, parameter :: PROCESS_SIGNAL_CHOICE_COUNT = 7
-  integer, parameter :: LAYOUT_PRESET_COUNT = 5
+  integer, parameter :: LAYOUT_PRESET_COUNT = 6
   integer, parameter :: LAYOUT_PRESET_NAME_LEN = 16
   integer, parameter :: LAYOUT_PRESET_FILE_LEN = 40
   character(len=*), parameter :: FTOP_VERSION = "0.1.0"
@@ -177,7 +178,8 @@ module ftop_app
     "compact", &
     "process", &
     "network", &
-    "disk" &
+    "disk", &
+    "gpu" &
   ]
   character(len=LAYOUT_PRESET_FILE_LEN), parameter :: LAYOUT_PRESET_FILES(LAYOUT_PRESET_COUNT) = [ &
     character(len=LAYOUT_PRESET_FILE_LEN) :: &
@@ -185,7 +187,8 @@ module ftop_app
     "compact.toml", &
     "process-focused.toml", &
     "network-focused.toml", &
-    "disk-focused.toml" &
+    "disk-focused.toml", &
+    "gpu-focused.toml" &
   ]
 
   type :: terminal_session
@@ -538,6 +541,21 @@ contains
       return
     end if
 
+    if (preset_index == 1) then
+      session%layout = default_dashboard_grid(stacked=.false.)
+      if (.not. apply_layout_config(session, process_error)) then
+        error_message = "layout preset failed: " // process_error
+        return
+      end if
+
+      session%layout_loaded = .false.
+      session%layout_preset_index = preset_index
+      session%layout_preset_name = LAYOUT_PRESET_NAMES(preset_index)
+      call log_info("loaded generated layout preset: " // trim(session%layout_preset_name))
+      loaded = .true.
+      return
+    end if
+
     path = discover_layout_preset_path(trim(LAYOUT_PRESET_FILES(preset_index)))
     if (len(path) == 0) then
       error_message = "layout preset missing: " // trim(LAYOUT_PRESET_FILES(preset_index))
@@ -757,7 +775,7 @@ contains
     if (session%layout_loaded) then
       count = layout_focus_count(session%layout)
     else
-      fallback_grid = default_dashboard_grid(stacked=session%current%size%width < 96)
+      fallback_grid = default_dashboard_grid_for_width(session%current%size%width)
       count = layout_focus_count(fallback_grid)
     end if
   end function current_focus_count
@@ -776,7 +794,7 @@ contains
     if (session%layout_loaded) then
       widget = layout_focus_widget(session%layout, index)
     else
-        fallback_grid = default_dashboard_grid(stacked=session%current%size%width < 96)
+      fallback_grid = default_dashboard_grid_for_width(session%current%size%width)
       widget = layout_focus_widget(fallback_grid, index)
     end if
   end function focused_widget_name
@@ -850,7 +868,7 @@ contains
       if (session%layout_loaded) then
         widget = layout_focus_widget(session%layout, index)
       else
-        fallback_grid = default_dashboard_grid(stacked=session%current%size%width < 96)
+        fallback_grid = default_dashboard_grid_for_width(session%current%size%width)
         widget = layout_focus_widget(fallback_grid, index)
       end if
       if (widget == name) then
@@ -1407,7 +1425,7 @@ contains
     if (session%layout_loaded) then
       next_widget = layout_directional_focus_widget(session%layout, viewport, current_widget, direction)
     else
-      fallback_grid = default_dashboard_grid(stacked=session%current%size%width < 96)
+      fallback_grid = default_dashboard_grid_for_width(session%current%size%width)
       next_widget = layout_directional_focus_widget(fallback_grid, viewport, current_widget, direction)
     end if
     if (len(next_widget) <= 0) then

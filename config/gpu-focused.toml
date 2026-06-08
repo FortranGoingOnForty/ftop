@@ -1,4 +1,8 @@
-# Dense overview layout for dogfooding compact widgets.
+# GPU-focused layout.
+
+[network]
+include_loopback = false
+exclude_interfaces = []
 
 [[row]]
 weight = 1
@@ -16,21 +20,6 @@ min_width = 24
 min_height = 5
 
 [[row.column]]
-widget = "gpu"
-weight = 1
-min_width = 24
-min_height = 5
-
-[[row]]
-weight = 1
-
-[[row.column]]
-widget = "network"
-weight = 1
-min_width = 24
-min_height = 5
-
-[[row.column]]
 widget = "disk"
 weight = 1
 min_width = 24
@@ -40,7 +29,7 @@ min_height = 5
 weight = 2
 
 [[row.column]]
-widget = "process"
+widget = "gpu"
 weight = 1
 min_width = 40
-min_height = 9
+min_height = 8

@@ -32,6 +32,7 @@ module ftop_layout
   integer, parameter, public :: LAYOUT_DIRECTION_RIGHT = 4
   integer, parameter, public :: LAYOUT_PROCESS_COLUMN_CAPACITY = 12
   integer, parameter, public :: LAYOUT_PROCESS_COLUMN_NAME_LEN = 16
+  integer, parameter :: DEFAULT_DASHBOARD_WIDE_MIN_WIDTH = 114
 
   type, public :: layout_process_config
     integer :: column_count = 0
@@ -82,6 +83,7 @@ module ftop_layout
   public :: dashboard_layout_from_grid
   public :: default_dashboard_layout
   public :: default_dashboard_grid
+  public :: default_dashboard_grid_for_width
   public :: distribute_weighted_space
   public :: layout_directional_focus_widget
   public :: layout_focus_count
@@ -102,9 +104,16 @@ contains
     type(dashboard_layout) :: layout
     type(layout_grid) :: grid
 
-    grid = default_dashboard_grid(stacked=width < 96)
+    grid = default_dashboard_grid_for_width(width)
     layout = dashboard_layout_from_grid(width, height, grid)
   end function default_dashboard_layout
+
+  function default_dashboard_grid_for_width(width) result(grid)
+    integer, intent(in) :: width
+    type(layout_grid) :: grid
+
+    grid = default_dashboard_grid(stacked=width < DEFAULT_DASHBOARD_WIDE_MIN_WIDTH)
+  end function default_dashboard_grid_for_width
 
   function dashboard_layout_from_grid(width, height, grid) result(layout)
     integer, intent(in) :: width
@@ -166,13 +175,17 @@ contains
     if (present(stacked)) use_stacked = stacked
 
     if (use_stacked) then
-      allocate(grid%rows(6))
-      grid%rows(1) = make_layout_row(1, [make_layout_column(LAYOUT_WIDGET_CPU, 1, 24, 3)])
-      grid%rows(2) = make_layout_row(1, [make_layout_column(LAYOUT_WIDGET_MEMORY, 1, 24, 3)])
-      grid%rows(3) = make_layout_row(1, [make_layout_column(LAYOUT_WIDGET_NETWORK, 1, 24, 3)])
-      grid%rows(4) = make_layout_row(1, [make_layout_column(LAYOUT_WIDGET_DISK, 1, 24, 3)])
-      grid%rows(5) = make_layout_row(1, [make_layout_column(LAYOUT_WIDGET_GPU, 1, 24, 3)])
-      grid%rows(6) = make_layout_row(2, [make_layout_column(LAYOUT_WIDGET_PROCESS, 1, 40, 4)])
+      allocate(grid%rows(3))
+      grid%rows(1) = make_layout_row(1, [ &
+        make_layout_column(LAYOUT_WIDGET_CPU, 1, 24, 5), &
+        make_layout_column(LAYOUT_WIDGET_MEMORY, 1, 24, 5) &
+      ])
+      grid%rows(2) = make_layout_row(1, [ &
+        make_layout_column(LAYOUT_WIDGET_NETWORK, 1, 24, 5), &
+        make_layout_column(LAYOUT_WIDGET_DISK, 1, 24, 5), &
+        make_layout_column(LAYOUT_WIDGET_GPU, 1, 24, 5) &
+      ])
+      grid%rows(3) = make_layout_row(2, [make_layout_column(LAYOUT_WIDGET_PROCESS, 1, 40, 9)])
     else
       allocate(grid%rows(2))
       grid%rows(1) = make_layout_row(1, [ &
