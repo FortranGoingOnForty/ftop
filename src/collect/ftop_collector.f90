@@ -31,10 +31,17 @@ module ftop_collector
   use ftop_gpu_data, only : &
     GPU_CAPACITY, &
     GPU_DRIVER_VERSION_LEN, &
+    GPU_ENGINE_LEN, &
     GPU_NAME_LEN, &
     GPU_PCI_ID_LEN, &
+    GPU_PROCESS_CAPACITY, &
+    GPU_PROCESS_NAME_LEN, &
     GPU_VENDOR_LEN, &
+    assign_gpu_process_busy_percent, &
     gpu_info, &
+    gpu_process_info, &
+    gpu_process_table, &
+    sort_gpu_process_table, &
     gpu_table
   use ftop_mem_data, only : metric_memory_info => memory_info
   use ftop_net_data, only : &
@@ -91,6 +98,7 @@ module ftop_collector
   integer, parameter, public :: FTOP_COLLECTOR_MAX_FILESYSTEMS = DISK_FILESYSTEM_CAPACITY
   integer, parameter, public :: FTOP_COLLECTOR_MAX_DISK_IO = DISK_IO_CAPACITY
   integer, parameter, public :: FTOP_COLLECTOR_MAX_GPUS = GPU_CAPACITY
+  integer, parameter, public :: FTOP_COLLECTOR_MAX_GPU_PROCESSES = GPU_PROCESS_CAPACITY
 
   type, bind(C) :: collector_shared_state
     integer(c_int) :: stop_requested
@@ -260,6 +268,18 @@ module ftop_collector
     real(c_double) :: gpu_decoder_utilization_percent(FTOP_COLLECTOR_MAX_GPUS)
     integer(c_int) :: gpu_driver_version_valid(FTOP_COLLECTOR_MAX_GPUS)
     character(kind=c_char) :: gpu_driver_version(GPU_DRIVER_VERSION_LEN, FTOP_COLLECTOR_MAX_GPUS)
+    integer(c_int) :: gpu_process_table_valid
+    integer(c_int) :: gpu_process_count
+    integer(c_int) :: gpu_process_valid(FTOP_COLLECTOR_MAX_GPU_PROCESSES)
+    integer(c_int) :: gpu_process_pid(FTOP_COLLECTOR_MAX_GPU_PROCESSES)
+    integer(c_long_long) :: gpu_process_start_time(FTOP_COLLECTOR_MAX_GPU_PROCESSES)
+    character(kind=c_char) :: gpu_process_name(GPU_PROCESS_NAME_LEN, FTOP_COLLECTOR_MAX_GPU_PROCESSES)
+    character(kind=c_char) :: gpu_process_engine(GPU_ENGINE_LEN, FTOP_COLLECTOR_MAX_GPU_PROCESSES)
+    integer(c_long_long) :: gpu_process_engine_time_ns(FTOP_COLLECTOR_MAX_GPU_PROCESSES)
+    integer(c_int) :: gpu_process_busy_percent_valid(FTOP_COLLECTOR_MAX_GPU_PROCESSES)
+    real(c_double) :: gpu_process_busy_percent(FTOP_COLLECTOR_MAX_GPU_PROCESSES)
+    integer(c_int) :: gpu_process_memory_valid(FTOP_COLLECTOR_MAX_GPU_PROCESSES)
+    integer(c_long_long) :: gpu_process_memory_bytes(FTOP_COLLECTOR_MAX_GPU_PROCESSES)
     integer(c_int) :: history_start
     integer(c_int) :: history_count
     real(c_double) :: cpu_usage_history(FTOP_COLLECTOR_HISTORY_CAPACITY)
@@ -283,6 +303,7 @@ module ftop_collector
     type(network_table) :: network
     type(disk_table) :: disk
     type(gpu_table) :: gpu
+    type(gpu_process_table) :: gpu_processes
     real(real64), allocatable :: cpu_usage_history(:)
     real(real64), allocatable :: cpu_core_usage_history(:, :)
     real(real64), allocatable :: memory_usage_history(:)
@@ -452,6 +473,11 @@ contains
       call ignore_mutex_unlock(self%mutex)
       return
     end if
+    if (.not. copy_gpu_processes(self%state, snapshot)) then
+      call clear_snapshot(snapshot)
+      call ignore_mutex_unlock(self%mutex)
+      return
+    end if
     if (.not. copy_cpu_cores(self%state, snapshot)) then
       call clear_snapshot(snapshot)
       call ignore_mutex_unlock(self%mutex)
@@ -515,12 +541,15 @@ contains
     type(disk_table) :: disk
     type(disk_table) :: previous_disk
     type(gpu_table) :: gpu
+    type(gpu_process_table) :: gpu_processes
+    type(gpu_process_table) :: previous_gpu_processes
     type(system_uptime_info) :: system_uptime
     integer(c_long_long) :: deadline_ms
     integer(c_long_long) :: metadata_refresh_ms
     integer(c_long_long) :: previous_network_sample_ms
     integer(c_long_long) :: previous_process_sample_ms
     integer(c_long_long) :: previous_disk_sample_ms
+    integer(c_long_long) :: previous_gpu_process_sample_ms
     integer(c_long_long) :: process_refresh_ms
     logical :: warming_up
 
@@ -547,15 +576,19 @@ contains
     call append_interface_histories(network, empty_network)
     disk = backend%get_disk_table()
     gpu = backend%get_gpu_table()
+    gpu_processes = backend%get_gpu_process_table()
+    call sort_gpu_process_table(gpu_processes)
     deadline_ms = monotonic_ms()
     previous_processes = processes
     previous_network = network
     previous_disk = disk
+    previous_gpu_processes = gpu_processes
     previous_process_sample_ms = deadline_ms
     previous_network_sample_ms = deadline_ms
     previous_disk_sample_ms = deadline_ms
+    previous_gpu_process_sample_ms = deadline_ms
     call publish_sample(state, topology, total_cpu, core_cpus, .true., memory, load_average, system_uptime, processes, &
-                        network, disk, gpu)
+                        network, disk, gpu, gpu_processes)
 
     metadata_refresh_ms = deadline_ms + 1000_c_long_long
     process_refresh_ms = deadline_ms + 1000_c_long_long
@@ -609,10 +642,16 @@ contains
       previous_disk = disk
       previous_disk_sample_ms = deadline_ms
       gpu = backend%get_gpu_table()
+      gpu_processes = backend%get_gpu_process_table()
+      call assign_gpu_process_busy_percent(gpu_processes, previous_gpu_processes, &
+                                           int(max(0_c_long_long, deadline_ms - previous_gpu_process_sample_ms), int64))
+      call sort_gpu_process_table(gpu_processes)
+      previous_gpu_processes = gpu_processes
+      previous_gpu_process_sample_ms = deadline_ms
       call merge_cpu_metadata(core_cpus, cpu_metadata)
 
       call publish_sample(state, topology, total_cpu, core_cpus, warming_up, memory, load_average, system_uptime, &
-                          processes, network, disk, gpu)
+                          processes, network, disk, gpu, gpu_processes)
       if (should_stop(state)) exit
     end do
 
@@ -799,6 +838,7 @@ contains
     state%disk_latency_avg_write_us = 0.0_c_double
     state%disk_latency_p99_us = 0.0_c_double
     call clear_gpu_state(state)
+    call clear_gpu_process_state(state)
     state%history_start = 1_c_int
     state%history_count = 0_c_int
     state%cpu_usage_history = 0.0_c_double
@@ -946,6 +986,7 @@ contains
     state%disk_latency_avg_write_us = 0.0_c_double
     state%disk_latency_p99_us = 0.0_c_double
     call clear_gpu_state(state)
+    call clear_gpu_process_state(state)
     state%history_start = 1_c_int
     state%history_count = 0_c_int
     state%cpu_usage_history = 0.0_c_double
@@ -987,6 +1028,7 @@ contains
     snapshot%network%valid = .false.
     snapshot%disk%valid = .false.
     snapshot%gpu%valid = .false.
+    snapshot%gpu_processes%valid = .false.
   end subroutine clear_snapshot
 
   subroutine clear_gpu_state(state)
@@ -1025,6 +1067,23 @@ contains
     state%gpu_driver_version_valid = 0_c_int
     state%gpu_driver_version = c_null_char
   end subroutine clear_gpu_state
+
+  subroutine clear_gpu_process_state(state)
+    type(collector_shared_state), intent(inout) :: state
+
+    state%gpu_process_table_valid = 0_c_int
+    state%gpu_process_count = 0_c_int
+    state%gpu_process_valid = 0_c_int
+    state%gpu_process_pid = 0_c_int
+    state%gpu_process_start_time = 0_c_long_long
+    state%gpu_process_name = c_null_char
+    state%gpu_process_engine = c_null_char
+    state%gpu_process_engine_time_ns = 0_c_long_long
+    state%gpu_process_busy_percent_valid = 0_c_int
+    state%gpu_process_busy_percent = 0.0_c_double
+    state%gpu_process_memory_valid = 0_c_int
+    state%gpu_process_memory_bytes = 0_c_long_long
+  end subroutine clear_gpu_process_state
 
   logical function copy_cpu_cores(state, snapshot) result(success)
     type(collector_shared_state), intent(in) :: state
@@ -1348,6 +1407,44 @@ contains
     success = .true.
   end function copy_gpu
 
+  logical function copy_gpu_processes(state, snapshot) result(success)
+    type(collector_shared_state), intent(in) :: state
+    type(collector_snapshot), intent(inout) :: snapshot
+    integer :: allocation_status
+    integer :: process_count
+    integer :: process_index
+    logical :: string_valid
+
+    success = .false.
+    process_count = bounded_gpu_process_count(int(state%gpu_process_count))
+    snapshot%gpu_processes%valid = state%gpu_process_table_valid /= 0_c_int
+    allocate(snapshot%gpu_processes%processes(process_count), stat=allocation_status)
+    if (allocation_status /= 0) return
+
+    do process_index = 1, process_count
+      snapshot%gpu_processes%processes(process_index)%valid = state%gpu_process_valid(process_index) /= 0_c_int
+      snapshot%gpu_processes%processes(process_index)%pid = int(state%gpu_process_pid(process_index))
+      snapshot%gpu_processes%processes(process_index)%start_time = &
+        int(state%gpu_process_start_time(process_index), int64)
+      call copy_c_chars_to_fortran(state%gpu_process_name(:, process_index), state%gpu_process_valid(process_index), &
+                                   snapshot%gpu_processes%processes(process_index)%process_name, string_valid)
+      call copy_c_chars_to_fortran(state%gpu_process_engine(:, process_index), state%gpu_process_valid(process_index), &
+                                   snapshot%gpu_processes%processes(process_index)%engine, string_valid)
+      snapshot%gpu_processes%processes(process_index)%engine_time_ns = &
+        int(state%gpu_process_engine_time_ns(process_index), int64)
+      snapshot%gpu_processes%processes(process_index)%busy_percent_valid = &
+        state%gpu_process_busy_percent_valid(process_index) /= 0_c_int
+      snapshot%gpu_processes%processes(process_index)%busy_percent = &
+        real(state%gpu_process_busy_percent(process_index), real64)
+      snapshot%gpu_processes%processes(process_index)%memory_valid = &
+        state%gpu_process_memory_valid(process_index) /= 0_c_int
+      snapshot%gpu_processes%processes(process_index)%memory_bytes = &
+        int(state%gpu_process_memory_bytes(process_index), int64)
+    end do
+
+    success = .true.
+  end function copy_gpu_processes
+
   logical function copy_history(state, snapshot) result(success)
     type(collector_shared_state), intent(in) :: state
     type(collector_snapshot), intent(inout) :: snapshot
@@ -1449,6 +1546,12 @@ contains
     bounded = max(0, min(FTOP_COLLECTOR_MAX_GPUS, gpu_count))
   end function bounded_gpu_count
 
+  integer function bounded_gpu_process_count(process_count) result(bounded)
+    integer, intent(in) :: process_count
+
+    bounded = max(0, min(FTOP_COLLECTOR_MAX_GPU_PROCESSES, process_count))
+  end function bounded_gpu_process_count
+
   integer function bounded_process_history_count(history_count) result(bounded)
     integer, intent(in) :: history_count
 
@@ -1542,7 +1645,7 @@ contains
   end function should_stop
 
   subroutine publish_sample(state, topology, total_cpu, core_cpus, warming_up, memory, load_average, system_uptime, &
-                            processes, network, disk, gpu)
+                            processes, network, disk, gpu, gpu_processes)
     type(collector_shared_state), intent(inout) :: state
     type(cpu_topology_info), intent(in) :: topology
     type(cpu_core_info), intent(in) :: total_cpu
@@ -1555,6 +1658,7 @@ contains
     type(network_table), intent(in) :: network
     type(disk_table), intent(in) :: disk
     type(gpu_table), intent(in) :: gpu
+    type(gpu_process_table), intent(in) :: gpu_processes
     type(ftop_mutex_handle) :: mutex
     integer :: core_count
     integer :: physical_core_count
@@ -1600,6 +1704,7 @@ contains
     call publish_network(state, network)
     call publish_disk(state, disk)
     call publish_gpu(state, gpu)
+    call publish_gpu_processes(state, gpu_processes)
     call append_history(state, real(state%cpu_usage_percent, real64), memory_usage_percent(memory), core_cpus, core_count, &
                         gpu)
 
@@ -2014,6 +2119,44 @@ contains
                                         state%gpu_driver_version(:, gpu_index), &
                                         state%gpu_driver_version_valid(gpu_index))
   end subroutine publish_gpu_info
+
+  subroutine publish_gpu_processes(state, processes)
+    type(collector_shared_state), intent(inout) :: state
+    type(gpu_process_table), intent(in) :: processes
+    integer :: process_count
+    integer :: process_index
+
+    call clear_gpu_process_state(state)
+    state%gpu_process_table_valid = merge(1_c_int, 0_c_int, processes%valid)
+    if (.not. processes%valid) return
+    if (.not. allocated(processes%processes)) return
+
+    process_count = bounded_gpu_process_count(size(processes%processes))
+    state%gpu_process_count = int(process_count, c_int)
+    do process_index = 1, process_count
+      call publish_gpu_process_info(state, process_index, processes%processes(process_index))
+    end do
+  end subroutine publish_gpu_processes
+
+  subroutine publish_gpu_process_info(state, process_index, process)
+    type(collector_shared_state), intent(inout) :: state
+    integer, intent(in) :: process_index
+    type(gpu_process_info), intent(in) :: process
+    integer(c_int) :: string_valid
+
+    state%gpu_process_valid(process_index) = merge(1_c_int, 0_c_int, process%valid)
+    state%gpu_process_pid(process_index) = int(max(0, process%pid), c_int)
+    state%gpu_process_start_time(process_index) = int(max(0_int64, process%start_time), c_long_long)
+    call copy_fortran_string_to_c_chars(process%process_name, len_trim(process%process_name) > 0, &
+                                        state%gpu_process_name(:, process_index), string_valid)
+    call copy_fortran_string_to_c_chars(process%engine, len_trim(process%engine) > 0, &
+                                        state%gpu_process_engine(:, process_index), string_valid)
+    state%gpu_process_engine_time_ns(process_index) = int(max(0_int64, process%engine_time_ns), c_long_long)
+    state%gpu_process_busy_percent_valid(process_index) = merge(1_c_int, 0_c_int, process%busy_percent_valid)
+    state%gpu_process_busy_percent(process_index) = real(max(0.0_real64, process%busy_percent), c_double)
+    state%gpu_process_memory_valid(process_index) = merge(1_c_int, 0_c_int, process%memory_valid)
+    state%gpu_process_memory_bytes(process_index) = int(max(0_int64, process%memory_bytes), c_long_long)
+  end subroutine publish_gpu_process_info
 
   subroutine copy_process_history_to_state(state, process_index, process)
     type(collector_shared_state), intent(inout) :: state

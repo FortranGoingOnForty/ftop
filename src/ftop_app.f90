@@ -48,6 +48,11 @@ module ftop_app
     disk_table_select_delta, &
     disk_table_state, &
     disk_table_status
+  use ftop_gpu, only : &
+    gpu_process_page_delta, &
+    gpu_process_select_delta, &
+    gpu_process_state, &
+    gpu_process_status
   use ftop_help, only : render_help_overlay
   use ftop_layout, only : &
     dashboard_layout, &
@@ -201,6 +206,7 @@ module ftop_app
     type(key_decoder_state) :: decoder
     type(network_table_state) :: network_state
     type(disk_table_state) :: disk_state
+    type(gpu_process_state) :: gpu_state
     type(process_table_state) :: process_state
     character(len=:), allocatable :: config_path
     character(len=LAYOUT_PRESET_NAME_LEN) :: layout_preset_name = "full"
@@ -227,6 +233,7 @@ module ftop_app
     logical :: cpu_core_active = .false.
     logical :: network_table_active = .false.
     logical :: disk_table_active = .false.
+    logical :: gpu_process_active = .false.
     logical :: process_tree_active = .false.
     logical :: paused = .false.
     logical :: running = .true.
@@ -438,23 +445,27 @@ contains
     if (session%layout_loaded) then
       call render_dashboard(session%current, snapshot, session%refresh_ms, session%frame_count, &
                                 session%status_text, session%layout, focus, session%zoomed, &
-                                layout_name=trim(session%layout_preset_name), render_fps=session%render_fps, &
-                                process_state=session%process_state, &
-                                network_state=session%network_state, disk_state=session%disk_state, paused=session%paused, &
-                                cpu_core_scroll_offset=session%cpu_core_scroll_offset, &
-                                cpu_core_active=session%cpu_core_active, process_tree_active=session%process_tree_active, &
-                                network_table_active=session%network_table_active, &
-                                disk_table_active=session%disk_table_active)
+                                 layout_name=trim(session%layout_preset_name), render_fps=session%render_fps, &
+                                 process_state=session%process_state, &
+                                 network_state=session%network_state, disk_state=session%disk_state, &
+                                 gpu_state=session%gpu_state, paused=session%paused, &
+                                 cpu_core_scroll_offset=session%cpu_core_scroll_offset, &
+                                 cpu_core_active=session%cpu_core_active, process_tree_active=session%process_tree_active, &
+                                 network_table_active=session%network_table_active, &
+                                 disk_table_active=session%disk_table_active, &
+                                 gpu_process_active=session%gpu_process_active)
     else
       call render_dashboard(session%current, snapshot, session%refresh_ms, session%frame_count, &
                                 session%status_text, focused_widget=focus, zoomed=session%zoomed, &
-                                layout_name=trim(session%layout_preset_name), render_fps=session%render_fps, &
-                                process_state=session%process_state, &
-                                network_state=session%network_state, disk_state=session%disk_state, paused=session%paused, &
-                                cpu_core_scroll_offset=session%cpu_core_scroll_offset, &
-                                cpu_core_active=session%cpu_core_active, process_tree_active=session%process_tree_active, &
-                                network_table_active=session%network_table_active, &
-                                disk_table_active=session%disk_table_active)
+                                 layout_name=trim(session%layout_preset_name), render_fps=session%render_fps, &
+                                 process_state=session%process_state, &
+                                 network_state=session%network_state, disk_state=session%disk_state, &
+                                 gpu_state=session%gpu_state, paused=session%paused, &
+                                 cpu_core_scroll_offset=session%cpu_core_scroll_offset, &
+                                 cpu_core_active=session%cpu_core_active, process_tree_active=session%process_tree_active, &
+                                 network_table_active=session%network_table_active, &
+                                 disk_table_active=session%disk_table_active, &
+                                 gpu_process_active=session%gpu_process_active)
     end if
     if (session%help_visible) call render_help_overlay(session%current, focus)
   end subroutine draw_frame
@@ -621,6 +632,7 @@ contains
     session%network_table_active = .false.
     call network_table_quick_clear(session%network_state)
     session%disk_table_active = .false.
+    session%gpu_process_active = .false.
     session%process_tree_active = .false.
     if (old_zoomed .and. layout_contains_widget(session%layout, old_focus)) then
       session%zoomed = .false.
@@ -894,6 +906,7 @@ contains
       session%network_table_active = .false.
       call network_table_quick_clear(session%network_state)
       session%disk_table_active = .false.
+      session%gpu_process_active = .false.
       session%process_tree_active = .false.
     end if
     session%focus_index = bounded
@@ -952,6 +965,7 @@ contains
     session%network_table_active = .false.
     call network_table_quick_clear(session%network_state)
     session%disk_table_active = .false.
+    session%gpu_process_active = .false.
     session%process_tree_active = .false.
     session%needs_full_render = .true.
     if (session%zoomed) then
@@ -1160,6 +1174,7 @@ contains
     if (handle_process_tree_mode_key(session, event%key_name)) return
     if (handle_network_table_mode_key(session, event%key_name)) return
     if (handle_disk_table_mode_key(session, event%key_name)) return
+    if (handle_gpu_process_mode_key(session, event%key_name)) return
     if (handle_directional_focus_key(session, event%key_name)) return
     if (handle_process_named_key(session, event%key_name)) return
     if (handle_network_named_key(session, event%key_name)) return
@@ -1393,6 +1408,59 @@ contains
     end select
     call set_status(session, "disk table navigate " // disk_table_status(session%disk_state))
   end subroutine handle_active_disk_table_key
+
+  logical function handle_gpu_process_mode_key(session, key_name) result(handled)
+    type(terminal_session), intent(inout) :: session
+    character(len=*), intent(in) :: key_name
+
+    handled = .false.
+    if (.not. gpu_widget_focused(session)) return
+    if (text_input_active(session)) return
+
+    select case (key_name)
+    case (FGOF_KEY_ENTER)
+      if (session%zoomed) then
+        call toggle_zoom(session)
+      else if (session%gpu_process_active) then
+        session%gpu_process_active = .false.
+        call toggle_zoom(session)
+      else
+        session%gpu_process_active = .true.
+        call set_status(session, "gpu processes active")
+      end if
+      handled = .true.
+    case (FGOF_KEY_ESCAPE)
+      if (.not. session%gpu_process_active) return
+      session%gpu_process_active = .false.
+      call set_status(session, "focus gpu")
+      handled = .true.
+    case (FGOF_KEY_UP, FGOF_KEY_DOWN, FGOF_KEY_PAGEUP, FGOF_KEY_PAGEDOWN, FGOF_KEY_HOME, FGOF_KEY_END)
+      if (.not. session%zoomed .and. .not. session%gpu_process_active) return
+      call handle_active_gpu_process_key(session, key_name)
+      handled = .true.
+    end select
+  end function handle_gpu_process_mode_key
+
+  subroutine handle_active_gpu_process_key(session, key_name)
+    type(terminal_session), intent(inout) :: session
+    character(len=*), intent(in) :: key_name
+
+    select case (key_name)
+    case (FGOF_KEY_UP)
+      call gpu_process_select_delta(session%gpu_state, -1)
+    case (FGOF_KEY_DOWN)
+      call gpu_process_select_delta(session%gpu_state, 1)
+    case (FGOF_KEY_PAGEUP)
+      call gpu_process_page_delta(session%gpu_state, -1)
+    case (FGOF_KEY_PAGEDOWN)
+      call gpu_process_page_delta(session%gpu_state, 1)
+    case (FGOF_KEY_HOME)
+      call gpu_process_select_delta(session%gpu_state, -session%gpu_state%row_count)
+    case (FGOF_KEY_END)
+      call gpu_process_select_delta(session%gpu_state, session%gpu_state%row_count)
+    end select
+    call set_status(session, "gpu process navigate " // gpu_process_status(session%gpu_state))
+  end subroutine handle_active_gpu_process_key
 
   logical function handle_directional_focus_key(session, key_name) result(handled)
     type(terminal_session), intent(inout) :: session
@@ -2160,6 +2228,12 @@ contains
 
     focused = focused_widget_name(session) == "disk"
   end function disk_widget_focused
+
+  logical function gpu_widget_focused(session) result(focused)
+    type(terminal_session), intent(in) :: session
+
+    focused = focused_widget_name(session) == "gpu"
+  end function gpu_widget_focused
 
   subroutine begin_process_signal(session)
     type(terminal_session), intent(inout) :: session

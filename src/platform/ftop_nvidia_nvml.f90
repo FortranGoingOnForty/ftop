@@ -5,8 +5,10 @@ module ftop_nvidia_nvml
     c_f_procpointer, &
     c_funptr, &
     c_int, &
+    c_loc, &
     c_long_long, &
     c_null_char, &
+    c_null_ptr, &
     c_ptr
   use, intrinsic :: iso_fortran_env, only : int64, real64
   use ftop_dl, only : ftop_dl_handle, ftop_dlclose, ftop_dlopen, ftop_dlsym
@@ -14,13 +16,21 @@ module ftop_nvidia_nvml
     GPU_CAPACITY, &
     GPU_DRIVER_VERSION_LEN, &
     GPU_NAME_LEN, &
+    GPU_PROCESS_CAPACITY, &
+    GPU_PROCESS_NAME_LEN, &
+    empty_gpu_process_table, &
     empty_gpu_table, &
     gpu_info, &
+    gpu_process_info, &
+    gpu_process_table, &
+    merge_gpu_process, &
+    sort_gpu_process_table, &
     gpu_table
   implicit none
   private
 
   integer(c_int), parameter :: NVML_SUCCESS = 0_c_int
+  integer(c_int), parameter :: NVML_ERROR_INSUFFICIENT_SIZE = 7_c_int
   integer(c_int), parameter :: NVML_TEMPERATURE_GPU = 0_c_int
   integer(c_int), parameter :: NVML_CLOCK_GRAPHICS = 0_c_int
   integer(c_int), parameter :: NVML_CLOCK_MEMORY = 2_c_int
@@ -47,6 +57,20 @@ module ftop_nvidia_nvml
     integer(c_int) :: reserved0
     integer(c_int) :: reserved1
   end type nvml_pci_info
+
+  type, bind(C) :: nvml_process_info
+    integer(c_int) :: pid
+    integer(c_long_long) :: used_gpu_memory
+  end type nvml_process_info
+
+  type, bind(C) :: nvml_process_utilization_sample
+    integer(c_int) :: pid
+    integer(c_long_long) :: time_stamp
+    integer(c_int) :: sm_util
+    integer(c_int) :: memory_util
+    integer(c_int) :: encoder_util
+    integer(c_int) :: decoder_util
+  end type nvml_process_utilization_sample
 
   abstract interface
     integer(c_int) function nvml_init_fn() bind(C)
@@ -76,6 +100,13 @@ module ftop_nvidia_nvml
       character(kind=c_char), intent(out) :: value(*)
       integer(c_int), value :: value_len
     end function nvml_get_system_string_fn
+
+    integer(c_int) function nvml_get_process_name_fn(pid, value, value_len) bind(C)
+      import :: c_char, c_int
+      integer(c_int), value :: pid
+      character(kind=c_char), intent(out) :: value(*)
+      integer(c_int), value :: value_len
+    end function nvml_get_process_name_fn
 
     integer(c_int) function nvml_get_utilization_fn(device, utilization) bind(C)
       import :: c_int, c_ptr, nvml_utilization_rates
@@ -121,6 +152,21 @@ module ftop_nvidia_nvml
       integer(c_int), intent(out) :: utilization
       integer(c_int), intent(out) :: sample_period_us
     end function nvml_get_codec_utilization_fn
+
+    integer(c_int) function nvml_get_processes_fn(device, process_count, processes) bind(C)
+      import :: c_int, c_ptr
+      type(c_ptr), value :: device
+      integer(c_int), intent(inout) :: process_count
+      type(c_ptr), value :: processes
+    end function nvml_get_processes_fn
+
+    integer(c_int) function nvml_get_process_utilization_fn(device, samples, sample_count, last_seen_timestamp) bind(C)
+      import :: c_int, c_long_long, c_ptr
+      type(c_ptr), value :: device
+      type(c_ptr), value :: samples
+      integer(c_int), intent(inout) :: sample_count
+      integer(c_long_long), value :: last_seen_timestamp
+    end function nvml_get_process_utilization_fn
   end interface
 
   type :: nvml_api
@@ -131,6 +177,7 @@ module ftop_nvidia_nvml
     procedure(nvml_get_handle_fn), pointer, nopass :: get_handle => null()
     procedure(nvml_get_device_string_fn), pointer, nopass :: get_name => null()
     procedure(nvml_get_system_string_fn), pointer, nopass :: get_driver_version => null()
+    procedure(nvml_get_process_name_fn), pointer, nopass :: get_process_name => null()
     procedure(nvml_get_utilization_fn), pointer, nopass :: get_utilization => null()
     procedure(nvml_get_memory_fn), pointer, nopass :: get_memory => null()
     procedure(nvml_get_pci_fn), pointer, nopass :: get_pci => null()
@@ -142,9 +189,13 @@ module ftop_nvidia_nvml
     procedure(nvml_get_clock_fn), pointer, nopass :: get_max_clock => null()
     procedure(nvml_get_codec_utilization_fn), pointer, nopass :: get_encoder_utilization => null()
     procedure(nvml_get_codec_utilization_fn), pointer, nopass :: get_decoder_utilization => null()
+    procedure(nvml_get_processes_fn), pointer, nopass :: get_compute_processes => null()
+    procedure(nvml_get_processes_fn), pointer, nopass :: get_graphics_processes => null()
+    procedure(nvml_get_process_utilization_fn), pointer, nopass :: get_process_utilization => null()
   end type nvml_api
 
   public :: nvidia_nvml_gpu_snapshot
+  public :: nvidia_nvml_gpu_process_snapshot
 
 contains
 
@@ -168,6 +219,27 @@ contains
     call close_nvml(api)
     if (.not. success) table = empty_gpu_table()
   end function nvidia_nvml_gpu_snapshot
+
+  logical function nvidia_nvml_gpu_process_snapshot(table, library_path) result(success)
+    type(gpu_process_table), intent(out) :: table
+    character(len=*), intent(in), optional :: library_path
+    type(nvml_api) :: api
+    logical :: initialized
+
+    table = gpu_process_table()
+    success = .false.
+    initialized = .false.
+    if (.not. open_nvml(api, library_path)) return
+
+    if (api%init() == NVML_SUCCESS) then
+      initialized = .true.
+      success = collect_nvml_gpu_processes(api, table)
+    end if
+
+    if (initialized) call shutdown_nvml(api)
+    call close_nvml(api)
+    if (.not. success) table = gpu_process_table()
+  end function nvidia_nvml_gpu_process_snapshot
 
   logical function open_nvml(api, library_path) result(success)
     type(nvml_api), intent(out) :: api
@@ -223,6 +295,9 @@ contains
     if (ftop_dlsym(api%library, "nvmlSystemGetDriverVersion", symbol)) then
       call c_f_procpointer(symbol, api%get_driver_version)
     end if
+    if (ftop_dlsym(api%library, "nvmlSystemGetProcessName", symbol)) then
+      call c_f_procpointer(symbol, api%get_process_name)
+    end if
     if (ftop_dlsym(api%library, "nvmlDeviceGetUtilizationRates", symbol)) then
       call c_f_procpointer(symbol, api%get_utilization)
     end if
@@ -241,6 +316,25 @@ contains
     end if
     if (ftop_dlsym(api%library, "nvmlDeviceGetDecoderUtilization", symbol)) then
       call c_f_procpointer(symbol, api%get_decoder_utilization)
+    end if
+    if (ftop_dlsym(api%library, "nvmlDeviceGetComputeRunningProcesses_v2", symbol)) then
+      call c_f_procpointer(symbol, api%get_compute_processes)
+    end if
+    if (.not. associated(api%get_compute_processes)) then
+      if (ftop_dlsym(api%library, "nvmlDeviceGetComputeRunningProcesses", symbol)) then
+        call c_f_procpointer(symbol, api%get_compute_processes)
+      end if
+    end if
+    if (ftop_dlsym(api%library, "nvmlDeviceGetGraphicsRunningProcesses_v2", symbol)) then
+      call c_f_procpointer(symbol, api%get_graphics_processes)
+    end if
+    if (.not. associated(api%get_graphics_processes)) then
+      if (ftop_dlsym(api%library, "nvmlDeviceGetGraphicsRunningProcesses", symbol)) then
+        call c_f_procpointer(symbol, api%get_graphics_processes)
+      end if
+    end if
+    if (ftop_dlsym(api%library, "nvmlDeviceGetProcessUtilization", symbol)) then
+      call c_f_procpointer(symbol, api%get_process_utilization)
     end if
   end subroutine resolve_nvml_symbols
 
@@ -271,6 +365,157 @@ contains
     end do
     success = .true.
   end function collect_nvml_gpus
+
+  logical function collect_nvml_gpu_processes(api, table) result(success)
+    type(nvml_api), intent(in) :: api
+    type(gpu_process_table), intent(out) :: table
+    type(gpu_process_info) :: processes(GPU_PROCESS_CAPACITY)
+    type(c_ptr) :: device
+    integer(c_int) :: c_count
+    integer :: device_count
+    integer :: device_index
+    integer :: process_count
+
+    table = empty_gpu_process_table()
+    processes = gpu_process_info()
+    process_count = 0
+    success = .false.
+    if (api%get_count(c_count) /= NVML_SUCCESS) return
+    if (c_count < 0_c_int) return
+
+    device_count = min(int(c_count), GPU_CAPACITY)
+    do device_index = 1, device_count
+      if (api%get_handle(int(device_index - 1, c_int), device) /= NVML_SUCCESS) cycle
+      if (.not. c_associated(device)) cycle
+      call collect_nvml_device_processes(api, device, processes, process_count)
+    end do
+
+    if (allocated(table%processes)) deallocate(table%processes)
+    allocate(table%processes(process_count))
+    if (process_count > 0) table%processes = processes(:process_count)
+    table%valid = .true.
+    call sort_gpu_process_table(table)
+    success = .true.
+  end function collect_nvml_gpu_processes
+
+  subroutine collect_nvml_device_processes(api, device, processes, process_count)
+    type(nvml_api), intent(in) :: api
+    type(c_ptr), intent(in) :: device
+    type(gpu_process_info), intent(inout) :: processes(:)
+    integer, intent(inout) :: process_count
+
+    if (associated(api%get_compute_processes)) then
+      call collect_nvml_running_processes(api, device, "compute", api%get_compute_processes, processes, process_count)
+    end if
+    if (associated(api%get_graphics_processes)) then
+      call collect_nvml_running_processes(api, device, "graphics", api%get_graphics_processes, processes, process_count)
+    end if
+    if (associated(api%get_process_utilization)) then
+      call collect_nvml_process_utilization(api, device, processes, process_count)
+    end if
+  end subroutine collect_nvml_device_processes
+
+  subroutine collect_nvml_running_processes(api, device, engine, get_processes, processes, process_count)
+    type(nvml_api), intent(in) :: api
+    type(c_ptr), intent(in) :: device
+    character(len=*), intent(in) :: engine
+    procedure(nvml_get_processes_fn), pointer, intent(in) :: get_processes
+    type(gpu_process_info), intent(inout) :: processes(:)
+    integer, intent(inout) :: process_count
+    type(nvml_process_info), target :: nvml_processes(GPU_PROCESS_CAPACITY)
+    type(gpu_process_info) :: process
+    integer(c_int) :: info_count
+    integer(c_int) :: rc
+    integer :: info_index
+    integer :: limit
+
+    nvml_processes = nvml_process_info(0_c_int, 0_c_long_long)
+    info_count = 0_c_int
+    rc = get_processes(device, info_count, c_null_ptr)
+    if (rc == NVML_SUCCESS .and. info_count <= 0_c_int) return
+    if (rc /= NVML_SUCCESS .and. rc /= NVML_ERROR_INSUFFICIENT_SIZE) then
+      info_count = int(size(nvml_processes), c_int)
+    else
+      info_count = int(min(int(info_count), size(nvml_processes)), c_int)
+    end if
+    if (info_count <= 0_c_int) return
+
+    rc = get_processes(device, info_count, c_loc(nvml_processes(1)))
+    if (rc /= NVML_SUCCESS) return
+    limit = min(int(info_count), size(nvml_processes))
+    do info_index = 1, limit
+      process = nvml_running_process_info(api, nvml_processes(info_index), engine)
+      call merge_gpu_process(processes, process_count, process)
+    end do
+  end subroutine collect_nvml_running_processes
+
+  subroutine collect_nvml_process_utilization(api, device, processes, process_count)
+    type(nvml_api), intent(in) :: api
+    type(c_ptr), intent(in) :: device
+    type(gpu_process_info), intent(inout) :: processes(:)
+    integer, intent(inout) :: process_count
+    type(nvml_process_utilization_sample), target :: samples(GPU_PROCESS_CAPACITY)
+    type(gpu_process_info) :: process
+    integer(c_int) :: sample_count
+    integer(c_int) :: rc
+    integer :: limit
+    integer :: sample_index
+
+    samples = nvml_process_utilization_sample(0_c_int, 0_c_long_long, 0_c_int, 0_c_int, 0_c_int, 0_c_int)
+    sample_count = 0_c_int
+    rc = api%get_process_utilization(device, c_null_ptr, sample_count, 0_c_long_long)
+    if (rc == NVML_SUCCESS .and. sample_count <= 0_c_int) return
+    if (rc /= NVML_SUCCESS .and. rc /= NVML_ERROR_INSUFFICIENT_SIZE) then
+      sample_count = int(size(samples), c_int)
+    else
+      sample_count = int(min(int(sample_count), size(samples)), c_int)
+    end if
+    if (sample_count <= 0_c_int) return
+
+    rc = api%get_process_utilization(device, c_loc(samples(1)), sample_count, 0_c_long_long)
+    if (rc /= NVML_SUCCESS) return
+    limit = min(int(sample_count), size(samples))
+    do sample_index = 1, limit
+      process = nvml_process_utilization_info(api, samples(sample_index))
+      call merge_gpu_process(processes, process_count, process)
+    end do
+  end subroutine collect_nvml_process_utilization
+
+  function nvml_running_process_info(api, nvml_process, engine) result(process)
+    type(nvml_api), intent(in) :: api
+    type(nvml_process_info), intent(in) :: nvml_process
+    character(len=*), intent(in) :: engine
+    type(gpu_process_info) :: process
+
+    process = gpu_process_info()
+    if (nvml_process%pid <= 0_c_int) return
+    process%valid = .true.
+    process%pid = int(nvml_process%pid)
+    process%process_name = nvml_process_name(api, process%pid)
+    process%engine = engine
+    if (nvml_process%used_gpu_memory > 0_c_long_long) then
+      process%memory_valid = .true.
+      process%memory_bytes = int(nvml_process%used_gpu_memory, int64)
+    end if
+  end function nvml_running_process_info
+
+  function nvml_process_utilization_info(api, sample) result(process)
+    type(nvml_api), intent(in) :: api
+    type(nvml_process_utilization_sample), intent(in) :: sample
+    type(gpu_process_info) :: process
+    integer :: utilization
+
+    process = gpu_process_info()
+    if (sample%pid <= 0_c_int) return
+    utilization = max(0, int(sample%sm_util))
+    utilization = max(utilization, max(0, int(sample%encoder_util)))
+    utilization = max(utilization, max(0, int(sample%decoder_util)))
+    process%valid = .true.
+    process%pid = int(sample%pid)
+    process%process_name = nvml_process_name(api, process%pid)
+    process%busy_percent_valid = .true.
+    process%busy_percent = real(utilization, real64)
+  end function nvml_process_utilization_info
 
   subroutine populate_nvml_gpu(api, device, driver_version, gpu)
     type(nvml_api), intent(in) :: api
@@ -309,6 +554,21 @@ contains
       call assign_c_string(buffer, version)
     end if
   end function nvml_driver_version
+
+  function nvml_process_name(api, pid) result(name)
+    type(nvml_api), intent(in) :: api
+    integer, intent(in) :: pid
+    character(len=GPU_PROCESS_NAME_LEN) :: name
+    character(kind=c_char) :: buffer(GPU_PROCESS_NAME_LEN)
+
+    name = ""
+    if (.not. associated(api%get_process_name)) return
+    if (pid <= 0) return
+    buffer = c_null_char
+    if (api%get_process_name(int(pid, c_int), buffer, int(size(buffer), c_int)) == NVML_SUCCESS) then
+      call assign_c_string(buffer, name)
+    end if
+  end function nvml_process_name
 
   subroutine read_nvml_name(api, device, gpu)
     type(nvml_api), intent(in) :: api

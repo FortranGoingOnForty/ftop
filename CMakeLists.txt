@@ -88,6 +88,7 @@ add_library(
   src/collect/ftop_cpu_data.f90
   src/collect/ftop_disk_data.f90
   src/collect/ftop_gpu_data.f90
+  src/collect/ftop_linux_gpu_fdinfo.f90
   src/collect/ftop_linux_diskstats.f90
   src/collect/ftop_proc_data.f90
   src/collect/ftop_collector.f90

@@ -11,7 +11,7 @@ module ftop_dashboard
     style_from_rgb
   use ftop_cpu, only : render_cpu_panel
   use ftop_disk, only : disk_table_state, render_disk_panel
-  use ftop_gpu, only : render_gpu_panel
+  use ftop_gpu, only : gpu_process_state, render_gpu_panel
   use ftop_layout, only : dashboard_layout, dashboard_layout_from_grid, default_dashboard_layout, layout_grid
   use ftop_memory, only : render_memory_panel
   use ftop_network, only : &
@@ -36,8 +36,9 @@ module ftop_dashboard
 contains
 
   subroutine render_dashboard(buffer, snapshot, refresh_ms, frame_count, status_text, grid, focused_widget, zoomed, render_fps, &
-                              process_state, network_state, disk_state, layout_name, paused, cpu_core_scroll_offset, &
-                              cpu_core_active, process_tree_active, network_table_active, disk_table_active)
+                               process_state, network_state, disk_state, layout_name, paused, cpu_core_scroll_offset, &
+                               cpu_core_active, process_tree_active, network_table_active, disk_table_active, gpu_state, &
+                               gpu_process_active)
     type(screen_buffer), intent(inout) :: buffer
     type(collector_snapshot), intent(in) :: snapshot
     integer, intent(in) :: refresh_ms
@@ -57,6 +58,8 @@ contains
     logical, intent(in), optional :: process_tree_active
     logical, intent(in), optional :: network_table_active
     logical, intent(in), optional :: disk_table_active
+    type(gpu_process_state), intent(inout), optional :: gpu_state
+    logical, intent(in), optional :: gpu_process_active
     type(dashboard_layout) :: layout
     type(screen_style) :: border_style
     type(screen_style) :: cpu_border_style
@@ -79,6 +82,7 @@ contains
     logical :: is_paused
     logical :: cpu_active
     logical :: disk_active
+    logical :: gpu_active
     logical :: network_active
     logical :: process_active
 
@@ -106,6 +110,8 @@ contains
     if (present(network_table_active)) network_active = network_table_active
     disk_active = .false.
     if (present(disk_table_active)) disk_active = disk_table_active
+    gpu_active = .false.
+    if (present(gpu_process_active)) gpu_active = gpu_process_active
 
     call clear_screen(buffer)
     buffer%cursor_visible = .false.
@@ -129,8 +135,8 @@ contains
     if (is_zoomed) then
       zoom_rect = widget_rect(3, 3, max(0, width - 4), max(0, height - 5))
       call render_dashboard_panel(buffer, zoom_rect, focus, snapshot, focus_style, title_style, dim_style, .true., &
-                                  process_state=process_state, network_state=network_state, disk_state=disk_state, &
-                                  cpu_core_scroll_offset=cpu_offset)
+                                   process_state=process_state, network_state=network_state, disk_state=disk_state, &
+                                   cpu_core_scroll_offset=cpu_offset, gpu_state=gpu_state, gpu_process_active=.true.)
     else
       cpu_border_style = border_style
       disk_border_style = border_style
@@ -166,7 +172,13 @@ contains
                                state=disk_state, expanded=.false.)
       end if
       if (layout%gpu_panel%height >= 3) then
-        call render_gpu_panel(buffer, layout%gpu_panel, snapshot, gpu_border_style, title_style, dim_style, expanded=.false.)
+        if (present(gpu_state)) then
+          call render_gpu_panel(buffer, layout%gpu_panel, snapshot, gpu_border_style, title_style, dim_style, &
+                                expanded=.false., state=gpu_state, process_active=gpu_active)
+        else
+          call render_gpu_panel(buffer, layout%gpu_panel, snapshot, gpu_border_style, title_style, dim_style, &
+                                expanded=.false., process_active=gpu_active)
+        end if
       end if
       if (layout%process_panel%height >= 3) then
         if (present(process_state)) then
@@ -187,14 +199,16 @@ contains
     end if
 
     call render_footer(buffer, layout%footer, snapshot, refresh_ms, frame_count, status_text, &
-                       dim_style, focus_style, focus, is_zoomed, render_fps=render_fps, layout_name=layout_name, &
-                       paused=is_paused, cpu_core_active=cpu_active, process_tree_active=process_active, &
-                       network_table_active=network_active, disk_table_active=disk_active, process_state=process_state, &
-                       network_state=network_state, disk_state=disk_state)
+                        dim_style, focus_style, focus, is_zoomed, render_fps=render_fps, layout_name=layout_name, &
+                        paused=is_paused, cpu_core_active=cpu_active, process_tree_active=process_active, &
+                        network_table_active=network_active, disk_table_active=disk_active, &
+                        gpu_process_active=gpu_active, process_state=process_state, network_state=network_state, &
+                        disk_state=disk_state, gpu_state=gpu_state)
   end subroutine render_dashboard
 
   subroutine render_dashboard_panel(buffer, rect, widget, snapshot, border_style, title_style, dim_style, expanded, &
-                                    process_state, network_state, disk_state, cpu_core_scroll_offset)
+                                    process_state, network_state, disk_state, cpu_core_scroll_offset, gpu_state, &
+                                    gpu_process_active)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: rect
     character(len=*), intent(in) :: widget
@@ -207,8 +221,13 @@ contains
     type(network_table_state), intent(inout), optional :: network_state
     type(disk_table_state), intent(inout), optional :: disk_state
     integer, intent(in), optional :: cpu_core_scroll_offset
+    type(gpu_process_state), intent(inout), optional :: gpu_state
+    logical, intent(in), optional :: gpu_process_active
+    logical :: active_gpu_processes
 
     if (rect%height < 3 .or. rect%width <= 0) return
+    active_gpu_processes = expanded
+    if (present(gpu_process_active)) active_gpu_processes = gpu_process_active
     select case (trim(widget))
     case ("cpu")
       call render_cpu_panel(buffer, rect, snapshot, border_style, title_style, dim_style, &
@@ -224,7 +243,13 @@ contains
     case ("disk")
       call render_disk_panel(buffer, rect, snapshot, border_style, title_style, dim_style, state=disk_state, expanded=expanded)
     case ("gpu")
-      call render_gpu_panel(buffer, rect, snapshot, border_style, title_style, dim_style, expanded=expanded)
+      if (present(gpu_state)) then
+        call render_gpu_panel(buffer, rect, snapshot, border_style, title_style, dim_style, expanded=expanded, &
+                              state=gpu_state, process_active=active_gpu_processes)
+      else
+        call render_gpu_panel(buffer, rect, snapshot, border_style, title_style, dim_style, expanded=expanded, &
+                              process_active=active_gpu_processes)
+      end if
     case ("process")
       if (present(process_state)) then
         call render_process_panel(buffer, rect, snapshot, border_style, title_style, dim_style, process_state)
@@ -236,7 +261,8 @@ contains
 
   subroutine render_footer(buffer, footer, snapshot, refresh_ms, frame_count, status_text, dim_style, label_style, &
                             focused_widget, zoomed, render_fps, layout_name, paused, cpu_core_active, process_tree_active, &
-                            network_table_active, disk_table_active, process_state, network_state, disk_state)
+                            network_table_active, disk_table_active, gpu_process_active, process_state, network_state, &
+                            disk_state, gpu_state)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: footer
     type(collector_snapshot), intent(in) :: snapshot
@@ -254,14 +280,17 @@ contains
     logical, intent(in), optional :: process_tree_active
     logical, intent(in), optional :: network_table_active
     logical, intent(in), optional :: disk_table_active
+    logical, intent(in), optional :: gpu_process_active
     type(process_table_state), intent(in), optional :: process_state
     type(network_table_state), intent(in), optional :: network_state
     type(disk_table_state), intent(in), optional :: disk_state
+    type(gpu_process_state), intent(in), optional :: gpu_state
     type(widget_rect) :: line
     character(len=:), allocatable :: status
     logical :: is_paused
     logical :: cpu_active
     logical :: disk_active
+    logical :: gpu_active
     logical :: network_active
     logical :: process_active
 
@@ -276,10 +305,12 @@ contains
     if (present(network_table_active)) network_active = network_table_active
     disk_active = .false.
     if (present(disk_table_active)) disk_active = disk_table_active
+    gpu_active = .false.
+    if (present(gpu_process_active)) gpu_active = gpu_process_active
 
     line = widget_rect(footer%row, footer%col, footer%width, 1)
     call render_footer_segment(buffer, line, "KEYS", footer_actions_text(focused_widget, zoomed, is_paused, cpu_active, &
-                                                                         process_active, network_active, disk_active, &
+                                                                         process_active, network_active, disk_active, gpu_active, &
                                                                          process_state=process_state, &
                                                                          network_state=network_state), &
                                label_style, dim_style)
@@ -290,10 +321,10 @@ contains
     line = widget_rect(footer%row + 1, footer%col, footer%width, 1)
     call render_footer_segment(buffer, line, "STAT", footer_status_text(status, snapshot, refresh_ms, frame_count, &
                                                                         focused_widget, zoomed, is_paused, render_fps, &
-                                                                        layout_name, cpu_active, process_active, &
-                                                                        network_active, disk_active, &
-                                                                        process_state=process_state, network_state=network_state, &
-                                                                        disk_state=disk_state), &
+                                                                         layout_name, cpu_active, process_active, &
+                                                                         network_active, disk_active, gpu_active, &
+                                                                         process_state=process_state, network_state=network_state, &
+                                                                         disk_state=disk_state, gpu_state=gpu_state), &
                                label_style, dim_style)
   end subroutine render_footer
 
@@ -322,7 +353,7 @@ contains
   end subroutine render_footer_segment
 
   function footer_actions_text(focused_widget, zoomed, paused, cpu_core_active, process_tree_active, network_table_active, &
-                               disk_table_active, process_state, network_state) result(text)
+                               disk_table_active, gpu_process_active, process_state, network_state) result(text)
     character(len=*), intent(in) :: focused_widget
     logical, intent(in) :: zoomed
     logical, intent(in) :: paused
@@ -330,6 +361,7 @@ contains
     logical, intent(in) :: process_tree_active
     logical, intent(in) :: network_table_active
     logical, intent(in) :: disk_table_active
+    logical, intent(in) :: gpu_process_active
     type(process_table_state), intent(in), optional :: process_state
     type(network_table_state), intent(in), optional :: network_state
     character(len=:), allocatable :: text
@@ -382,9 +414,11 @@ contains
       end if
     case ("gpu")
       if (zoomed) then
-        text = "Esc grid  Enter grid  q quit"
+        text = "Up/Down rows  Page rows  Enter grid  Esc grid  q quit"
+      else if (gpu_process_active) then
+        text = "Up/Down rows  Page rows  Enter zoom  Esc focus"
       else
-        text = "z/Enter zoom  arrows panes  Tab focus  q quit"
+        text = "Enter processes  z zoom  arrows panes  Tab focus  q quit"
       end if
     case default
       text = "Tab focus  arrows panes  z/Enter zoom  P layout  ? help  q quit"
@@ -430,8 +464,8 @@ contains
   end function network_footer_actions
 
   function footer_status_text(status, snapshot, refresh_ms, frame_count, focused_widget, zoomed, paused, render_fps, &
-                              layout_name, cpu_core_active, process_tree_active, network_table_active, disk_table_active, &
-                              process_state, network_state, disk_state) result(text)
+                               layout_name, cpu_core_active, process_tree_active, network_table_active, disk_table_active, &
+                               gpu_process_active, process_state, network_state, disk_state, gpu_state) result(text)
     type(collector_snapshot), intent(in) :: snapshot
     integer, intent(in) :: refresh_ms
     integer, intent(in) :: frame_count
@@ -445,20 +479,24 @@ contains
     logical, intent(in) :: process_tree_active
     logical, intent(in) :: network_table_active
     logical, intent(in) :: disk_table_active
+    logical, intent(in) :: gpu_process_active
     type(process_table_state), intent(in), optional :: process_state
     type(network_table_state), intent(in), optional :: network_state
     type(disk_table_state), intent(in), optional :: disk_state
+    type(gpu_process_state), intent(in), optional :: gpu_state
     character(len=:), allocatable :: text
 
     text = trim(status) // " | " // footer_mode_text(focused_widget, zoomed, paused, cpu_core_active, &
                                                       process_tree_active, network_table_active, disk_table_active, &
+                                                      gpu_process_active, &
                                                       process_state=process_state, network_state=network_state, &
-                                                      disk_state=disk_state)
+                                                      disk_state=disk_state, gpu_state=gpu_state)
     text = text // footer_layout_text(layout_name) // " | " // footer_timing_text(snapshot, refresh_ms, frame_count, render_fps)
   end function footer_status_text
 
   function footer_mode_text(focused_widget, zoomed, paused, cpu_core_active, process_tree_active, network_table_active, &
-                            disk_table_active, process_state, network_state, disk_state) result(text)
+                            disk_table_active, gpu_process_active, process_state, network_state, disk_state, gpu_state) &
+                            result(text)
     character(len=*), intent(in) :: focused_widget
     logical, intent(in) :: zoomed
     logical, intent(in) :: paused
@@ -466,9 +504,11 @@ contains
     logical, intent(in) :: process_tree_active
     logical, intent(in) :: network_table_active
     logical, intent(in) :: disk_table_active
+    logical, intent(in) :: gpu_process_active
     type(process_table_state), intent(in), optional :: process_state
     type(network_table_state), intent(in), optional :: network_state
     type(disk_table_state), intent(in), optional :: disk_state
+    type(gpu_process_state), intent(in), optional :: gpu_state
     character(len=:), allocatable :: text
 
     if (paused) then
@@ -522,8 +562,12 @@ contains
         text = "disk focus"
       end if
     case ("gpu")
-      if (zoomed) then
+      if (present(gpu_state)) then
+        text = gpu_footer_mode(zoomed, gpu_process_active, gpu_state)
+      else if (zoomed) then
         text = "gpu zoom"
+      else if (gpu_process_active) then
+        text = "gpu processes"
       else
         text = "gpu focus"
       end if
@@ -593,6 +637,23 @@ contains
     text = text // " | row " // integer_text(max(0, state%selected_row)) // "/" // &
            integer_text(max(0, state%row_count))
   end function disk_footer_mode
+
+  function gpu_footer_mode(zoomed, gpu_process_active, state) result(text)
+    logical, intent(in) :: zoomed
+    logical, intent(in) :: gpu_process_active
+    type(gpu_process_state), intent(in) :: state
+    character(len=:), allocatable :: text
+
+    if (zoomed) then
+      text = "gpu zoom"
+    else if (gpu_process_active) then
+      text = "gpu processes"
+    else
+      text = "gpu focus"
+    end if
+    text = text // " | row " // integer_text(max(0, state%selected_row)) // "/" // &
+           integer_text(max(0, state%row_count))
+  end function gpu_footer_mode
 
   function footer_layout_text(layout_name) result(text)
     character(len=*), intent(in), optional :: layout_name

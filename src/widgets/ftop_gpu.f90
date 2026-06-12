@@ -8,7 +8,7 @@ module ftop_gpu
     color_gradient, &
     gradient_green_yellow_red, &
     style_from_rgb
-  use ftop_gpu_data, only : gpu_info, gpu_table
+  use ftop_gpu_data, only : gpu_info, gpu_process_info, gpu_process_table, gpu_table
   use ftop_meter, only : METER_FILL_SHADED, render_meter
   use ftop_sparkline, only : render_sparkline
   use ftop_text, only : TEXT_ALIGN_CENTER, format_bytes, format_percent, render_text
@@ -16,7 +16,17 @@ module ftop_gpu
   implicit none
   private
 
+  type, public :: gpu_process_state
+    integer :: selected_row = 1
+    integer :: scroll_row = 1
+    integer :: row_count = 0
+    integer :: viewport_rows = 0
+  end type gpu_process_state
+
   public :: gpu_panel_min_size
+  public :: gpu_process_page_delta
+  public :: gpu_process_select_delta
+  public :: gpu_process_status
   public :: render_gpu_panel
 
 contains
@@ -28,7 +38,7 @@ contains
     size_value%height = 5
   end function gpu_panel_min_size
 
-  subroutine render_gpu_panel(buffer, panel, snapshot, border_style, title_style, dim_style, expanded)
+  subroutine render_gpu_panel(buffer, panel, snapshot, border_style, title_style, dim_style, expanded, state, process_active)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: panel
     type(collector_snapshot), intent(in) :: snapshot
@@ -36,16 +46,19 @@ contains
     type(screen_style), intent(in) :: title_style
     type(screen_style), intent(in) :: dim_style
     logical, intent(in), optional :: expanded
+    type(gpu_process_state), intent(inout), optional :: state
+    logical, intent(in), optional :: process_active
     type(screen_style) :: text_style
     type(widget_rect) :: content
     integer :: gpu_index
     integer :: line_index
     logical :: actual_expanded
+    logical :: actual_process_active
 
     actual_expanded = .false.
     if (present(expanded)) actual_expanded = expanded
-    associate(unused_expanded => actual_expanded)
-    end associate
+    actual_process_active = .false.
+    if (present(process_active)) actual_process_active = process_active
 
     text_style = style_from_rgb(fg=COLOR_BRIGHT_WHITE)
     call draw_box(buffer, panel, BOX_STYLE_ROUNDED, border_style, "GPU", title_style)
@@ -81,7 +94,89 @@ contains
       call render_text(buffer, content_line_rect(content, line_index), gpu_metric_text(snapshot%gpu%gpus(gpu_index)), dim_style)
       line_index = line_index + 1
     end do
+    if (line_index <= content%height) then
+      if (present(state)) then
+        call render_gpu_processes(buffer, content, line_index, snapshot%gpu_processes, text_style, title_style, dim_style, &
+                                  actual_expanded, state, actual_process_active)
+      else
+        call render_gpu_processes(buffer, content, line_index, snapshot%gpu_processes, text_style, title_style, dim_style, &
+                                  actual_expanded, process_active=actual_process_active)
+      end if
+    end if
   end subroutine render_gpu_panel
+
+  subroutine render_gpu_processes(buffer, content, line_index, processes, text_style, selected_style, dim_style, expanded, &
+                                  state, process_active)
+    type(screen_buffer), intent(inout) :: buffer
+    type(widget_rect), intent(in) :: content
+    integer, intent(inout) :: line_index
+    type(gpu_process_table), intent(in) :: processes
+    type(screen_style), intent(in) :: text_style
+    type(screen_style), intent(in) :: selected_style
+    type(screen_style), intent(in) :: dim_style
+    logical, intent(in) :: expanded
+    type(gpu_process_state), intent(inout), optional :: state
+    logical, intent(in), optional :: process_active
+    type(gpu_process_state) :: active_state
+    type(gpu_process_info), allocatable :: visible_processes(:)
+    type(screen_style) :: row_style
+    integer :: actual_index
+    integer :: preview_row
+    integer :: remaining_lines
+    integer :: start_index
+    integer :: viewport_rows
+    logical :: active
+    logical :: stateful
+
+    remaining_lines = content%height - line_index + 1
+    if (remaining_lines <= 0) return
+    if (.not. expanded .and. remaining_lines < 3) then
+      if (present(state)) call clear_gpu_process_state(state)
+      return
+    end if
+
+    if (.not. processes%valid) then
+      if (present(state)) call clear_gpu_process_state(state)
+      if (expanded) call render_text(buffer, content_line_rect(content, line_index), "GPU processes unsupported", dim_style)
+      return
+    end if
+    if (.not. allocated(processes%processes) .or. valid_gpu_process_count(processes) <= 0) then
+      if (present(state)) call clear_gpu_process_state(state)
+      if (expanded) call render_text(buffer, content_line_rect(content, line_index), "No GPU process activity", dim_style)
+      return
+    end if
+
+    visible_processes = valid_gpu_processes(processes)
+    active = .false.
+    if (present(process_active)) active = process_active
+    stateful = present(state)
+
+    call render_text(buffer, content_line_rect(content, line_index), "Hot GPU processes", text_style)
+    line_index = line_index + 1
+    viewport_rows = max(0, content%height - line_index + 1)
+    active_state = gpu_process_state()
+    if (stateful) then
+      active_state = state
+      active_state%row_count = size(visible_processes)
+      active_state%viewport_rows = viewport_rows
+      call normalize_gpu_process_state(active_state)
+      state = active_state
+      start_index = active_state%scroll_row
+    else
+      start_index = 1
+    end if
+
+    do preview_row = 1, viewport_rows
+      actual_index = start_index + preview_row - 1
+      if (actual_index > size(visible_processes)) exit
+      if (line_index > content%height) exit
+      row_style = dim_style
+      if (stateful .and. active .and. actual_index == active_state%selected_row) row_style = selected_style
+      call render_text(buffer, content_line_rect(content, line_index), &
+                       gpu_process_text(visible_processes(actual_index)), row_style)
+      line_index = line_index + 1
+    end do
+  end subroutine render_gpu_processes
 
   subroutine render_gpu_utilization(buffer, rect, gpu, dim_style)
     type(screen_buffer), intent(inout) :: buffer
@@ -234,6 +329,133 @@ contains
       if (table%gpus(gpu_index)%valid) count = count + 1
     end do
   end function valid_gpu_count
+
+  integer function valid_gpu_process_count(table) result(count)
+    type(gpu_process_table), intent(in) :: table
+    integer :: process_index
+
+    count = 0
+    if (.not. allocated(table%processes)) return
+    do process_index = 1, size(table%processes)
+      if (table%processes(process_index)%valid) count = count + 1
+    end do
+  end function valid_gpu_process_count
+
+  function valid_gpu_processes(table) result(processes)
+    type(gpu_process_table), intent(in) :: table
+    type(gpu_process_info), allocatable :: processes(:)
+    integer :: process_index
+    integer :: row
+
+    allocate(processes(valid_gpu_process_count(table)))
+    row = 0
+    if (.not. allocated(table%processes)) return
+    do process_index = 1, size(table%processes)
+      if (.not. table%processes(process_index)%valid) cycle
+      row = row + 1
+      processes(row) = table%processes(process_index)
+    end do
+  end function valid_gpu_processes
+
+  function gpu_process_text(process) result(text)
+    type(gpu_process_info), intent(in) :: process
+    character(len=:), allocatable :: text
+
+    text = integer_text(process%pid) // " " // gpu_process_name_text(process) // &
+           " " // gpu_process_engine_text(process) // " " // gpu_process_busy_text(process)
+    if (process%memory_valid) text = text // " " // format_bytes(process%memory_bytes)
+  end function gpu_process_text
+
+  function gpu_process_name_text(process) result(text)
+    type(gpu_process_info), intent(in) :: process
+    character(len=:), allocatable :: text
+
+    if (len_trim(process%process_name) > 0) then
+      text = trim(process%process_name)
+    else
+      text = "[unknown]"
+    end if
+  end function gpu_process_name_text
+
+  function gpu_process_engine_text(process) result(text)
+    type(gpu_process_info), intent(in) :: process
+    character(len=:), allocatable :: text
+
+    if (len_trim(process%engine) > 0) then
+      text = trim(process%engine)
+    else
+      text = "gpu"
+    end if
+  end function gpu_process_engine_text
+
+  function gpu_process_busy_text(process) result(text)
+    type(gpu_process_info), intent(in) :: process
+    character(len=:), allocatable :: text
+
+    if (process%busy_percent_valid) then
+      text = format_percent(real(process%busy_percent))
+    else
+      text = "warming"
+    end if
+  end function gpu_process_busy_text
+
+  subroutine gpu_process_select_delta(state, delta)
+    type(gpu_process_state), intent(inout) :: state
+    integer, intent(in) :: delta
+
+    state%selected_row = state%selected_row + delta
+    call normalize_gpu_process_state(state)
+  end subroutine gpu_process_select_delta
+
+  subroutine gpu_process_page_delta(state, delta_pages)
+    type(gpu_process_state), intent(inout) :: state
+    integer, intent(in) :: delta_pages
+    integer :: step
+
+    step = max(1, state%viewport_rows)
+    call gpu_process_select_delta(state, delta_pages * step)
+  end subroutine gpu_process_page_delta
+
+  function gpu_process_status(state) result(text)
+    type(gpu_process_state), intent(in) :: state
+    character(len=:), allocatable :: text
+
+    text = "gpu process row " // integer_text(max(0, state%selected_row)) // "/" // &
+           integer_text(max(0, state%row_count))
+  end function gpu_process_status
+
+  subroutine normalize_gpu_process_state(state)
+    type(gpu_process_state), intent(inout) :: state
+    integer :: max_scroll
+
+    state%row_count = max(0, state%row_count)
+    state%viewport_rows = max(0, state%viewport_rows)
+    if (state%row_count <= 0) then
+      state%selected_row = 0
+      state%scroll_row = 1
+      return
+    end if
+
+    if (state%selected_row <= 0) state%selected_row = 1
+    state%selected_row = max(1, min(state%row_count, state%selected_row))
+    max_scroll = max(1, state%row_count - max(1, state%viewport_rows) + 1)
+    state%scroll_row = max(1, min(max_scroll, state%scroll_row))
+    if (state%viewport_rows > 0) then
+      if (state%selected_row < state%scroll_row) state%scroll_row = state%selected_row
+      if (state%selected_row >= state%scroll_row + state%viewport_rows) then
+        state%scroll_row = state%selected_row - state%viewport_rows + 1
+      end if
+      state%scroll_row = max(1, min(max_scroll, state%scroll_row))
+    end if
+  end subroutine normalize_gpu_process_state
+
+  subroutine clear_gpu_process_state(state)
+    type(gpu_process_state), intent(inout) :: state
+
+    state%row_count = 0
+    state%viewport_rows = 0
+    call normalize_gpu_process_state(state)
+  end subroutine clear_gpu_process_state
 
   logical function gpu_history_available(snapshot, gpu_index) result(available)
     type(collector_snapshot), intent(in) :: snapshot

@@ -4,6 +4,7 @@
 
 #define NVML_SUCCESS 0
 #define NVML_ERROR_INVALID_ARGUMENT 2
+#define NVML_ERROR_INSUFFICIENT_SIZE 7
 #define GIB 1073741824ULL
 
 typedef void *nvmlDevice_t;
@@ -32,6 +33,20 @@ struct nvmlPciInfo_st {
   unsigned int pciSubSystemId;
   unsigned int reserved0;
   unsigned int reserved1;
+};
+
+struct nvmlProcessInfo_st {
+  unsigned int pid;
+  unsigned long long usedGpuMemory;
+};
+
+struct nvmlProcessUtilizationSample_st {
+  unsigned int pid;
+  unsigned long long timeStamp;
+  unsigned int smUtil;
+  unsigned int memUtil;
+  unsigned int encUtil;
+  unsigned int decUtil;
 };
 
 static struct fake_device devices[1] = {{0U}};
@@ -65,6 +80,12 @@ int nvmlShutdown(void) {
 
 int nvmlSystemGetDriverVersion(char *version, unsigned int version_len) {
   return copy_string(version, version_len, "555.42.01");
+}
+
+int nvmlSystemGetProcessName(unsigned int pid, char *name, unsigned int name_len) {
+  if (pid == 4242U) return copy_string(name, name_len, "cuda-work");
+  if (pid == 5151U) return copy_string(name, name_len, "graphics-app");
+  return copy_string(name, name_len, "unknown");
 }
 
 int nvmlDeviceGetCount_v2(unsigned int *device_count) {
@@ -193,5 +214,62 @@ int nvmlDeviceGetDecoderUtilization(nvmlDevice_t device, unsigned int *utilizati
   }
   *utilization = 4U;
   *period_us = 1000000U;
+  return NVML_SUCCESS;
+}
+
+int nvmlDeviceGetComputeRunningProcesses_v2(
+    nvmlDevice_t device, unsigned int *process_count, struct nvmlProcessInfo_st *processes) {
+  unsigned int index;
+
+  if (device_index(device, &index) != NVML_SUCCESS || process_count == NULL) return NVML_ERROR_INVALID_ARGUMENT;
+  if (processes == NULL || *process_count < 1U) {
+    *process_count = 1U;
+    return NVML_ERROR_INSUFFICIENT_SIZE;
+  }
+  *process_count = 1U;
+  processes[0].pid = 4242U;
+  processes[0].usedGpuMemory = 512ULL * 1024ULL * 1024ULL;
+  return NVML_SUCCESS;
+}
+
+int nvmlDeviceGetGraphicsRunningProcesses_v2(
+    nvmlDevice_t device, unsigned int *process_count, struct nvmlProcessInfo_st *processes) {
+  unsigned int index;
+
+  if (device_index(device, &index) != NVML_SUCCESS || process_count == NULL) return NVML_ERROR_INVALID_ARGUMENT;
+  if (processes == NULL || *process_count < 1U) {
+    *process_count = 1U;
+    return NVML_ERROR_INSUFFICIENT_SIZE;
+  }
+  *process_count = 1U;
+  processes[0].pid = 5151U;
+  processes[0].usedGpuMemory = 256ULL * 1024ULL * 1024ULL;
+  return NVML_SUCCESS;
+}
+
+int nvmlDeviceGetProcessUtilization(
+    nvmlDevice_t device, struct nvmlProcessUtilizationSample_st *samples, unsigned int *sample_count,
+    unsigned long long last_seen_timestamp) {
+  unsigned int index;
+
+  (void)last_seen_timestamp;
+  if (device_index(device, &index) != NVML_SUCCESS || sample_count == NULL) return NVML_ERROR_INVALID_ARGUMENT;
+  if (samples == NULL || *sample_count < 2U) {
+    *sample_count = 2U;
+    return NVML_ERROR_INSUFFICIENT_SIZE;
+  }
+  *sample_count = 2U;
+  samples[0].pid = 4242U;
+  samples[0].timeStamp = 1000000ULL;
+  samples[0].smUtil = 65U;
+  samples[0].memUtil = 20U;
+  samples[0].encUtil = 0U;
+  samples[0].decUtil = 0U;
+  samples[1].pid = 5151U;
+  samples[1].timeStamp = 1000001ULL;
+  samples[1].smUtil = 35U;
+  samples[1].memUtil = 12U;
+  samples[1].encUtil = 0U;
+  samples[1].decUtil = 0U;
   return NVML_SUCCESS;
 }

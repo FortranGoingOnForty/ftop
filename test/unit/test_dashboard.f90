@@ -6,6 +6,7 @@ program test_dashboard
   use ftop_color, only : rgb, style_from_rgb
   use ftop_dashboard, only : dashboard_layout, default_dashboard_layout, render_dashboard
   use ftop_disk, only : disk_table_state
+  use ftop_gpu, only : gpu_process_state
   use ftop_net_data, only : net_connection
   use ftop_network, only : NETWORK_SORT_LOCAL, NETWORK_SORT_PID, NETWORK_SORT_PROCESS, NETWORK_SORT_PROTOCOL, &
     network_table_quick_clear, network_table_quick_input, network_table_state, network_table_toggle_sort_direction, &
@@ -26,6 +27,7 @@ program test_dashboard
   call test_dashboard_renders_paused_indicator()
   call test_dashboard_renders_zoomed_widget()
   call test_dashboard_renders_active_disk_table()
+  call test_dashboard_renders_active_gpu_processes()
   call test_dashboard_renders_zoomed_network_table()
   call test_network_table_column_sizing()
   call test_network_preview_uses_sort_state()
@@ -202,6 +204,26 @@ contains
     call require(index(text, "MOUNT") > 0, "zoomed disk should render filesystem table")
     call require(index(text, "disk zoom") > 0, "zoomed disk should render zoom status")
   end subroutine test_dashboard_renders_active_disk_table
+
+  subroutine test_dashboard_renders_active_gpu_processes()
+    type(screen_buffer) :: buffer
+    type(collector_snapshot) :: snapshot
+    type(gpu_process_state) :: gpu_state
+    character(len=:), allocatable :: text
+
+    snapshot = sample_snapshot()
+    call add_gpu_processes(snapshot, 3)
+    gpu_state%selected_row = 2
+    buffer = allocate_screen(160, 30)
+    call render_dashboard(buffer, snapshot, 1000, 7, "gpu-test", focused_widget="gpu", &
+                          gpu_state=gpu_state, gpu_process_active=.true.)
+    text = buffer_text(buffer)
+
+    call require(index(text, "gpu processes") > 0, "active gpu should render process mode status")
+    call require(index(text, "Enter zoom") > 0, "active gpu should render active-mode key hints")
+    call require(gpu_state%row_count == 3, "active gpu should track hot process rows")
+    call require(index(text, "gproc2") > 0, "active gpu should render selected hot process")
+  end subroutine test_dashboard_renders_active_gpu_processes
 
   subroutine test_dashboard_renders_zoomed_network_table()
     type(screen_buffer) :: buffer
@@ -516,6 +538,24 @@ contains
     snapshot%gpu%gpus(1)%power_watts = 120.0_real64
     snapshot%gpu%gpus(1)%power_limit_watts = 250.0_real64
   end function sample_snapshot
+
+  subroutine add_gpu_processes(snapshot, process_count)
+    type(collector_snapshot), intent(inout) :: snapshot
+    integer, intent(in) :: process_count
+    integer :: process_index
+
+    snapshot%gpu_processes%valid = .true.
+    allocate(snapshot%gpu_processes%processes(process_count))
+    do process_index = 1, process_count
+      snapshot%gpu_processes%processes(process_index)%valid = .true.
+      snapshot%gpu_processes%processes(process_index)%pid = 2000 + process_index
+      snapshot%gpu_processes%processes(process_index)%start_time = int(process_index, int64)
+      write(snapshot%gpu_processes%processes(process_index)%process_name, '("gproc", I0)') process_index
+      snapshot%gpu_processes%processes(process_index)%engine = "render"
+      snapshot%gpu_processes%processes(process_index)%busy_percent_valid = .true.
+      snapshot%gpu_processes%processes(process_index)%busy_percent = real(process_index * 10, real64)
+    end do
+  end subroutine add_gpu_processes
 
   function large_cpu_snapshot(core_count) result(snapshot)
     integer, intent(in) :: core_count

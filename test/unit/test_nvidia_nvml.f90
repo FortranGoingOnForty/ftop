@@ -1,7 +1,7 @@
 program test_nvidia_nvml
   use, intrinsic :: iso_fortran_env, only : int64, real64
-  use ftop_gpu_data, only : gpu_table, gpu_table_count
-  use ftop_nvidia_nvml, only : nvidia_nvml_gpu_snapshot
+  use ftop_gpu_data, only : gpu_process_table, gpu_process_table_count, gpu_table, gpu_table_count
+  use ftop_nvidia_nvml, only : nvidia_nvml_gpu_process_snapshot, nvidia_nvml_gpu_snapshot
   implicit none
 
   integer(int64), parameter :: GIB = 1024_int64 * 1024_int64 * 1024_int64
@@ -17,17 +17,22 @@ contains
 
   subroutine test_missing_library()
     type(gpu_table) :: table
+    type(gpu_process_table) :: processes
 
     call require(.not. nvidia_nvml_gpu_snapshot(table, "/definitely/missing/libnvidia-ml.so.1"), &
                  "missing NVML library should not produce a GPU snapshot")
     call require(table%valid, "missing NVML library should leave a valid empty GPU table")
     call require(allocated(table%gpus), "missing NVML library should allocate empty GPU array")
     call require(size(table%gpus) == 0, "missing NVML library should report zero GPUs")
+    call require(.not. nvidia_nvml_gpu_process_snapshot(processes, "/definitely/missing/libnvidia-ml.so.1"), &
+                 "missing NVML library should not produce a GPU process snapshot")
+    call require(.not. processes%valid, "missing NVML library should leave process snapshot unsupported")
   end subroutine test_missing_library
 
   subroutine test_fixture_library(path)
     character(len=*), intent(in) :: path
     type(gpu_table) :: table
+    type(gpu_process_table) :: processes
 
     call require(nvidia_nvml_gpu_snapshot(table, path), "fixture NVML library should produce a GPU snapshot")
     call require(table%valid, "fixture snapshot should be valid")
@@ -61,6 +66,24 @@ contains
     call require_close(table%gpus(1)%encoder_utilization_percent, 3.0_real64, "fixture encoder utilization")
     call require(table%gpus(1)%decoder_valid, "fixture GPU should report decoder utilization")
     call require_close(table%gpus(1)%decoder_utilization_percent, 4.0_real64, "fixture decoder utilization")
+
+    call require(nvidia_nvml_gpu_process_snapshot(processes, path), &
+                 "fixture NVML library should produce a GPU process snapshot")
+    call require(processes%valid, "fixture process snapshot should be valid")
+    call require(gpu_process_table_count(processes) == 2, "fixture process snapshot should contain two rows")
+    call require(processes%processes(1)%valid, "fixture first process should be valid")
+    call require(processes%processes(1)%pid == 4242, "fixture first process PID")
+    call require(trim(processes%processes(1)%process_name) == "cuda-work", "fixture first process name")
+    call require(trim(processes%processes(1)%engine) == "compute", "fixture first process engine")
+    call require(processes%processes(1)%memory_valid, "fixture first process should report GPU memory")
+    call require(processes%processes(1)%memory_bytes == 512_int64 * 1024_int64 * 1024_int64, &
+                 "fixture first process GPU memory")
+    call require(processes%processes(1)%busy_percent_valid, "fixture first process should report utilization")
+    call require_close(processes%processes(1)%busy_percent, 65.0_real64, "fixture first process utilization")
+    call require(processes%processes(2)%pid == 5151, "fixture second process PID")
+    call require(trim(processes%processes(2)%process_name) == "graphics-app", "fixture second process name")
+    call require(trim(processes%processes(2)%engine) == "graphics", "fixture second process engine")
+    call require_close(processes%processes(2)%busy_percent, 35.0_real64, "fixture second process utilization")
   end subroutine test_fixture_library
 
   subroutine require_close(actual, expected, message)

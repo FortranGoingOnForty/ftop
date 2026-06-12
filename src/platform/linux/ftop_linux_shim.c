@@ -29,6 +29,8 @@
 #define FTOP_LINUX_PROCESS_IO_LEN 512
 #define FTOP_LINUX_PROCESS_CGROUP_LEN 1024
 #define FTOP_LINUX_SOCKET_OWNER_PROCESS_NAME_LEN 64
+#define FTOP_LINUX_GPU_FDINFO_LEN 4096
+#define FTOP_LINUX_GPU_PROCESS_NAME_LEN 64
 #define FTOP_LINUX_DRM_CARD_NAME_LEN 32
 #define FTOP_LINUX_DRM_DEVICE_PATH_LEN 512
 #define FTOP_DISK_DEVICE_LEN 64
@@ -78,6 +80,14 @@ struct ftop_linux_socket_traffic {
   long long inode;
   long long rx_bytes;
   long long tx_bytes;
+};
+
+struct ftop_linux_gpu_fdinfo_raw {
+  int pid;
+  long long start_time;
+  char process_name[FTOP_LINUX_GPU_PROCESS_NAME_LEN];
+  char fdinfo[FTOP_LINUX_GPU_FDINFO_LEN];
+  size_t fdinfo_len;
 };
 
 struct ftop_linux_drm_card {
@@ -1010,6 +1020,96 @@ static void ftop_copy_string(char *destination, size_t destination_len, const ch
 
   for (i = 0U; i + 1U < destination_len && source[i] != '\0' && source[i] != '\n'; ++i) destination[i] = source[i];
   destination[i] = '\0';
+}
+
+static int ftop_linux_fdinfo_name_is_safe(const char *name) {
+  size_t i;
+
+  if (name == NULL || name[0] == '\0') return 0;
+  for (i = 0U; name[i] != '\0'; ++i) {
+    if (!isdigit((unsigned char)name[i])) return 0;
+  }
+  return 1;
+}
+
+static int ftop_linux_read_process_fdinfo_file(
+    int pid, const char *fd_name, char *buffer, size_t buffer_len, size_t *value_len) {
+  char path[PATH_MAX];
+  int read_errno;
+  int written;
+
+  if (!ftop_linux_fdinfo_name_is_safe(fd_name)) return -1;
+  written = snprintf(path, sizeof(path), "/proc/%d/fdinfo/%s", pid, fd_name);
+  if (written < 0 || (size_t)written >= sizeof(path)) return -1;
+  read_errno = 0;
+  return ftop_read_file_into_buffer(path, buffer, buffer_len, value_len, &read_errno);
+}
+
+static void ftop_linux_scan_process_gpu_fdinfo(
+    int pid, struct ftop_linux_gpu_fdinfo_raw *records, size_t capacity, size_t *count) {
+  char fdinfo_directory_path[PATH_MAX];
+  char process_name[FTOP_LINUX_GPU_PROCESS_NAME_LEN];
+  DIR *fdinfo_directory;
+  struct dirent *entry;
+  struct ftop_linux_gpu_fdinfo_raw record;
+  long long start_time;
+  int written;
+
+  if (records == NULL || count == NULL || *count >= capacity) return;
+  written = snprintf(fdinfo_directory_path, sizeof(fdinfo_directory_path), "/proc/%d/fdinfo", pid);
+  if (written < 0 || (size_t)written >= sizeof(fdinfo_directory_path)) return;
+  fdinfo_directory = opendir(fdinfo_directory_path);
+  if (fdinfo_directory == NULL) return;
+
+  process_name[0] = '\0';
+  start_time = 0LL;
+  (void)ftop_linux_read_process_comm(pid, process_name, sizeof(process_name));
+  (void)ftop_linux_read_process_start_time(pid, &start_time);
+  while ((entry = readdir(fdinfo_directory)) != NULL && *count < capacity) {
+    if (!ftop_linux_fdinfo_name_is_safe(entry->d_name)) continue;
+    memset(&record, 0, sizeof(record));
+    record.pid = pid;
+    record.start_time = start_time;
+    ftop_copy_string(record.process_name, sizeof(record.process_name), process_name);
+    if (ftop_linux_read_process_fdinfo_file(
+            pid, entry->d_name, record.fdinfo, sizeof(record.fdinfo), &record.fdinfo_len) != 0) {
+      continue;
+    }
+    if (strstr(record.fdinfo, "drm-engine-") == NULL) continue;
+    records[*count] = record;
+    ++(*count);
+  }
+
+  closedir(fdinfo_directory);
+}
+
+int ftop_linux_gpu_fdinfo_snapshot(
+    struct ftop_linux_gpu_fdinfo_raw *records, size_t capacity, size_t *record_count, int *sys_errno) {
+  DIR *directory;
+  struct dirent *entry;
+  int pid;
+  size_t count;
+
+  if (records == NULL || record_count == NULL || sys_errno == NULL || capacity == 0U) return -1;
+
+  memset(records, 0, capacity * sizeof(*records));
+  *record_count = 0U;
+  *sys_errno = 0;
+  directory = opendir("/proc");
+  if (directory == NULL) {
+    *sys_errno = errno;
+    return -1;
+  }
+
+  count = 0U;
+  while ((entry = readdir(directory)) != NULL && count < capacity) {
+    if (!ftop_linux_pid_from_name(entry->d_name, &pid)) continue;
+    ftop_linux_scan_process_gpu_fdinfo(pid, records, capacity, &count);
+  }
+
+  closedir(directory);
+  *record_count = count;
+  return 0;
 }
 
 static long long ftop_linux_blocks_to_bytes(unsigned long blocks, unsigned long block_size) {

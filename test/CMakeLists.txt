@@ -36,6 +36,11 @@ target_link_libraries(ftop_gpu_data_test PRIVATE ftop_core)
 
 add_test(NAME ftop_gpu_data COMMAND ftop_gpu_data_test)
 
+add_executable(ftop_linux_gpu_fdinfo_test unit/test_linux_gpu_fdinfo.f90)
+target_link_libraries(ftop_linux_gpu_fdinfo_test PRIVATE ftop_core)
+
+add_test(NAME ftop_linux_gpu_fdinfo COMMAND ftop_linux_gpu_fdinfo_test)
+
 add_executable(ftop_gpu_widget_test unit/test_gpu_widget.f90)
 target_link_libraries(ftop_gpu_widget_test PRIVATE ftop_core)
 

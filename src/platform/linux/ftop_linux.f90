@@ -3,7 +3,19 @@ module ftop_platform
   use, intrinsic :: iso_fortran_env, only : int64, real64
   use ftop_cpu_data, only : cpu_core_info, cpu_state_ticks, cpu_state_total_ticks
   use ftop_disk_data, only : DISK_FILESYSTEM_CAPACITY, c_filesystem_info, disk_io_info, disk_table, disk_table_from_c
-  use ftop_gpu_data, only : GPU_CAPACITY, empty_gpu_table, gpu_info, gpu_table
+  use ftop_gpu_data, only : &
+    GPU_CAPACITY, &
+    GPU_PROCESS_CAPACITY, &
+    GPU_PROCESS_NAME_LEN, &
+    empty_gpu_process_table, &
+    empty_gpu_table, &
+    gpu_info, &
+    gpu_process_info, &
+    gpu_process_table, &
+    gpu_table, &
+    merge_gpu_process, &
+    sort_gpu_process_table
+  use ftop_linux_gpu_fdinfo, only : linux_gpu_fdinfo_parse
   use ftop_linux_amdgpu, only : linux_amdgpu_snapshot
   use ftop_linux_diskstats, only : linux_diskstats_filter_whole_devices, linux_diskstats_parse
   use ftop_linux_intelgpu, only : linux_intelgpu_snapshot
@@ -19,7 +31,7 @@ module ftop_platform
     parse_linux_proc_net_connections, &
     parse_linux_proc_net_dev, &
     process_bandwidth
-  use ftop_nvidia_nvml, only : nvidia_nvml_gpu_snapshot
+  use ftop_nvidia_nvml, only : nvidia_nvml_gpu_process_snapshot, nvidia_nvml_gpu_snapshot
   use ftop_platform_types, only : &
     cpu_tick_sample, &
     cpu_topology_info, &
@@ -54,6 +66,8 @@ module ftop_platform
   integer, parameter :: LINUX_PROCESS_STATUS_LEN = 2048
   integer, parameter :: LINUX_PROCESS_IO_LEN = 512
   integer, parameter :: LINUX_PROCESS_CGROUP_RAW_LEN = 1024
+  integer, parameter :: LINUX_GPU_FDINFO_CAPACITY = 4096
+  integer, parameter :: LINUX_GPU_FDINFO_LEN = 4096
   integer, parameter :: LINUX_CPU_FREQ_BUFFER_LEN = 64
   integer, parameter, public :: LINUX_HWMON_NAME_LEN = 128
   integer, parameter, public :: LINUX_HWMON_PATH_LEN = 256
@@ -94,6 +108,14 @@ module ftop_platform
     integer(c_long_long) :: tx_bytes
   end type linux_socket_traffic
 
+  type, bind(C), public :: linux_gpu_fdinfo_raw
+    integer(c_int) :: pid
+    integer(c_long_long) :: start_time
+    character(kind=c_char) :: process_name(GPU_PROCESS_NAME_LEN)
+    character(kind=c_char) :: fdinfo(LINUX_GPU_FDINFO_LEN)
+    integer(c_size_t) :: fdinfo_len
+  end type linux_gpu_fdinfo_raw
+
   type, extends(platform_backend) :: linux_backend
   contains
     procedure :: get_cpu_count => linux_get_cpu_count
@@ -108,6 +130,7 @@ module ftop_platform
     procedure :: get_network_table => linux_get_network_table
     procedure :: get_disk_table => linux_get_disk_table
     procedure :: get_gpu_table => linux_get_gpu_table
+    procedure :: get_gpu_process_table => linux_get_gpu_process_table
   end type linux_backend
 
   public :: create_platform
@@ -123,6 +146,7 @@ module ftop_platform
   public :: linux_disk_snapshot
   public :: linux_network_snapshot
   public :: linux_process_bandwidth_snapshot
+  public :: linux_gpu_process_snapshot
   public :: linux_process_snapshot
   public :: load_average_info
   public :: memory_info
@@ -254,6 +278,15 @@ module ftop_platform
       integer(c_size_t), intent(out) :: traffic_count
       integer(c_int), intent(out) :: sys_errno
     end function c_ftop_linux_socket_traffic
+
+    integer(c_int) function c_ftop_linux_gpu_fdinfo_snapshot(records, capacity, record_count, sys_errno) &
+        bind(C, name="ftop_linux_gpu_fdinfo_snapshot")
+      import :: c_int, c_size_t, linux_gpu_fdinfo_raw
+      type(linux_gpu_fdinfo_raw), intent(out) :: records(*)
+      integer(c_size_t), value :: capacity
+      integer(c_size_t), intent(out) :: record_count
+      integer(c_int), intent(out) :: sys_errno
+    end function c_ftop_linux_gpu_fdinfo_snapshot
 
     integer(c_int) function c_ftop_linux_read_net_interface_file(interface_name, field_name, buffer, &
         buffer_capacity, value_len, sys_errno) bind(C, name="ftop_linux_read_net_interface_file")
@@ -561,6 +594,16 @@ contains
     if (linux_intelgpu_snapshot(backend_table)) call append_gpu_table(table, backend_table)
   end function linux_get_gpu_table
 
+  function linux_get_gpu_process_table(self) result(table)
+    class(linux_backend), intent(in) :: self
+    type(gpu_process_table) :: table
+
+    associate(unused => self)
+    end associate
+
+    if (.not. linux_gpu_process_snapshot(table)) table = empty_gpu_process_table()
+  end function linux_get_gpu_process_table
+
   subroutine append_gpu_table(destination, source)
     type(gpu_table), intent(inout) :: destination
     type(gpu_table), intent(in) :: source
@@ -595,6 +638,78 @@ contains
     call move_alloc(combined, destination%gpus)
     destination%valid = .true.
   end subroutine append_gpu_table
+
+  logical function linux_gpu_process_snapshot(table, error_code) result(success)
+    type(gpu_process_table), intent(out) :: table
+    integer, intent(out), optional :: error_code
+    type(gpu_process_table) :: backend_table
+    type(linux_gpu_fdinfo_raw), allocatable :: records(:)
+    type(gpu_process_info), allocatable :: processes(:)
+    type(gpu_process_info) :: process
+    character(len=:), allocatable :: fdinfo
+    character(len=:), allocatable :: process_name
+    integer(c_size_t) :: c_record_count
+    integer(c_int) :: sys_errno
+    integer(c_int) :: rc
+    logical :: have_snapshot
+    integer :: process_count
+    integer :: record_count
+    integer :: record_index
+
+    table = empty_gpu_process_table()
+    sys_errno = 0_c_int
+    have_snapshot = .false.
+    allocate(records(LINUX_GPU_FDINFO_CAPACITY))
+    allocate(processes(GPU_PROCESS_CAPACITY))
+    processes = gpu_process_info()
+    process_count = 0
+
+    if (nvidia_nvml_gpu_process_snapshot(backend_table)) then
+      have_snapshot = .true.
+      call append_gpu_process_table(processes, process_count, backend_table)
+    end if
+
+    rc = c_ftop_linux_gpu_fdinfo_snapshot(records, int(size(records), c_size_t), c_record_count, sys_errno)
+    if (rc == 0_c_int) then
+      have_snapshot = .true.
+    else if (.not. have_snapshot) then
+      call assign_error(error_code, sys_errno)
+      success = .false.
+      return
+    end if
+
+    if (rc == 0_c_int) then
+      record_count = max(0, min(int(c_record_count), size(records)))
+      do record_index = 1, record_count
+        call c_chars_to_string(records(record_index)%fdinfo, int(records(record_index)%fdinfo_len), fdinfo)
+        call c_string_to_fortran(records(record_index)%process_name, process_name)
+        if (.not. linux_gpu_fdinfo_parse(fdinfo, int(records(record_index)%pid), &
+                                         int(records(record_index)%start_time, int64), process_name, process)) cycle
+        call merge_gpu_process(processes, process_count, process)
+      end do
+    end if
+
+    if (allocated(table%processes)) deallocate(table%processes)
+    allocate(table%processes(process_count))
+    if (process_count > 0) table%processes = processes(:process_count)
+    table%valid = .true.
+    call sort_gpu_process_table(table)
+    call assign_error(error_code, sys_errno)
+    success = have_snapshot
+  end function linux_gpu_process_snapshot
+
+  subroutine append_gpu_process_table(processes, process_count, table)
+    type(gpu_process_info), intent(inout) :: processes(:)
+    integer, intent(inout) :: process_count
+    type(gpu_process_table), intent(in) :: table
+    integer :: process_index
+
+    if (.not. table%valid) return
+    if (.not. allocated(table%processes)) return
+    do process_index = 1, size(table%processes)
+      call merge_gpu_process(processes, process_count, table%processes(process_index))
+    end do
+  end subroutine append_gpu_process_table
 
   logical function linux_disk_snapshot(table, error_code) result(success)
     type(disk_table), intent(out) :: table
@@ -1492,6 +1607,24 @@ contains
       text(i:i) = achar(iachar(c_buffer(i)))
     end do
   end subroutine c_chars_to_string
+
+  subroutine c_string_to_fortran(c_buffer, text)
+    character(kind=c_char), intent(in) :: c_buffer(:)
+    character(len=:), allocatable, intent(out) :: text
+    integer :: copied_len
+    integer :: index_value
+
+    copied_len = 0
+    do index_value = 1, size(c_buffer)
+      if (c_buffer(index_value) == c_null_char) exit
+      copied_len = copied_len + 1
+    end do
+
+    allocate(character(len=copied_len) :: text)
+    do index_value = 1, copied_len
+      text(index_value:index_value) = achar(iachar(c_buffer(index_value)))
+    end do
+  end subroutine c_string_to_fortran
 
   subroutine copy_c_line_value(c_buffer, c_value_len, value, value_len)
     character(kind=c_char), intent(in) :: c_buffer(:)
