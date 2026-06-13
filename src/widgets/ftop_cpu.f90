@@ -11,7 +11,7 @@ module ftop_cpu
   use ftop_graph, only : render_graph
   use ftop_meter, only : METER_FILL_SHADED, render_meter
   use ftop_sparkline, only : render_sparkline
-  use ftop_text, only : format_percent, render_text
+  use ftop_text, only : format_percent, horizontal_text_state, render_horizontal_text
   use ftop_widgets, only : widget_rect, widget_size
   implicit none
   private
@@ -29,7 +29,8 @@ contains
     size_value%height = 9
   end function cpu_panel_min_size
 
-  subroutine render_cpu_panel(buffer, panel, snapshot, border_style, title_style, dim_style, core_scroll_offset)
+  subroutine render_cpu_panel(buffer, panel, snapshot, border_style, title_style, dim_style, core_scroll_offset, &
+                              horizontal_state)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: panel
     type(collector_snapshot), intent(in) :: snapshot
@@ -37,6 +38,7 @@ contains
     type(screen_style), intent(in) :: title_style
     type(screen_style), intent(in) :: dim_style
     integer, intent(in), optional :: core_scroll_offset
+    type(horizontal_text_state), intent(inout), optional :: horizontal_state
     type(color_gradient) :: usage_gradient
     type(screen_style) :: text_style
     type(widget_rect) :: content
@@ -52,14 +54,16 @@ contains
     content = box_content_rect(panel)
     if (content%height <= 0 .or. content%width <= 0) return
 
-    call render_text(buffer, content_line_rect(content, 1), cpu_summary_text(snapshot), text_style)
+    call render_horizontal_text(buffer, content_line_rect(content, 1), cpu_summary_text(snapshot), text_style, &
+                                horizontal_state)
     call render_meter(buffer, content_line_rect(content, 2), cpu_usage_fraction(snapshot), &
                       gradient=usage_gradient, label=cpu_meter_label(snapshot), &
                       fill_mode=METER_FILL_SHADED, empty_style=dim_style, label_style=text_style)
-    call render_text(buffer, content_line_rect(content, 3), cpu_detail_text(snapshot), dim_style)
-    call render_text(buffer, content_line_rect(content, 4), cpu_model_text(snapshot), dim_style)
-    call render_text(buffer, content_line_rect(content, 5), cpu_uptime_text(snapshot), dim_style)
-    call render_text(buffer, content_line_rect(content, 6), cpu_frequency_temp_text(snapshot), dim_style)
+    call render_horizontal_text(buffer, content_line_rect(content, 3), cpu_detail_text(snapshot), dim_style, horizontal_state)
+    call render_horizontal_text(buffer, content_line_rect(content, 4), cpu_model_text(snapshot), dim_style, horizontal_state)
+    call render_horizontal_text(buffer, content_line_rect(content, 5), cpu_uptime_text(snapshot), dim_style, horizontal_state)
+    call render_horizontal_text(buffer, content_line_rect(content, 6), cpu_frequency_temp_text(snapshot), dim_style, &
+                                horizontal_state)
 
     graph_line = 7
     graph_height = cpu_graph_height(content, graph_line, snapshot)
@@ -72,7 +76,8 @@ contains
 
     scroll_offset = 0
     if (present(core_scroll_offset)) scroll_offset = core_scroll_offset
-    call render_core_sparklines(buffer, content, core_start_line, snapshot, usage_gradient, dim_style, scroll_offset)
+    call render_core_sparklines(buffer, content, core_start_line, snapshot, usage_gradient, dim_style, scroll_offset, &
+                                horizontal_state)
   end subroutine render_cpu_panel
 
   integer function cpu_core_scroll_limit(panel, snapshot) result(limit)
@@ -119,7 +124,8 @@ contains
     end if
   end subroutine render_cpu_history
 
-  subroutine render_core_sparklines(buffer, content, start_line, snapshot, usage_gradient, dim_style, core_scroll_offset)
+  subroutine render_core_sparklines(buffer, content, start_line, snapshot, usage_gradient, dim_style, core_scroll_offset, &
+                                    horizontal_state)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: content
     integer, intent(in) :: start_line
@@ -127,6 +133,7 @@ contains
     type(color_gradient), intent(in) :: usage_gradient
     type(screen_style), intent(in) :: dim_style
     integer, intent(in) :: core_scroll_offset
+    type(horizontal_text_state), intent(inout), optional :: horizontal_state
     type(widget_rect) :: label_rect
     type(widget_rect) :: line
     type(widget_rect) :: spark_rect
@@ -151,7 +158,8 @@ contains
       line = content_line_rect(content, start_line + core_index - 1)
       if (line%width <= 0) cycle
       label_rect = widget_rect(line%row, line%col, label_width, 1)
-      call render_text(buffer, label_rect, "c" // integer_text(actual_core_index - 1), dim_style)
+      call render_horizontal_text(buffer, label_rect, "c" // integer_text(actual_core_index - 1), dim_style, &
+                                  horizontal_state)
       if (line%width <= label_width + 1) cycle
 
       spark_rect = widget_rect(line%row, line%col + label_width + 1, &

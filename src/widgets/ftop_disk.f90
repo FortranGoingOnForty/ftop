@@ -16,7 +16,13 @@ module ftop_disk
     table_cell, &
     table_column, &
     table_viewport_row_count
-  use ftop_text, only : TEXT_ALIGN_CENTER, TEXT_ALIGN_RIGHT, format_bytes, format_percent, render_text
+  use ftop_text, only : &
+    TEXT_ALIGN_CENTER, &
+    TEXT_ALIGN_RIGHT, &
+    format_bytes, &
+    format_percent, &
+    horizontal_text_state, &
+    render_horizontal_text
   use ftop_widgets, only : widget_rect, widget_size
   implicit none
   private
@@ -50,7 +56,8 @@ contains
     size_value%height = 6
   end function disk_panel_min_size
 
-  subroutine render_disk_panel(buffer, panel, snapshot, border_style, title_style, dim_style, state, expanded)
+  subroutine render_disk_panel(buffer, panel, snapshot, border_style, title_style, dim_style, state, expanded, &
+                               horizontal_state, table_active)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: panel
     type(collector_snapshot), intent(in) :: snapshot
@@ -59,13 +66,18 @@ contains
     type(screen_style), intent(in) :: dim_style
     type(disk_table_state), intent(inout), optional :: state
     logical, intent(in), optional :: expanded
+    type(horizontal_text_state), intent(inout), optional :: horizontal_state
+    logical, intent(in), optional :: table_active
     type(screen_style) :: text_style
     type(widget_rect) :: content
     logical :: actual_expanded
+    logical :: actual_table_active
 
     text_style = style_from_rgb(fg=COLOR_BRIGHT_WHITE)
     actual_expanded = .false.
     if (present(expanded)) actual_expanded = expanded
+    actual_table_active = actual_expanded
+    if (present(table_active)) actual_table_active = actual_table_active .or. table_active
 
     call draw_box(buffer, panel, BOX_STYLE_ROUNDED, border_style, "Disk", title_style)
     content = box_content_rect(panel)
@@ -73,26 +85,32 @@ contains
 
     if (.not. snapshot%disk%valid) then
       if (present(state)) call clear_disk_table_state(state)
-      call render_text(buffer, content_line_rect(content, 1), "disk unavailable", dim_style, TEXT_ALIGN_CENTER)
+      call render_horizontal_text(buffer, content_line_rect(content, 1), "disk unavailable", dim_style, horizontal_state, &
+                                  TEXT_ALIGN_CENTER)
       return
     end if
 
     if (actual_expanded) then
       if (present(state)) then
-        call render_disk_table_panel(buffer, content, snapshot%disk, text_style, title_style, dim_style, state)
+        call render_disk_table_panel(buffer, content, snapshot%disk, text_style, title_style, dim_style, state, &
+                                     horizontal_state, actual_table_active)
       else
-        call render_disk_table_panel(buffer, content, snapshot%disk, text_style, title_style, dim_style)
+        call render_disk_table_panel(buffer, content, snapshot%disk, text_style, title_style, dim_style, &
+                                     horizontal_state=horizontal_state, table_active=actual_table_active)
       end if
     else
       if (present(state)) then
-        call render_disk_compact_panel(buffer, content, snapshot%disk, text_style, title_style, dim_style, state)
+        call render_disk_compact_panel(buffer, content, snapshot%disk, text_style, title_style, dim_style, state, &
+                                       horizontal_state, actual_table_active)
       else
-        call render_disk_compact_panel(buffer, content, snapshot%disk, text_style, title_style, dim_style)
+        call render_disk_compact_panel(buffer, content, snapshot%disk, text_style, title_style, dim_style, &
+                                       horizontal_state=horizontal_state, table_active=actual_table_active)
       end if
     end if
   end subroutine render_disk_panel
 
-  subroutine render_disk_compact_panel(buffer, content, table, text_style, selected_style, dim_style, state)
+  subroutine render_disk_compact_panel(buffer, content, table, text_style, selected_style, dim_style, state, horizontal_state, &
+                                       table_active)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: content
     type(disk_table), intent(in) :: table
@@ -100,6 +118,8 @@ contains
     type(screen_style), intent(in) :: selected_style
     type(screen_style), intent(in) :: dim_style
     type(disk_table_state), intent(inout), optional :: state
+    type(horizontal_text_state), intent(inout), optional :: horizontal_state
+    logical, intent(in), optional :: table_active
     type(filesystem_info), allocatable :: filesystems(:)
     type(screen_style) :: row_style
     character(len=:), allocatable :: io_text
@@ -109,21 +129,26 @@ contains
     integer :: start_index
     integer :: viewport_rows
     logical :: stateful
+    logical :: active_rows
 
     if (.not. allocated(table%filesystems)) then
       if (present(state)) call clear_disk_table_state(state)
-      call render_text(buffer, content_line_rect(content, 1), "no filesystems", dim_style, TEXT_ALIGN_CENTER)
+      call render_horizontal_text(buffer, content_line_rect(content, 1), "no filesystems", dim_style, horizontal_state, &
+                                  TEXT_ALIGN_CENTER)
       return
     end if
 
     filesystems = sorted_filesystems(table)
     if (size(filesystems) <= 0) then
       if (present(state)) call clear_disk_table_state(state)
-      call render_text(buffer, content_line_rect(content, 1), "no filesystems", dim_style, TEXT_ALIGN_CENTER)
+      call render_horizontal_text(buffer, content_line_rect(content, 1), "no filesystems", dim_style, horizontal_state, &
+                                  TEXT_ALIGN_CENTER)
       return
     end if
 
     stateful = present(state)
+    active_rows = .false.
+    if (present(table_active)) active_rows = table_active
     viewport_rows = max(0, content%height - 2)
     if (stateful) then
       state%row_count = size(filesystems)
@@ -134,12 +159,13 @@ contains
       start_index = 1
     end if
 
-    call render_text(buffer, content_line_rect(content, 1), disk_summary_text(table, filesystems), text_style)
+    call render_horizontal_text(buffer, content_line_rect(content, 1), disk_summary_text(table, filesystems), text_style, &
+                                horizontal_state)
     call render_disk_usage_strip(buffer, content_line_rect(content, 2), filesystems, dim_style)
     line_index = 3
     io_text = disk_io_summary_text(table)
     if (len_trim(io_text) > 0 .and. line_index <= content%height) then
-      call render_text(buffer, content_line_rect(content, line_index), io_text, dim_style)
+      call render_horizontal_text(buffer, content_line_rect(content, line_index), io_text, dim_style, horizontal_state)
       line_index = line_index + 1
     end if
     do preview_row = 1, max(0, content%height - line_index + 1)
@@ -148,7 +174,8 @@ contains
       row_style = dim_style
       if (stateful .and. actual_index == state%selected_row) row_style = selected_style
       call render_compact_filesystem_row(buffer, content_line_rect(content, line_index), &
-                                         filesystems(actual_index), row_style)
+                                         filesystems(actual_index), row_style, horizontal_state, &
+                                         stateful .and. active_rows .and. actual_index == state%selected_row)
       line_index = line_index + 1
     end do
   end subroutine render_disk_compact_panel
@@ -167,7 +194,8 @@ contains
                       empty_style=dim_style, label_style=dim_style)
   end subroutine render_disk_usage_strip
 
-  subroutine render_disk_table_panel(buffer, content, table, text_style, title_style, dim_style, state)
+  subroutine render_disk_table_panel(buffer, content, table, text_style, title_style, dim_style, state, horizontal_state, &
+                                     table_active)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: content
     type(disk_table), intent(in) :: table
@@ -175,6 +203,8 @@ contains
     type(screen_style), intent(in) :: title_style
     type(screen_style), intent(in) :: dim_style
     type(disk_table_state), intent(inout), optional :: state
+    type(horizontal_text_state), intent(inout), optional :: horizontal_state
+    logical, intent(in), optional :: table_active
     type(filesystem_info), allocatable :: filesystems(:)
     type(table_cell), allocatable :: cells(:, :)
     type(table_column) :: columns(DISK_TABLE_COLUMNS)
@@ -182,20 +212,25 @@ contains
     type(widget_rect) :: table_rect
     character(len=:), allocatable :: io_text
     integer :: table_start_line
+    logical :: active_rows
 
     filesystems = sorted_filesystems(table)
-    call render_text(buffer, content_line_rect(content, 1), disk_summary_text(table, filesystems), text_style)
+    active_rows = .false.
+    if (present(table_active)) active_rows = table_active
+    call render_horizontal_text(buffer, content_line_rect(content, 1), disk_summary_text(table, filesystems), text_style, &
+                                horizontal_state)
     if (content%height <= 1) return
     table_start_line = 2
     io_text = disk_io_summary_text(table)
     if (len_trim(io_text) > 0) then
-      call render_text(buffer, content_line_rect(content, 2), io_text, dim_style)
+      call render_horizontal_text(buffer, content_line_rect(content, 2), io_text, dim_style, horizontal_state)
       table_start_line = 3
     end if
     if (content%height < table_start_line) return
     if (size(filesystems) <= 0) then
       if (present(state)) call clear_disk_table_state(state)
-      call render_text(buffer, content_line_rect(content, table_start_line), "no filesystems", dim_style, TEXT_ALIGN_CENTER)
+      call render_horizontal_text(buffer, content_line_rect(content, table_start_line), "no filesystems", dim_style, &
+                                  horizontal_state, TEXT_ALIGN_CENTER)
       return
     end if
 
@@ -211,7 +246,9 @@ contains
     cells = filesystem_cells(filesystems)
     call render_table(buffer, table_rect, columns, cells, separator=TABLE_SEPARATOR_SPACE, show_header=.true., &
                       striped=.false., style=dim_style, header_style=title_style, selected_style=title_style, &
-                      separator_style=dim_style, scroll_row=active_state%scroll_row, selected_row=active_state%selected_row)
+                      separator_style=dim_style, scroll_row=active_state%scroll_row, &
+                      selected_row=active_state%selected_row, horizontal_state=horizontal_state, &
+                      active_selected_row=active_rows)
     if (present(state)) state = active_state
   end subroutine render_disk_table_panel
 
@@ -349,11 +386,13 @@ contains
     text = trim(adjustl(buffer))
   end function format_latency_us
 
-  subroutine render_compact_filesystem_row(buffer, rect, filesystem, style)
+  subroutine render_compact_filesystem_row(buffer, rect, filesystem, style, horizontal_state, active_row)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: rect
     type(filesystem_info), intent(in) :: filesystem
     type(screen_style), intent(in) :: style
+    type(horizontal_text_state), intent(inout), optional :: horizontal_state
+    logical, intent(in) :: active_row
     type(widget_rect) :: mount_rect
     type(widget_rect) :: percent_rect
     character(len=:), allocatable :: percent_text
@@ -369,10 +408,12 @@ contains
 
     if (mount_width > 0) then
       mount_rect = widget_rect(rect%row, rect%col, mount_width, 1)
-      call render_text(buffer, mount_rect, trim(filesystem%mountpoint), style)
+      call render_horizontal_text(buffer, mount_rect, trim(filesystem%mountpoint), style, horizontal_state, &
+                                  active=active_row, ticker=.false.)
     end if
     percent_rect = widget_rect(rect%row, rect%col + rect%width - percent_width, percent_width, 1)
-    call render_text(buffer, percent_rect, percent_text, style, TEXT_ALIGN_RIGHT)
+    call render_horizontal_text(buffer, percent_rect, percent_text, style, horizontal_state, TEXT_ALIGN_RIGHT, &
+                                active=active_row, ticker=.false.)
   end subroutine render_compact_filesystem_row
 
   function sorted_filesystems(table) result(filesystems)

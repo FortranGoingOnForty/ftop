@@ -57,7 +57,7 @@ module ftop_process_table
     table_cell, &
     table_column, &
     table_viewport_row_count
-  use ftop_text, only : TEXT_ALIGN_RIGHT, format_percent, render_text
+  use ftop_text, only : TEXT_ALIGN_RIGHT, format_percent, horizontal_text_state, render_horizontal_text, render_text
   use ftop_widgets, only : widget_rect, widget_size
   implicit none
   private
@@ -215,7 +215,8 @@ contains
     size_value%height = 8
   end function process_panel_min_size
 
-  subroutine render_process_panel(buffer, panel, snapshot, border_style, title_style, dim_style, state)
+  subroutine render_process_panel(buffer, panel, snapshot, border_style, title_style, dim_style, state, horizontal_state, &
+                                  rows_active)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: panel
     type(collector_snapshot), intent(in) :: snapshot
@@ -223,6 +224,8 @@ contains
     type(screen_style), intent(in) :: title_style
     type(screen_style), intent(in) :: dim_style
     type(process_table_state), intent(inout), optional :: state
+    type(horizontal_text_state), intent(inout), optional :: horizontal_state
+    logical, intent(in), optional :: rows_active
     type(table_cell), allocatable :: cells(:, :)
     type(table_column), allocatable :: columns(:)
     type(process_table_state) :: active_state
@@ -232,9 +235,12 @@ contains
     type(widget_rect) :: content
     type(widget_rect) :: table_content
     logical :: show_filter_bar
+    logical :: active_rows
 
     active_state = process_table_state()
     if (present(state)) active_state = state
+    active_rows = .false.
+    if (present(rows_active)) active_rows = rows_active
     call normalize_filter_state(active_state)
     call normalize_process_columns(active_state)
     call draw_box(buffer, panel, BOX_STYLE_ROUNDED, border_style, "Processes", title_style)
@@ -244,7 +250,8 @@ contains
     table_content = process_table_content_rect(content, show_filter_bar)
 
     if (.not. snapshot%processes%valid) then
-      call render_text(buffer, content_line_rect(table_content, 1), "processes unavailable", dim_style)
+      call render_horizontal_text(buffer, content_line_rect(table_content, 1), "processes unavailable", dim_style, &
+                                  horizontal_state)
       if (present(state)) then
         active_state%total_row_count = 0
         call clear_selected_process_state(active_state)
@@ -252,11 +259,12 @@ contains
         call normalize_process_table_state(active_state, 0, 0)
         state = active_state
       end if
-      if (show_filter_bar) call render_process_input_bar(buffer, content, active_state, title_style, dim_style)
+      if (show_filter_bar) call render_process_input_bar(buffer, content, active_state, title_style, dim_style, &
+                                                         horizontal_state)
       return
     end if
     if (.not. allocated(snapshot%processes%items) .or. size(snapshot%processes%items) <= 0) then
-      call render_text(buffer, content_line_rect(table_content, 1), "no processes", dim_style)
+      call render_horizontal_text(buffer, content_line_rect(table_content, 1), "no processes", dim_style, horizontal_state)
       if (present(state)) then
         active_state%total_row_count = 0
         call clear_selected_process_state(active_state)
@@ -264,7 +272,8 @@ contains
         call normalize_process_table_state(active_state, 0, 0)
         state = active_state
       end if
-      if (show_filter_bar) call render_process_input_bar(buffer, content, active_state, title_style, dim_style)
+      if (show_filter_bar) call render_process_input_bar(buffer, content, active_state, title_style, dim_style, &
+                                                         horizontal_state)
       return
     end if
 
@@ -290,9 +299,10 @@ contains
     cells = process_cells(sorted_processes, active_state, signal_feedback_style(title_style))
     if (size(cells, 1) <= 0) then
       if (active_state%filter_length > 0) then
-        call render_text(buffer, content_line_rect(table_content, 1), "no matching processes", dim_style)
+        call render_horizontal_text(buffer, content_line_rect(table_content, 1), "no matching processes", dim_style, &
+                                    horizontal_state)
       else
-        call render_text(buffer, content_line_rect(table_content, 1), "no processes", dim_style)
+        call render_horizontal_text(buffer, content_line_rect(table_content, 1), "no processes", dim_style, horizontal_state)
       end if
       if (present(state)) then
         call clear_selected_process_state(active_state)
@@ -300,7 +310,8 @@ contains
         call advance_signal_feedback_state(active_state)
         state = active_state
       end if
-      if (show_filter_bar) call render_process_input_bar(buffer, content, active_state, title_style, dim_style)
+      if (show_filter_bar) call render_process_input_bar(buffer, content, active_state, title_style, dim_style, &
+                                                         horizontal_state)
       return
     end if
 
@@ -310,11 +321,14 @@ contains
     call render_table(buffer, table_content, columns, cells, separator=TABLE_SEPARATOR_SPACE, &
                       show_header=.true., striped=.false., style=dim_style, &
                       header_style=title_style, selected_style=title_style, separator_style=dim_style, &
-                      scroll_row=active_state%scroll_row, selected_row=active_state%selected_row)
+                      scroll_row=active_state%scroll_row, selected_row=active_state%selected_row, &
+                      horizontal_state=horizontal_state, active_selected_row=active_rows)
     call advance_signal_feedback_state(active_state)
-    if (show_filter_bar) call render_process_input_bar(buffer, content, active_state, title_style, dim_style)
+    if (show_filter_bar) call render_process_input_bar(buffer, content, active_state, title_style, dim_style, &
+                                                       horizontal_state)
     if (active_state%command_detail_visible) then
-      call render_process_command_detail(buffer, content, active_state, border_style, title_style, dim_style)
+      call render_process_command_detail(buffer, content, active_state, border_style, title_style, dim_style, &
+                                         horizontal_state)
     end if
     if (present(state)) state = active_state
   end subroutine render_process_panel
@@ -2322,30 +2336,34 @@ contains
     if (show_filter_bar .and. table_content%height > 0) table_content%height = table_content%height - 1
   end function process_table_content_rect
 
-  subroutine render_process_input_bar(buffer, content, state, active_style, dim_style)
+  subroutine render_process_input_bar(buffer, content, state, active_style, dim_style, horizontal_state)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: content
     type(process_table_state), intent(in) :: state
     type(screen_style), intent(in) :: active_style
     type(screen_style), intent(in) :: dim_style
+    type(horizontal_text_state), intent(inout), optional :: horizontal_state
     type(screen_style) :: input_style
 
     input_style = dim_style
     if (state%filter_active .or. state%fuzzy_query_length > 0) input_style = active_style
     if (process_table_filter_visible(state)) then
-      call render_text(buffer, content_line_rect(content, content%height), process_filter_bar_text(state), input_style)
+      call render_horizontal_text(buffer, content_line_rect(content, content%height), process_filter_bar_text(state), &
+                                  input_style, horizontal_state)
     else if (process_table_fuzzy_visible(state)) then
-      call render_text(buffer, content_line_rect(content, content%height), process_fuzzy_bar_text(state), input_style)
+      call render_horizontal_text(buffer, content_line_rect(content, content%height), process_fuzzy_bar_text(state), &
+                                  input_style, horizontal_state)
     end if
   end subroutine render_process_input_bar
 
-  subroutine render_process_command_detail(buffer, content, state, border_style, title_style, dim_style)
+  subroutine render_process_command_detail(buffer, content, state, border_style, title_style, dim_style, horizontal_state)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: content
     type(process_table_state), intent(in) :: state
     type(screen_style), intent(in) :: border_style
     type(screen_style), intent(in) :: title_style
     type(screen_style), intent(in) :: dim_style
+    type(horizontal_text_state), intent(inout), optional :: horizontal_state
     type(widget_rect) :: command_rect
     type(widget_rect) :: detail
     type(widget_rect) :: footer_rect
@@ -2372,11 +2390,11 @@ contains
     end if
 
     command = process_table_selected_command_text(state)
-    call render_wrapped_command(buffer, command_rect, command, title_style)
+    call render_wrapped_command(buffer, command_rect, command, title_style, horizontal_state)
 
     if (inner%height > 1) then
       footer_rect = widget_rect(inner%row + inner%height - 1, inner%col, inner%width, 1)
-      call render_text(buffer, footer_rect, "F10/Esc close", dim_style, TEXT_ALIGN_RIGHT)
+      call render_horizontal_text(buffer, footer_rect, "F10/Esc close", dim_style, horizontal_state, TEXT_ALIGN_RIGHT)
     end if
   end subroutine render_process_command_detail
 
@@ -2392,11 +2410,12 @@ contains
     end do
   end subroutine fill_process_rect
 
-  subroutine render_wrapped_command(buffer, rect, command, style)
+  subroutine render_wrapped_command(buffer, rect, command, style, horizontal_state)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: rect
     character(len=*), intent(in) :: command
     type(screen_style), intent(in) :: style
+    type(horizontal_text_state), intent(inout), optional :: horizontal_state
     character(len=:), allocatable :: line_text
     integer :: command_length
     integer :: line_index
@@ -2406,7 +2425,8 @@ contains
     if (rect%width <= 0 .or. rect%height <= 0) return
     command_length = len_trim(command)
     if (command_length <= 0) then
-      call render_text(buffer, widget_rect(rect%row, rect%col, rect%width, 1), "[empty command]", style)
+      call render_horizontal_text(buffer, widget_rect(rect%row, rect%col, rect%width, 1), "[empty command]", style, &
+                                  horizontal_state)
       return
     end if
 
@@ -2418,7 +2438,8 @@ contains
         if (len(line_text) > rect%width - 3) line_text = line_text(:rect%width - 3)
         line_text = trim(line_text) // "..."
       end if
-      call render_text(buffer, widget_rect(rect%row + line_index - 1, rect%col, rect%width, 1), line_text, style)
+      call render_horizontal_text(buffer, widget_rect(rect%row + line_index - 1, rect%col, rect%width, 1), line_text, &
+                                  style, horizontal_state)
       start_index = next_start
     end do
   end subroutine render_wrapped_command

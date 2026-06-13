@@ -24,7 +24,7 @@ module ftop_network
     table_cell, &
     table_column, &
     table_viewport_row_count
-  use ftop_text, only : TEXT_ALIGN_CENTER, TEXT_ALIGN_RIGHT, render_text
+  use ftop_text, only : TEXT_ALIGN_CENTER, TEXT_ALIGN_RIGHT, horizontal_text_state, render_horizontal_text
   use ftop_widgets, only : widget_rect, widget_size
   implicit none
   private
@@ -86,7 +86,8 @@ contains
     size_value%height = 8
   end function network_panel_min_size
 
-  subroutine render_network_panel(buffer, panel, snapshot, border_style, title_style, dim_style, state, expanded)
+  subroutine render_network_panel(buffer, panel, snapshot, border_style, title_style, dim_style, state, expanded, &
+                                  horizontal_state, table_active)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: panel
     type(collector_snapshot), intent(in) :: snapshot
@@ -95,66 +96,80 @@ contains
     type(screen_style), intent(in) :: dim_style
     type(network_table_state), intent(inout), optional :: state
     logical, intent(in), optional :: expanded
+    type(horizontal_text_state), intent(inout), optional :: horizontal_state
+    logical, intent(in), optional :: table_active
     type(color_gradient) :: network_gradient
     type(screen_style) :: text_style
     type(widget_rect) :: content
     integer :: interface_index
     integer :: line_index
     logical :: actual_expanded
+    logical :: actual_table_active
 
     network_gradient = gradient_blue_cyan()
     text_style = style_from_rgb(fg=COLOR_BRIGHT_WHITE)
     actual_expanded = .false.
     if (present(expanded)) actual_expanded = expanded
+    actual_table_active = actual_expanded
+    if (present(table_active)) actual_table_active = actual_table_active .or. table_active
 
     call draw_box(buffer, panel, BOX_STYLE_ROUNDED, border_style, "Network", title_style)
     content = box_content_rect(panel)
     if (content%height <= 0 .or. content%width <= 0) return
 
     if (.not. snapshot%network%valid) then
-      call render_text(buffer, content_line_rect(content, 1), "network unavailable", dim_style, TEXT_ALIGN_CENTER)
+      call render_horizontal_text(buffer, content_line_rect(content, 1), "network unavailable", dim_style, &
+                                  horizontal_state, TEXT_ALIGN_CENTER)
       return
     end if
     if (actual_expanded) then
       if (present(state)) then
-        call render_network_table_panel(buffer, content, snapshot, text_style, title_style, dim_style, state)
+        call render_network_table_panel(buffer, content, snapshot, text_style, title_style, dim_style, state, &
+                                        horizontal_state, actual_table_active)
       else
-        call render_network_table_panel(buffer, content, snapshot, text_style, title_style, dim_style)
+        call render_network_table_panel(buffer, content, snapshot, text_style, title_style, dim_style, &
+                                        horizontal_state=horizontal_state, table_active=actual_table_active)
       end if
       return
     end if
 
     if (.not. allocated(snapshot%network%interfaces)) then
-      call render_text(buffer, content_line_rect(content, 1), "network unavailable", dim_style, TEXT_ALIGN_CENTER)
+      call render_horizontal_text(buffer, content_line_rect(content, 1), "network unavailable", dim_style, &
+                                  horizontal_state, TEXT_ALIGN_CENTER)
       return
     end if
     if (size(snapshot%network%interfaces) <= 0) then
-      call render_text(buffer, content_line_rect(content, 1), "no network interfaces", dim_style, TEXT_ALIGN_CENTER)
+      call render_horizontal_text(buffer, content_line_rect(content, 1), "no network interfaces", dim_style, &
+                                  horizontal_state, TEXT_ALIGN_CENTER)
       return
     end if
 
-    call render_text(buffer, content_line_rect(content, 1), network_summary_text(snapshot), text_style)
+    call render_horizontal_text(buffer, content_line_rect(content, 1), network_summary_text(snapshot), text_style, &
+                                horizontal_state)
     line_index = 2
     do interface_index = 1, size(snapshot%network%interfaces)
       if (line_index > content%height) exit
       if (.not. snapshot%network%interfaces(interface_index)%valid) cycle
-      call render_text(buffer, content_line_rect(content, line_index), &
-                       network_interface_text(snapshot, interface_index), dim_style)
+      call render_horizontal_text(buffer, content_line_rect(content, line_index), &
+                                  network_interface_text(snapshot, interface_index), dim_style, horizontal_state)
       line_index = line_index + 1
       if (line_index > content%height) cycle
       call render_interface_sparkline(buffer, content_line_rect(content, line_index), snapshot, interface_index, &
-                                      network_gradient, dim_style)
+                                      network_gradient, dim_style, horizontal_state)
       line_index = line_index + 1
     end do
 
     if (present(state)) then
-      call render_connection_rows(buffer, content, line_index, snapshot, dim_style, title_style, state)
+      call render_connection_rows(buffer, content, line_index, snapshot, dim_style, title_style, state, horizontal_state, &
+                                  actual_table_active)
     else
-      call render_connection_rows(buffer, content, line_index, snapshot, dim_style)
+      call render_connection_rows(buffer, content, line_index, snapshot, dim_style, horizontal_state=horizontal_state, &
+                                  rows_active=actual_table_active)
     end if
   end subroutine render_network_panel
 
-  subroutine render_connection_rows(buffer, content, line_index, snapshot, dim_style, selected_style, state)
+  subroutine render_connection_rows(buffer, content, line_index, snapshot, dim_style, selected_style, state, &
+                                    horizontal_state, rows_active)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: content
     integer, intent(inout) :: line_index
@@ -162,6 +177,8 @@ contains
     type(screen_style), intent(in) :: dim_style
     type(screen_style), intent(in), optional :: selected_style
     type(network_table_state), intent(inout), optional :: state
+    type(horizontal_text_state), intent(inout), optional :: horizontal_state
+    logical, intent(in), optional :: rows_active
     type(network_table_state) :: active_state
     type(net_connection), allocatable :: connections(:)
     type(screen_style) :: row_style
@@ -171,6 +188,7 @@ contains
     integer :: total_count
     integer :: viewport_rows
     logical :: stateful
+    logical :: active_rows
 
     if (line_index > content%height) return
     if (.not. allocated(snapshot%network%connections)) return
@@ -178,6 +196,8 @@ contains
     if (total_count <= 0) return
     active_state = network_table_state()
     stateful = present(state)
+    active_rows = .false.
+    if (present(rows_active)) active_rows = rows_active
 
     if (stateful) then
       active_state = state
@@ -191,8 +211,9 @@ contains
       connections = valid_connections(snapshot)
     end if
 
-    call render_text(buffer, content_line_rect(content, line_index), &
-                     compact_connection_summary_text(total_count, size(connections), active_state, stateful), dim_style)
+    call render_horizontal_text(buffer, content_line_rect(content, line_index), &
+                                compact_connection_summary_text(total_count, size(connections), active_state, stateful), &
+                                dim_style, horizontal_state)
     line_index = line_index + 1
     if (stateful) then
       start_index = active_state%scroll_row
@@ -205,8 +226,10 @@ contains
       if (line_index > content%height) exit
       row_style = dim_style
       if (stateful .and. actual_index == active_state%selected_row .and. present(selected_style)) row_style = selected_style
-      call render_text(buffer, content_line_rect(content, line_index), &
-                       connection_row_text(connections(actual_index)), row_style)
+      call render_horizontal_text(buffer, content_line_rect(content, line_index), &
+                                   connection_row_text(connections(actual_index)), row_style, horizontal_state, &
+                                  active=stateful .and. active_rows .and. actual_index == active_state%selected_row, &
+                                  ticker=.false.)
       line_index = line_index + 1
     end do
   end subroutine render_connection_rows
@@ -248,7 +271,8 @@ contains
     if (len_trim(state%state_filter) > 0) text = text // " filter " // network_state_filter_label(state)
   end function compact_connection_summary_text
 
-  subroutine render_network_table_panel(buffer, content, snapshot, text_style, title_style, dim_style, state)
+  subroutine render_network_table_panel(buffer, content, snapshot, text_style, title_style, dim_style, state, horizontal_state, &
+                                        table_active)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: content
     type(collector_snapshot), intent(in) :: snapshot
@@ -256,6 +280,8 @@ contains
     type(screen_style), intent(in) :: title_style
     type(screen_style), intent(in) :: dim_style
     type(network_table_state), intent(inout), optional :: state
+    type(horizontal_text_state), intent(inout), optional :: horizontal_state
+    logical, intent(in), optional :: table_active
     type(network_table_state) :: active_state
     type(net_connection), allocatable :: connections(:)
     type(table_cell), allocatable :: cells(:, :)
@@ -263,19 +289,24 @@ contains
     type(widget_rect) :: table_rect
     integer :: process_row_count
     integer :: table_start_line
+    logical :: active_rows
 
     active_state = network_table_state()
     if (present(state)) active_state = state
+    active_rows = .false.
+    if (present(table_active)) active_rows = table_active
     call normalize_network_table_state(active_state, active_state%row_count, active_state%viewport_rows)
 
-    call render_text(buffer, content_line_rect(content, 1), network_expanded_summary_text(snapshot, active_state), text_style)
+    call render_horizontal_text(buffer, content_line_rect(content, 1), network_expanded_summary_text(snapshot, active_state), &
+                                text_style, horizontal_state)
     if (content%height <= 1) then
       if (present(state)) state = active_state
       return
     end if
 
     process_row_count = network_process_bandwidth_row_count(snapshot, content%height)
-    if (process_row_count > 0) call render_process_bandwidth_rows(buffer, content, snapshot, dim_style, process_row_count)
+    if (process_row_count > 0) call render_process_bandwidth_rows(buffer, content, snapshot, dim_style, process_row_count, &
+                                                                  horizontal_state)
     table_start_line = 2 + process_row_count
     if (content%height < table_start_line) then
       if (present(state)) state = active_state
@@ -293,11 +324,11 @@ contains
     connections = visible_connections(snapshot, active_state)
     if (size(connections) <= 0) then
       if (active_state%total_row_count > 0 .and. len_trim(active_state%state_filter) > 0) then
-        call render_text(buffer, content_line_rect(content, table_start_line), &
-                         "no matching connections", dim_style, TEXT_ALIGN_CENTER)
+        call render_horizontal_text(buffer, content_line_rect(content, table_start_line), &
+                                    "no matching connections", dim_style, horizontal_state, TEXT_ALIGN_CENTER)
       else
-        call render_text(buffer, content_line_rect(content, table_start_line), &
-                         "no network connections", dim_style, TEXT_ALIGN_CENTER)
+        call render_horizontal_text(buffer, content_line_rect(content, table_start_line), &
+                                    "no network connections", dim_style, horizontal_state, TEXT_ALIGN_CENTER)
       end if
       call normalize_network_table_state(active_state, 0, table_viewport_row_count(table_rect, .true.))
       if (present(state)) state = active_state
@@ -311,7 +342,8 @@ contains
     call render_table(buffer, table_rect, columns, cells, separator=TABLE_SEPARATOR_SPACE, &
                       show_header=.true., striped=.false., style=dim_style, header_style=title_style, &
                       selected_style=title_style, separator_style=dim_style, scroll_row=active_state%scroll_row, &
-                      selected_row=active_state%selected_row)
+                      selected_row=active_state%selected_row, horizontal_state=horizontal_state, &
+                      active_selected_row=active_rows)
     if (present(state)) state = active_state
   end subroutine render_network_table_panel
 
@@ -527,20 +559,21 @@ contains
     end do
   end function network_connection_cells
 
-  subroutine render_interface_sparkline(buffer, rect, snapshot, interface_index, network_gradient, dim_style)
+  subroutine render_interface_sparkline(buffer, rect, snapshot, interface_index, network_gradient, dim_style, horizontal_state)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: rect
     type(collector_snapshot), intent(in) :: snapshot
     integer, intent(in) :: interface_index
     type(color_gradient), intent(in) :: network_gradient
     type(screen_style), intent(in) :: dim_style
+    type(horizontal_text_state), intent(inout), optional :: horizontal_state
     real(real64), allocatable :: total_history(:)
     integer :: history_count
 
     if (rect%width <= 0 .or. rect%height <= 0) return
     history_count = max(0, snapshot%network%interfaces(interface_index)%history_count)
     if (history_count <= 0) then
-      call render_text(buffer, rect, "no traffic history", dim_style)
+      call render_horizontal_text(buffer, rect, "no traffic history", dim_style, horizontal_state)
       return
     end if
 
@@ -627,18 +660,20 @@ contains
     row_count = min(row_count, max(0, content_height - 4))
   end function network_process_bandwidth_row_count
 
-  subroutine render_process_bandwidth_rows(buffer, content, snapshot, dim_style, row_count)
+  subroutine render_process_bandwidth_rows(buffer, content, snapshot, dim_style, row_count, horizontal_state)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: content
     type(collector_snapshot), intent(in) :: snapshot
     type(screen_style), intent(in) :: dim_style
     integer, intent(in) :: row_count
+    type(horizontal_text_state), intent(inout), optional :: horizontal_state
     type(process_bandwidth), allocatable :: processes(:)
     integer :: row
 
     call collect_sorted_process_bandwidth(snapshot, processes)
     do row = 1, min(row_count, size(processes))
-      call render_text(buffer, content_line_rect(content, row + 1), network_process_bandwidth_text(processes(row)), dim_style)
+      call render_horizontal_text(buffer, content_line_rect(content, row + 1), &
+                                  network_process_bandwidth_text(processes(row)), dim_style, horizontal_state, ticker=.false.)
     end do
   end subroutine render_process_bandwidth_rows
 

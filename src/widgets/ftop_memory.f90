@@ -24,7 +24,8 @@ module ftop_memory
     TEXT_ALIGN_CENTER, &
     format_bytes, &
     format_percent, &
-    render_text, &
+    horizontal_text_state, &
+    render_horizontal_text, &
     text_cell_width, &
     truncated_text, &
     utf8_glyph_bytes
@@ -44,7 +45,7 @@ contains
     size_value%height = 8
   end function memory_panel_min_size
 
-  subroutine render_memory_panel(buffer, panel, snapshot, border_style, title_style, dim_style, expanded)
+  subroutine render_memory_panel(buffer, panel, snapshot, border_style, title_style, dim_style, expanded, horizontal_state)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: panel
     type(collector_snapshot), intent(in) :: snapshot
@@ -52,6 +53,7 @@ contains
     type(screen_style), intent(in) :: title_style
     type(screen_style), intent(in) :: dim_style
     logical, intent(in), optional :: expanded
+    type(horizontal_text_state), intent(inout), optional :: horizontal_state
     type(color_gradient) :: memory_gradient
     type(screen_style) :: text_style
     type(widget_rect) :: content
@@ -68,12 +70,17 @@ contains
     content = box_content_rect(panel)
     if (content%height <= 0 .or. content%width <= 0) return
 
-    call render_text(buffer, content_line_rect(content, 1), memory_summary_text(snapshot), text_style)
-    call render_memory_bar(buffer, content_line_rect(content, 2), snapshot%memory, text_style)
-    call render_text(buffer, content_line_rect(content, 3), memory_pressure_text(snapshot), dim_style)
-    call render_text(buffer, content_line_rect(content, 4), memory_headroom_text(snapshot), dim_style)
-    call render_text(buffer, content_line_rect(content, 5), memory_reclaimable_text(snapshot), dim_style)
-    call render_swap_line(buffer, content_line_rect(content, 6), snapshot, memory_gradient, dim_style, text_style)
+    call render_horizontal_text(buffer, content_line_rect(content, 1), memory_summary_text(snapshot), text_style, &
+                                horizontal_state)
+    call render_memory_bar(buffer, content_line_rect(content, 2), snapshot%memory, text_style, horizontal_state)
+    call render_horizontal_text(buffer, content_line_rect(content, 3), memory_pressure_text(snapshot), dim_style, &
+                                horizontal_state)
+    call render_horizontal_text(buffer, content_line_rect(content, 4), memory_headroom_text(snapshot), dim_style, &
+                                horizontal_state)
+    call render_horizontal_text(buffer, content_line_rect(content, 5), memory_reclaimable_text(snapshot), dim_style, &
+                                horizontal_state)
+    call render_swap_line(buffer, content_line_rect(content, 6), snapshot, memory_gradient, dim_style, text_style, &
+                          horizontal_state)
 
     graph_line = 7
     graph_height = max(0, content%height - graph_line + 1)
@@ -99,11 +106,12 @@ contains
     end if
   end subroutine render_memory_history_graph
 
-  subroutine render_memory_bar(buffer, rect, info, label_style)
+  subroutine render_memory_bar(buffer, rect, info, label_style, horizontal_state)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: rect
     type(memory_info), intent(in) :: info
     type(screen_style), intent(in) :: label_style
+    type(horizontal_text_state), intent(inout), optional :: horizontal_state
     integer(int64) :: free_bytes
     integer(int64) :: reclaimable_bytes
     integer(int64) :: used_bytes
@@ -114,7 +122,7 @@ contains
 
     if (rect%width <= 0 .or. rect%height <= 0) return
     if (.not. info%valid .or. info%total_bytes <= 0_int64) then
-      call render_text(buffer, rect, "memory unavailable", label_style, TEXT_ALIGN_CENTER)
+      call render_horizontal_text(buffer, rect, "memory unavailable", label_style, horizontal_state, TEXT_ALIGN_CENTER)
       return
     end if
 
@@ -212,17 +220,18 @@ contains
     is_free = position > reclaimable_limit
   end function memory_position_is_free
 
-  subroutine render_swap_line(buffer, rect, snapshot, memory_gradient, dim_style, text_style)
+  subroutine render_swap_line(buffer, rect, snapshot, memory_gradient, dim_style, text_style, horizontal_state)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: rect
     type(collector_snapshot), intent(in) :: snapshot
     type(color_gradient), intent(in) :: memory_gradient
     type(screen_style), intent(in) :: dim_style
     type(screen_style), intent(in) :: text_style
+    type(horizontal_text_state), intent(inout), optional :: horizontal_state
 
     if (rect%width <= 0 .or. rect%height <= 0) return
     if (.not. snapshot%memory%valid .or. snapshot%memory%swap_total_bytes <= 0_int64) then
-      call render_text(buffer, rect, swap_text(snapshot), dim_style)
+      call render_horizontal_text(buffer, rect, swap_text(snapshot), dim_style, horizontal_state)
       return
     end if
 

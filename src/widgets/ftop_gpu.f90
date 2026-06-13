@@ -11,7 +11,14 @@ module ftop_gpu
   use ftop_gpu_data, only : gpu_info, gpu_process_info, gpu_process_table, gpu_table
   use ftop_meter, only : METER_FILL_SHADED, render_meter
   use ftop_sparkline, only : render_sparkline
-  use ftop_text, only : TEXT_ALIGN_CENTER, format_bytes, format_percent, render_text
+  use ftop_text, only : &
+    TEXT_ALIGN_CENTER, &
+    format_bytes, &
+    format_percent, &
+    horizontal_text_begin_frame, &
+    horizontal_text_end_frame, &
+    horizontal_text_state, &
+    render_horizontal_text
   use ftop_widgets, only : widget_rect, widget_size
   implicit none
   private
@@ -38,7 +45,8 @@ contains
     size_value%height = 5
   end function gpu_panel_min_size
 
-  subroutine render_gpu_panel(buffer, panel, snapshot, border_style, title_style, dim_style, expanded, state, process_active)
+  subroutine render_gpu_panel(buffer, panel, snapshot, border_style, title_style, dim_style, expanded, state, process_active, &
+                              horizontal_state)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: panel
     type(collector_snapshot), intent(in) :: snapshot
@@ -48,6 +56,7 @@ contains
     logical, intent(in), optional :: expanded
     type(gpu_process_state), intent(inout), optional :: state
     logical, intent(in), optional :: process_active
+    type(horizontal_text_state), intent(inout), optional :: horizontal_state
     type(screen_style) :: text_style
     type(widget_rect) :: content
     integer :: gpu_index
@@ -62,51 +71,65 @@ contains
 
     text_style = style_from_rgb(fg=COLOR_BRIGHT_WHITE)
     call draw_box(buffer, panel, BOX_STYLE_ROUNDED, border_style, "GPU", title_style)
+    if (present(horizontal_state)) call horizontal_text_begin_frame(horizontal_state)
     content = box_content_rect(panel)
-    if (content%height <= 0 .or. content%width <= 0) return
+    if (content%height <= 0 .or. content%width <= 0) then
+      if (present(horizontal_state)) call horizontal_text_end_frame(horizontal_state)
+      return
+    end if
 
     if (.not. snapshot%gpu%valid) then
-      call render_text(buffer, content_line_rect(content, 1), "gpu unavailable", dim_style, TEXT_ALIGN_CENTER)
+      call render_horizontal_text(buffer, content_line_rect(content, 1), "gpu unavailable", dim_style, horizontal_state, &
+                                  TEXT_ALIGN_CENTER)
+      if (present(horizontal_state)) call horizontal_text_end_frame(horizontal_state)
       return
     end if
 
     if (.not. allocated(snapshot%gpu%gpus) .or. valid_gpu_count(snapshot%gpu) <= 0) then
-      call render_text(buffer, content_line_rect(content, 1), "No GPUs detected", dim_style, TEXT_ALIGN_CENTER)
+      call render_horizontal_text(buffer, content_line_rect(content, 1), "No GPUs detected", dim_style, horizontal_state, &
+                                  TEXT_ALIGN_CENTER)
+      if (present(horizontal_state)) call horizontal_text_end_frame(horizontal_state)
       return
     end if
 
-    call render_text(buffer, content_line_rect(content, 1), gpu_summary_text(snapshot%gpu), text_style)
+    call render_horizontal_text(buffer, content_line_rect(content, 1), gpu_summary_text(snapshot%gpu), text_style, &
+                                horizontal_state)
     line_index = 2
     do gpu_index = 1, size(snapshot%gpu%gpus)
       if (.not. snapshot%gpu%gpus(gpu_index)%valid) cycle
       if (line_index > content%height) exit
-      call render_text(buffer, content_line_rect(content, line_index), gpu_title_text(snapshot%gpu%gpus(gpu_index)), text_style)
+      call render_horizontal_text(buffer, content_line_rect(content, line_index), gpu_title_text(snapshot%gpu%gpus(gpu_index)), &
+                                  text_style, horizontal_state)
       line_index = line_index + 1
       if (line_index > content%height) cycle
-      call render_gpu_utilization(buffer, content_line_rect(content, line_index), snapshot%gpu%gpus(gpu_index), dim_style)
+      call render_gpu_utilization(buffer, content_line_rect(content, line_index), snapshot%gpu%gpus(gpu_index), dim_style, &
+                                  horizontal_state)
       line_index = line_index + 1
       if (line_index > content%height) cycle
       if (gpu_history_available(snapshot, gpu_index)) then
-        call render_gpu_history(buffer, content_line_rect(content, line_index), snapshot, gpu_index, dim_style)
+        call render_gpu_history(buffer, content_line_rect(content, line_index), snapshot, gpu_index, dim_style, &
+                                horizontal_state)
         line_index = line_index + 1
       end if
       if (line_index > content%height) cycle
-      call render_text(buffer, content_line_rect(content, line_index), gpu_metric_text(snapshot%gpu%gpus(gpu_index)), dim_style)
+      call render_horizontal_text(buffer, content_line_rect(content, line_index), gpu_metric_text(snapshot%gpu%gpus(gpu_index)), &
+                                  dim_style, horizontal_state)
       line_index = line_index + 1
     end do
     if (line_index <= content%height) then
       if (present(state)) then
         call render_gpu_processes(buffer, content, line_index, snapshot%gpu_processes, text_style, title_style, dim_style, &
-                                  actual_expanded, state, actual_process_active)
+                                  actual_expanded, state, actual_process_active, horizontal_state)
       else
         call render_gpu_processes(buffer, content, line_index, snapshot%gpu_processes, text_style, title_style, dim_style, &
-                                  actual_expanded, process_active=actual_process_active)
+                                  actual_expanded, process_active=actual_process_active, horizontal_state=horizontal_state)
       end if
     end if
+    if (present(horizontal_state)) call horizontal_text_end_frame(horizontal_state)
   end subroutine render_gpu_panel
 
   subroutine render_gpu_processes(buffer, content, line_index, processes, text_style, selected_style, dim_style, expanded, &
-                                  state, process_active)
+                                  state, process_active, horizontal_state)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: content
     integer, intent(inout) :: line_index
@@ -117,14 +140,17 @@ contains
     logical, intent(in) :: expanded
     type(gpu_process_state), intent(inout), optional :: state
     logical, intent(in), optional :: process_active
+    type(horizontal_text_state), intent(inout), optional :: horizontal_state
     type(gpu_process_state) :: active_state
     type(gpu_process_info), allocatable :: visible_processes(:)
     type(screen_style) :: row_style
+    type(widget_rect) :: row_rect
     integer :: actual_index
     integer :: preview_row
     integer :: remaining_lines
     integer :: start_index
     integer :: viewport_rows
+    character(len=:), allocatable :: process_line
     logical :: active
     logical :: stateful
 
@@ -137,12 +163,14 @@ contains
 
     if (.not. processes%valid) then
       if (present(state)) call clear_gpu_process_state(state)
-      if (expanded) call render_text(buffer, content_line_rect(content, line_index), "GPU processes unsupported", dim_style)
+      if (expanded) call render_horizontal_text(buffer, content_line_rect(content, line_index), "GPU processes unsupported", &
+                                               dim_style, horizontal_state)
       return
     end if
     if (.not. allocated(processes%processes) .or. valid_gpu_process_count(processes) <= 0) then
       if (present(state)) call clear_gpu_process_state(state)
-      if (expanded) call render_text(buffer, content_line_rect(content, line_index), "No GPU process activity", dim_style)
+      if (expanded) call render_horizontal_text(buffer, content_line_rect(content, line_index), "No GPU process activity", &
+                                               dim_style, horizontal_state)
       return
     end if
 
@@ -151,7 +179,7 @@ contains
     if (present(process_active)) active = process_active
     stateful = present(state)
 
-    call render_text(buffer, content_line_rect(content, line_index), "Hot GPU processes", text_style)
+    call render_horizontal_text(buffer, content_line_rect(content, line_index), "Hot GPU processes", text_style, horizontal_state)
     line_index = line_index + 1
     viewport_rows = max(0, content%height - line_index + 1)
     active_state = gpu_process_state()
@@ -171,23 +199,27 @@ contains
       if (actual_index > size(visible_processes)) exit
       if (line_index > content%height) exit
       row_style = dim_style
+      row_rect = content_line_rect(content, line_index)
+      process_line = gpu_process_text(visible_processes(actual_index))
       if (stateful .and. active .and. actual_index == active_state%selected_row) row_style = selected_style
-      call render_text(buffer, content_line_rect(content, line_index), &
-                       gpu_process_text(visible_processes(actual_index)), row_style)
+      call render_horizontal_text(buffer, row_rect, process_line, row_style, horizontal_state, &
+                                  active=stateful .and. active .and. actual_index == active_state%selected_row, &
+                                  ticker=.false.)
       line_index = line_index + 1
     end do
   end subroutine render_gpu_processes
 
-  subroutine render_gpu_utilization(buffer, rect, gpu, dim_style)
+  subroutine render_gpu_utilization(buffer, rect, gpu, dim_style, horizontal_state)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: rect
     type(gpu_info), intent(in) :: gpu
     type(screen_style), intent(in) :: dim_style
+    type(horizontal_text_state), intent(inout), optional :: horizontal_state
     real :: usage_fraction
 
     if (rect%width <= 0 .or. rect%height <= 0) return
     if (.not. gpu%utilization_valid) then
-      call render_text(buffer, rect, "GPU util n/a", dim_style)
+      call render_horizontal_text(buffer, rect, "GPU util n/a", dim_style, horizontal_state)
       return
     end if
 
@@ -197,12 +229,13 @@ contains
                       fill_mode=METER_FILL_SHADED, empty_style=dim_style, label_style=dim_style)
   end subroutine render_gpu_utilization
 
-  subroutine render_gpu_history(buffer, rect, snapshot, gpu_index, dim_style)
+  subroutine render_gpu_history(buffer, rect, snapshot, gpu_index, dim_style, horizontal_state)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: rect
     type(collector_snapshot), intent(in) :: snapshot
     integer, intent(in) :: gpu_index
     type(screen_style), intent(in) :: dim_style
+    type(horizontal_text_state), intent(inout), optional :: horizontal_state
     type(color_gradient) :: gpu_gradient
     type(widget_rect) :: label_rect
     type(widget_rect) :: spark_rect
@@ -227,10 +260,10 @@ contains
       temp_label_rect = widget_rect(rect%row, rect%col + half_width, label_width, 1)
       temp_rect = widget_rect(rect%row, rect%col + half_width + label_width, &
                               rect%width - half_width - label_width, 1)
-      call render_text(buffer, label_rect, "util", dim_style)
+      call render_horizontal_text(buffer, label_rect, "util", dim_style, horizontal_state)
       call render_sparkline(buffer, spark_rect, real(snapshot%gpu_utilization_history(gpu_index, :)), &
                             gradient=gpu_gradient, min_value=0.0, max_value=100.0, style=dim_style)
-      call render_text(buffer, temp_label_rect, "temp", dim_style)
+        call render_horizontal_text(buffer, temp_label_rect, "temp", dim_style, horizontal_state)
       call render_sparkline(buffer, temp_rect, real(snapshot%gpu_temperature_history(gpu_index, :)), &
                             gradient=gpu_gradient, min_value=0.0, &
                             max_value=gpu_temperature_history_max(snapshot%gpu%gpus(gpu_index)), style=dim_style)
@@ -241,11 +274,11 @@ contains
     label_rect = widget_rect(rect%row, rect%col, label_width, 1)
     spark_rect = widget_rect(rect%row, rect%col + label_width, rect%width - label_width, 1)
     if (has_util_history) then
-      call render_text(buffer, label_rect, "util", dim_style)
+      call render_horizontal_text(buffer, label_rect, "util", dim_style, horizontal_state)
       call render_sparkline(buffer, spark_rect, real(snapshot%gpu_utilization_history(gpu_index, :)), &
                             gradient=gpu_gradient, min_value=0.0, max_value=100.0, style=dim_style)
     else
-      call render_text(buffer, label_rect, "temp", dim_style)
+      call render_horizontal_text(buffer, label_rect, "temp", dim_style, horizontal_state)
       call render_sparkline(buffer, spark_rect, real(snapshot%gpu_temperature_history(gpu_index, :)), &
                             gradient=gpu_gradient, min_value=0.0, &
                             max_value=gpu_temperature_history_max(snapshot%gpu%gpus(gpu_index)), style=dim_style)
