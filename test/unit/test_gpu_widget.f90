@@ -4,9 +4,10 @@ program test_gpu_widget
   use fgof_screen_types, only : screen_buffer, screen_style
   use ftop_collector, only : collector_snapshot
   use ftop_color, only : rgb, style_from_rgb
-  use ftop_gpu, only : gpu_process_page_delta, gpu_process_select_delta, gpu_process_state, gpu_process_status, &
-    render_gpu_panel
+  use ftop_gpu, only : gpu_process_page_delta, gpu_process_select_delta, &
+    gpu_process_state, gpu_process_status, render_gpu_panel
   use ftop_gpu_data, only : empty_gpu_table, gpu_process_info
+  use ftop_text, only : horizontal_text_scroll, horizontal_text_state
   use ftop_widgets, only : widget_rect
   implicit none
 
@@ -18,6 +19,8 @@ program test_gpu_widget
   call test_gpu_process_rows_render()
   call test_gpu_process_state_navigation()
   call test_gpu_process_rows_scroll_and_highlight()
+  call test_gpu_process_horizontal_scroll_reveals_long_row()
+  call test_gpu_process_horizontal_scroll_noop_for_short_row()
   call test_gpu_temperature_history_render()
 
 contains
@@ -142,6 +145,62 @@ contains
     call require(text_cell_has_fg(buffer, "proc4"), "gpu process viewport should highlight selected row")
   end subroutine test_gpu_process_rows_scroll_and_highlight
 
+  subroutine test_gpu_process_horizontal_scroll_reveals_long_row()
+    type(screen_buffer) :: buffer
+    type(collector_snapshot) :: snapshot
+    type(screen_style) :: selected_style
+    type(screen_style) :: style
+    type(gpu_process_state) :: state
+    type(horizontal_text_state) :: horizontal_state
+    character(len=:), allocatable :: text
+
+    style = clear_screen_style()
+    selected_style = style_from_rgb(fg=rgb(1, 2, 3))
+    call populate_gpu_snapshot(snapshot)
+    call populate_gpu_process(snapshot, 6725, "/usr/local/libexec/gpu-render-worker")
+    state%selected_row = 1
+
+    buffer = allocate_screen(22, 10)
+    call render_gpu_panel(buffer, widget_rect(1, 1, 22, 10), snapshot, style, selected_style, style, expanded=.true., &
+                          state=state, process_active=.true., horizontal_state=horizontal_state)
+    text = buffer_text(buffer)
+
+    call require(horizontal_state%limit > 0, "long GPU process row should expose horizontal scroll")
+    call require(index(text, "libexec") == 0, "initial GPU process row should be end-ellipsized")
+
+    call horizontal_text_scroll(horizontal_state, 12)
+    buffer = allocate_screen(22, 10)
+    call render_gpu_panel(buffer, widget_rect(1, 1, 22, 10), snapshot, style, selected_style, style, expanded=.true., &
+                          state=state, process_active=.true., horizontal_state=horizontal_state)
+    text = buffer_text(buffer)
+
+    call require(horizontal_state%offset > 0, "GPU process horizontal scroll should advance")
+    call require(index(text, "libexec") > 0, "GPU process horizontal scroll should reveal hidden text")
+  end subroutine test_gpu_process_horizontal_scroll_reveals_long_row
+
+  subroutine test_gpu_process_horizontal_scroll_noop_for_short_row()
+    type(screen_buffer) :: buffer
+    type(collector_snapshot) :: snapshot
+    type(screen_style) :: selected_style
+    type(screen_style) :: style
+    type(gpu_process_state) :: state
+    type(horizontal_text_state) :: horizontal_state
+
+    style = clear_screen_style()
+    selected_style = style_from_rgb(fg=rgb(1, 2, 3))
+    call populate_gpu_snapshot(snapshot)
+    call populate_gpu_process(snapshot, 12, "short")
+    state%selected_row = 1
+
+    buffer = allocate_screen(72, 10)
+    call render_gpu_panel(buffer, widget_rect(1, 1, 72, 10), snapshot, style, selected_style, style, expanded=.true., &
+                          state=state, process_active=.true., horizontal_state=horizontal_state)
+
+    call require(horizontal_state%limit == 0, "short GPU process row should not expose horizontal scroll")
+    call horizontal_text_scroll(horizontal_state, 1)
+    call require(horizontal_state%offset == 0, "short GPU process row horizontal scroll should be a no-op")
+  end subroutine test_gpu_process_horizontal_scroll_noop_for_short_row
+
   subroutine test_gpu_temperature_history_render()
     type(screen_buffer) :: buffer
     type(collector_snapshot) :: snapshot
@@ -202,6 +261,18 @@ contains
         busy_percent=real(process_index * 10, real64))
     end do
   end subroutine populate_gpu_processes
+
+  subroutine populate_gpu_process(snapshot, pid, process_name)
+    type(collector_snapshot), intent(inout) :: snapshot
+    integer, intent(in) :: pid
+    character(len=*), intent(in) :: process_name
+
+    snapshot%gpu_processes%valid = .true.
+    allocate(snapshot%gpu_processes%processes(1))
+    snapshot%gpu_processes%processes(1) = gpu_process_info(valid=.true., pid=pid, start_time=1_int64, &
+      process_name=process_name, engine="render", engine_time_ns=1000000000_int64, busy_percent_valid=.true., &
+      busy_percent=50.0_real64)
+  end subroutine populate_gpu_process
 
   function buffer_text(buffer) result(text)
     type(screen_buffer), intent(in) :: buffer

@@ -13,6 +13,7 @@ program test_dashboard
     render_network_panel
   use ftop_services, only : load_service_cache_from_text
   use ftop_table, only : TABLE_SORT_ASCENDING, table_sort_indicator
+  use ftop_text, only : horizontal_text_scroll, horizontal_text_state
   use ftop_widgets, only : widget_rect
   implicit none
 
@@ -28,6 +29,9 @@ program test_dashboard
   call test_dashboard_renders_zoomed_widget()
   call test_dashboard_renders_active_disk_table()
   call test_dashboard_renders_active_gpu_processes()
+  call test_dashboard_horizontal_reveals_disk_text()
+  call test_dashboard_horizontal_reveals_network_text()
+  call test_dashboard_static_horizontal_ticker_network_text()
   call test_dashboard_renders_zoomed_network_table()
   call test_network_table_column_sizing()
   call test_network_preview_uses_sort_state()
@@ -224,6 +228,109 @@ contains
     call require(gpu_state%row_count == 3, "active gpu should track hot process rows")
     call require(index(text, "gproc2") > 0, "active gpu should render selected hot process")
   end subroutine test_dashboard_renders_active_gpu_processes
+
+  subroutine test_dashboard_horizontal_reveals_disk_text()
+    type(screen_buffer) :: buffer
+    type(collector_snapshot) :: snapshot
+    type(disk_table_state) :: disk_state
+    type(horizontal_text_state) :: horizontal_state
+    character(len=:), allocatable :: text
+
+    snapshot = sample_snapshot()
+    snapshot%disk%filesystems(2)%mountpoint = "/var/lib/containers/hidden-disk-mount"
+    snapshot%disk%filesystems(2)%used_bytes = 190_int64 * GIB
+    snapshot%disk%filesystems(2)%available_bytes = 10_int64 * GIB
+    buffer = allocate_screen(80, 24)
+
+    call render_dashboard(buffer, snapshot, 1000, 7, "ready", focused_widget="disk", &
+                          disk_state=disk_state, horizontal_state=horizontal_state)
+    call require(horizontal_state%limit == 0, "focused inactive disk rows should not expose manual scroll")
+
+    horizontal_state = horizontal_text_state()
+    call render_dashboard(buffer, snapshot, 1000, 7, "ready", focused_widget="disk", &
+                          disk_state=disk_state, disk_table_active=.true., horizontal_state=horizontal_state)
+    text = buffer_text(buffer)
+
+    call require(horizontal_state%limit > 0, "focused disk should expose horizontal text overflow")
+    call require(index(text, "mount") == 0, "initial focused disk text should be ellipsized")
+
+    call horizontal_text_scroll(horizontal_state, horizontal_state%limit)
+    call render_dashboard(buffer, snapshot, 1000, 7, "ready", focused_widget="disk", &
+                          disk_state=disk_state, disk_table_active=.true., horizontal_state=horizontal_state)
+    text = buffer_text(buffer)
+
+    call require(horizontal_state%offset > 0, "focused disk horizontal offset should advance")
+    call require(index(text, "mount") > 0, "focused disk reveal should expose hidden text")
+  end subroutine test_dashboard_horizontal_reveals_disk_text
+
+  subroutine test_dashboard_horizontal_reveals_network_text()
+    type(screen_buffer) :: buffer
+    type(collector_snapshot) :: snapshot
+    type(network_table_state) :: network_state
+    type(horizontal_text_state) :: horizontal_state
+    type(screen_style) :: style
+    character(len=:), allocatable :: text
+
+    snapshot = network_table_snapshot()
+    network_state%sort_key = NETWORK_SORT_PID
+    network_state%selected_row = 1
+    snapshot%network%connections(1)%process_name = "selected-hidden-network-process-selectedtail"
+    snapshot%network%connections(2)%process_name = "other-hidden-network-process-othertail"
+    style = clear_screen_style()
+    buffer = allocate_screen(48, 12)
+    call render_network_panel(buffer, widget_rect(1, 1, 48, 12), snapshot, style, style, style, network_state, &
+                              expanded=.false., horizontal_state=horizontal_state)
+    text = buffer_text(buffer)
+
+    call require(horizontal_state%limit == 0, "focused inactive network rows should not expose manual scroll")
+    call require(horizontal_state%ticker_limit == 0, "inactive network rows should not ticker")
+    call require(index(text, "selectedtail") == 0, "initial inactive network row should be ellipsized")
+    call require(index(text, "othertail") == 0, "initial inactive network peer row should be ellipsized")
+
+    horizontal_state = horizontal_text_state()
+    call render_network_panel(buffer, widget_rect(1, 1, 48, 12), snapshot, style, style, style, network_state, &
+                              expanded=.false., horizontal_state=horizontal_state, table_active=.true.)
+    text = buffer_text(buffer)
+
+    call require(horizontal_state%limit > 0, "active network row should expose horizontal text overflow")
+    call require(index(text, "selectedtail") == 0, "initial active network row should be ellipsized")
+    call require(index(text, "othertail") == 0, "initial inactive network row should be ellipsized")
+
+    call horizontal_text_scroll(horizontal_state, horizontal_state%limit)
+    call render_network_panel(buffer, widget_rect(1, 1, 48, 12), snapshot, style, style, style, network_state, &
+                              expanded=.false., horizontal_state=horizontal_state, table_active=.true.)
+    text = buffer_text(buffer)
+
+    call require(horizontal_state%offset > 0, "active network row horizontal offset should advance")
+    call require(index(text, "selectedtail") > 0, "active network row reveal should expose hidden text")
+    call require(index(text, "othertail") == 0, "manual network reveal should not scroll inactive rows")
+  end subroutine test_dashboard_horizontal_reveals_network_text
+
+  subroutine test_dashboard_static_horizontal_ticker_network_text()
+    type(screen_buffer) :: buffer
+    type(collector_snapshot) :: snapshot
+    type(horizontal_text_state) :: horizontal_state
+    character(len=:), allocatable :: initial_text
+    character(len=:), allocatable :: text
+
+    snapshot = sample_snapshot()
+    snapshot%network%interfaces(1)%name = "uplinkxxxxxxxxhidden-network-iface"
+    snapshot%network%interfaces(1)%tx_bytes_per_sec = 987654321.0_real64
+    buffer = allocate_screen(80, 24)
+    call render_dashboard(buffer, snapshot, 1000, 0, "ready", focused_widget="network", &
+                          horizontal_state=horizontal_state)
+    text = buffer_text(buffer)
+
+    call require(horizontal_state%ticker_limit > 0, "focused network static text should expose ticker overflow")
+    call require(horizontal_state%limit == 0, "static network text should not expose manual row scroll")
+    initial_text = text
+
+    call render_dashboard(buffer, snapshot, 1000, 1, "ready", focused_widget="network", &
+                          horizontal_state=horizontal_state)
+    text = buffer_text(buffer)
+
+    call require(text /= initial_text, "static network ticker should advance over time")
+  end subroutine test_dashboard_static_horizontal_ticker_network_text
 
   subroutine test_dashboard_renders_zoomed_network_table()
     type(screen_buffer) :: buffer
