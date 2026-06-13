@@ -159,6 +159,10 @@ module ftop_app
     read_terminal_input, &
     terminal_read_result, &
     write_terminal_output
+  use ftop_text, only : &
+    horizontal_text_scroll, &
+    horizontal_text_state, &
+    horizontal_text_status
   use ftop_widgets, only : widget_rect
   implicit none
   private
@@ -207,6 +211,7 @@ module ftop_app
     type(network_table_state) :: network_state
     type(disk_table_state) :: disk_state
     type(gpu_process_state) :: gpu_state
+    type(horizontal_text_state) :: horizontal_state
     type(process_table_state) :: process_state
     character(len=:), allocatable :: config_path
     character(len=LAYOUT_PRESET_NAME_LEN) :: layout_preset_name = "full"
@@ -451,9 +456,10 @@ contains
                                  gpu_state=session%gpu_state, paused=session%paused, &
                                  cpu_core_scroll_offset=session%cpu_core_scroll_offset, &
                                  cpu_core_active=session%cpu_core_active, process_tree_active=session%process_tree_active, &
-                                 network_table_active=session%network_table_active, &
-                                 disk_table_active=session%disk_table_active, &
-                                 gpu_process_active=session%gpu_process_active)
+                                  network_table_active=session%network_table_active, &
+                                  disk_table_active=session%disk_table_active, &
+                                  gpu_process_active=session%gpu_process_active, &
+                                  horizontal_state=session%horizontal_state)
     else
       call render_dashboard(session%current, snapshot, session%refresh_ms, session%frame_count, &
                                 session%status_text, focused_widget=focus, zoomed=session%zoomed, &
@@ -463,9 +469,10 @@ contains
                                  gpu_state=session%gpu_state, paused=session%paused, &
                                  cpu_core_scroll_offset=session%cpu_core_scroll_offset, &
                                  cpu_core_active=session%cpu_core_active, process_tree_active=session%process_tree_active, &
-                                 network_table_active=session%network_table_active, &
-                                 disk_table_active=session%disk_table_active, &
-                                 gpu_process_active=session%gpu_process_active)
+                                  network_table_active=session%network_table_active, &
+                                  disk_table_active=session%disk_table_active, &
+                                  gpu_process_active=session%gpu_process_active, &
+                                  horizontal_state=session%horizontal_state)
     end if
     if (session%help_visible) call render_help_overlay(session%current, focus)
   end subroutine draw_frame
@@ -634,6 +641,7 @@ contains
     session%disk_table_active = .false.
     session%gpu_process_active = .false.
     session%process_tree_active = .false.
+    call reset_horizontal_text_state(session)
     if (old_zoomed .and. layout_contains_widget(session%layout, old_focus)) then
       session%zoomed = .false.
       ignored_focus = focus_widget_named(session, old_focus)
@@ -908,6 +916,7 @@ contains
       session%disk_table_active = .false.
       session%gpu_process_active = .false.
       session%process_tree_active = .false.
+      call reset_horizontal_text_state(session)
     end if
     session%focus_index = bounded
   end subroutine set_focus_index
@@ -967,6 +976,7 @@ contains
     session%disk_table_active = .false.
     session%gpu_process_active = .false.
     session%process_tree_active = .false.
+    call reset_horizontal_text_state(session)
     session%needs_full_render = .true.
     if (session%zoomed) then
       call set_status(session, "zoom " // focus)
@@ -1047,16 +1057,19 @@ contains
       call clear_process_click(session)
       ignored_focus = focus_widget_named(session, "process")
       call process_table_scroll_delta(session%process_state, scroll_step)
+      call reset_horizontal_text_state(session)
     else if (mouse_scroll_down(mouse)) then
       scroll_step = max(1, session%process_state%viewport_rows / 3)
       call clear_process_click(session)
       ignored_focus = focus_widget_named(session, "process")
       call process_table_scroll_delta(session%process_state, scroll_step)
+      call reset_horizontal_text_state(session)
     else if (mouse_left_press(mouse)) then
       double_clicked = process_mouse_double_click(session, mouse)
       ignored_focus = focus_widget_named(session, "process")
       if (.not. process_table_sort_at(session%process_state, panel, mouse%row, mouse%col)) then
         selected = process_table_select_at(session%process_state, panel, mouse%row, mouse%col)
+        if (selected) call reset_horizontal_text_state(session)
         if (.not. selected) then
           handled = .true.
           call clear_process_click(session)
@@ -1141,9 +1154,13 @@ contains
       else if (text == "q" .and. .not. text_input_active(session)) then
         call set_status(session, "q")
         session%running = .false.
+      else if (handle_network_quick_printable_key(session, text)) then
+        continue
+      else if (handle_horizontal_text_printable_key(session, text)) then
+        continue
       else if (handle_process_printable_key(session, text)) then
         continue
-      else if (handle_network_quick_printable_key(session, text)) then
+      else if (handle_gpu_process_printable_key(session, text)) then
         continue
       else if (handle_global_printable_key(session, text)) then
         continue
@@ -1169,12 +1186,13 @@ contains
       return
     end if
     if (handle_network_quick_named_key(session, event%key_name)) return
-    if (handle_zoom_escape_key(session, event%key_name)) return
+    if (handle_horizontal_text_named_key(session, event%key_name)) return
     if (handle_cpu_core_mode_key(session, event%key_name)) return
     if (handle_process_tree_mode_key(session, event%key_name)) return
     if (handle_network_table_mode_key(session, event%key_name)) return
     if (handle_disk_table_mode_key(session, event%key_name)) return
     if (handle_gpu_process_mode_key(session, event%key_name)) return
+    if (handle_zoom_escape_key(session, event%key_name)) return
     if (handle_directional_focus_key(session, event%key_name)) return
     if (handle_process_named_key(session, event%key_name)) return
     if (handle_network_named_key(session, event%key_name)) return
@@ -1225,12 +1243,14 @@ contains
         call toggle_zoom(session)
       else
         session%cpu_core_active = .true.
+        call reset_horizontal_text_state(session)
         call set_status(session, "cpu cores active")
       end if
       handled = .true.
     case (FGOF_KEY_ESCAPE)
       if (.not. session%cpu_core_active) return
       session%cpu_core_active = .false.
+      call reset_horizontal_text_state(session)
       call set_status(session, "focus cpu")
       handled = .true.
     case (FGOF_KEY_UP)
@@ -1287,12 +1307,14 @@ contains
         call toggle_zoom(session)
       else
         session%process_tree_active = .true.
+        call reset_horizontal_text_state(session)
         call set_status(session, "process tree active")
       end if
       handled = .true.
     case (FGOF_KEY_ESCAPE)
       if (.not. session%process_tree_active) return
       session%process_tree_active = .false.
+      call reset_horizontal_text_state(session)
       call set_status(session, "focus process")
       handled = .true.
     end select
@@ -1315,12 +1337,14 @@ contains
         call toggle_zoom(session)
       else
         session%network_table_active = .true.
+        call reset_horizontal_text_state(session)
         call set_status(session, "network table active")
       end if
       handled = .true.
     case (FGOF_KEY_ESCAPE)
       if (.not. session%network_table_active) return
       session%network_table_active = .false.
+      call reset_horizontal_text_state(session)
       call set_status(session, "focus network")
       handled = .true.
     case (FGOF_KEY_UP, FGOF_KEY_DOWN, FGOF_KEY_LEFT, FGOF_KEY_RIGHT, &
@@ -1338,20 +1362,28 @@ contains
     select case (key_name)
     case (FGOF_KEY_UP)
       call network_table_select_delta(session%network_state, -1)
+      call reset_horizontal_text_state(session)
     case (FGOF_KEY_DOWN)
       call network_table_select_delta(session%network_state, 1)
+      call reset_horizontal_text_state(session)
     case (FGOF_KEY_PAGEUP)
       call network_table_page_delta(session%network_state, -1)
+      call reset_horizontal_text_state(session)
     case (FGOF_KEY_PAGEDOWN)
       call network_table_page_delta(session%network_state, 1)
+      call reset_horizontal_text_state(session)
     case (FGOF_KEY_HOME)
       call network_table_select_delta(session%network_state, -session%network_state%row_count)
+      call reset_horizontal_text_state(session)
     case (FGOF_KEY_END)
       call network_table_select_delta(session%network_state, session%network_state%row_count)
+      call reset_horizontal_text_state(session)
     case (FGOF_KEY_LEFT)
       call network_table_cycle_sort_key(session%network_state, -1)
+      call reset_horizontal_text_state(session)
     case (FGOF_KEY_RIGHT)
       call network_table_cycle_sort_key(session%network_state, 1)
+      call reset_horizontal_text_state(session)
     end select
     call set_status(session, "network table navigate " // network_table_status(session%network_state))
   end subroutine handle_active_network_table_key
@@ -1373,12 +1405,14 @@ contains
         call toggle_zoom(session)
       else
         session%disk_table_active = .true.
+        call reset_horizontal_text_state(session)
         call set_status(session, "disk table active")
       end if
       handled = .true.
     case (FGOF_KEY_ESCAPE)
       if (.not. session%disk_table_active) return
       session%disk_table_active = .false.
+      call reset_horizontal_text_state(session)
       call set_status(session, "focus disk")
       handled = .true.
     case (FGOF_KEY_UP, FGOF_KEY_DOWN, FGOF_KEY_PAGEUP, FGOF_KEY_PAGEDOWN, FGOF_KEY_HOME, FGOF_KEY_END)
@@ -1395,19 +1429,109 @@ contains
     select case (key_name)
     case (FGOF_KEY_UP)
       call disk_table_select_delta(session%disk_state, -1)
+      call reset_horizontal_text_state(session)
     case (FGOF_KEY_DOWN)
       call disk_table_select_delta(session%disk_state, 1)
+      call reset_horizontal_text_state(session)
     case (FGOF_KEY_PAGEUP)
       call disk_table_page_delta(session%disk_state, -1)
+      call reset_horizontal_text_state(session)
     case (FGOF_KEY_PAGEDOWN)
       call disk_table_page_delta(session%disk_state, 1)
+      call reset_horizontal_text_state(session)
     case (FGOF_KEY_HOME)
       call disk_table_select_delta(session%disk_state, -session%disk_state%row_count)
+      call reset_horizontal_text_state(session)
     case (FGOF_KEY_END)
       call disk_table_select_delta(session%disk_state, session%disk_state%row_count)
+      call reset_horizontal_text_state(session)
     end select
     call set_status(session, "disk table navigate " // disk_table_status(session%disk_state))
   end subroutine handle_active_disk_table_key
+
+  logical function handle_horizontal_text_named_key(session, key_name) result(handled)
+    type(terminal_session), intent(inout) :: session
+    character(len=*), intent(in) :: key_name
+    integer :: delta
+    logical :: active_context
+
+    handled = .false.
+    if (text_input_active(session)) return
+    select case (key_name)
+    case (FGOF_KEY_LEFT)
+      delta = -1
+    case (FGOF_KEY_RIGHT)
+      delta = 1
+    case default
+      return
+    end select
+
+    active_context = horizontal_text_named_keys_active(session)
+    if (.not. active_context .and. session%horizontal_state%offset <= 0) return
+    call scroll_horizontal_text(session, delta)
+    handled = .true.
+  end function handle_horizontal_text_named_key
+
+  logical function horizontal_text_named_keys_active(session) result(active)
+    type(terminal_session), intent(in) :: session
+    character(len=:), allocatable :: focus
+
+    active = session%zoomed
+    if (active) return
+
+    focus = focused_widget_name(session)
+    select case (focus)
+    case ("cpu")
+      active = session%cpu_core_active
+    case ("process")
+      active = session%process_tree_active
+    case ("network")
+      active = session%network_table_active
+    case ("disk")
+      active = session%disk_table_active
+    case ("gpu")
+      active = session%gpu_process_active
+    case default
+      active = .false.
+    end select
+  end function horizontal_text_named_keys_active
+
+  logical function handle_horizontal_text_printable_key(session, text) result(handled)
+    type(terminal_session), intent(inout) :: session
+    character(len=*), intent(in) :: text
+    integer :: delta
+
+    handled = .false.
+    if (text_input_active(session)) return
+    if (process_widget_focused(session) .and. session%process_state%fuzzy_query_length > 0) return
+    select case (text)
+    case ("h")
+      delta = -1
+    case ("l")
+      delta = 1
+    case default
+      return
+    end select
+
+    if (.not. horizontal_text_named_keys_active(session)) return
+    call scroll_horizontal_text(session, delta)
+    handled = .true.
+  end function handle_horizontal_text_printable_key
+
+  subroutine scroll_horizontal_text(session, delta)
+    type(terminal_session), intent(inout) :: session
+    integer, intent(in) :: delta
+
+    call horizontal_text_scroll(session%horizontal_state, delta)
+    call set_status(session, horizontal_text_status(focused_widget_name(session), session%horizontal_state))
+  end subroutine scroll_horizontal_text
+
+  subroutine reset_horizontal_text_state(session)
+    type(terminal_session), intent(inout) :: session
+
+    session%horizontal_state%offset = 0
+    session%horizontal_state%limit = 0
+  end subroutine reset_horizontal_text_state
 
   logical function handle_gpu_process_mode_key(session, key_name) result(handled)
     type(terminal_session), intent(inout) :: session
@@ -1426,15 +1550,18 @@ contains
         call toggle_zoom(session)
       else
         session%gpu_process_active = .true.
+        call reset_horizontal_text_state(session)
         call set_status(session, "gpu processes active")
       end if
       handled = .true.
     case (FGOF_KEY_ESCAPE)
       if (.not. session%gpu_process_active) return
       session%gpu_process_active = .false.
+      call reset_horizontal_text_state(session)
       call set_status(session, "focus gpu")
       handled = .true.
-    case (FGOF_KEY_UP, FGOF_KEY_DOWN, FGOF_KEY_PAGEUP, FGOF_KEY_PAGEDOWN, FGOF_KEY_HOME, FGOF_KEY_END)
+    case (FGOF_KEY_UP, FGOF_KEY_DOWN, FGOF_KEY_LEFT, FGOF_KEY_RIGHT, &
+          FGOF_KEY_PAGEUP, FGOF_KEY_PAGEDOWN, FGOF_KEY_HOME, FGOF_KEY_END)
       if (.not. session%zoomed .and. .not. session%gpu_process_active) return
       call handle_active_gpu_process_key(session, key_name)
       handled = .true.
@@ -1448,18 +1575,30 @@ contains
     select case (key_name)
     case (FGOF_KEY_UP)
       call gpu_process_select_delta(session%gpu_state, -1)
+      call reset_horizontal_text_state(session)
     case (FGOF_KEY_DOWN)
       call gpu_process_select_delta(session%gpu_state, 1)
+      call reset_horizontal_text_state(session)
+    case (FGOF_KEY_LEFT)
+      call scroll_horizontal_text(session, -1)
+    case (FGOF_KEY_RIGHT)
+      call scroll_horizontal_text(session, 1)
     case (FGOF_KEY_PAGEUP)
       call gpu_process_page_delta(session%gpu_state, -1)
+      call reset_horizontal_text_state(session)
     case (FGOF_KEY_PAGEDOWN)
       call gpu_process_page_delta(session%gpu_state, 1)
+      call reset_horizontal_text_state(session)
     case (FGOF_KEY_HOME)
       call gpu_process_select_delta(session%gpu_state, -session%gpu_state%row_count)
+      call reset_horizontal_text_state(session)
     case (FGOF_KEY_END)
       call gpu_process_select_delta(session%gpu_state, session%gpu_state%row_count)
+      call reset_horizontal_text_state(session)
     end select
-    call set_status(session, "gpu process navigate " // gpu_process_status(session%gpu_state))
+    if (key_name /= FGOF_KEY_LEFT .and. key_name /= FGOF_KEY_RIGHT) then
+      call set_status(session, "gpu process navigate " // gpu_process_status(session%gpu_state))
+    end if
   end subroutine handle_active_gpu_process_key
 
   logical function handle_directional_focus_key(session, key_name) result(handled)
@@ -1499,6 +1638,7 @@ contains
     if (len(next_widget) <= 0) then
       if (direction == LAYOUT_DIRECTION_DOWN .and. process_widget_focused(session)) then
         session%process_tree_active = .true.
+        call reset_horizontal_text_state(session)
         call set_status(session, "process tree active")
         handled = .true.
       end if
@@ -1523,6 +1663,7 @@ contains
         call mark_process_fuzzy_activity(session)
       else
         call process_table_select_delta(session%process_state, -1)
+        call reset_horizontal_text_state(session)
       end if
     case (LAYOUT_DIRECTION_DOWN)
       if (session%process_state%fuzzy_query_length > 0) then
@@ -1530,6 +1671,7 @@ contains
         call mark_process_fuzzy_activity(session)
       else
         call process_table_select_delta(session%process_state, 1)
+        call reset_horizontal_text_state(session)
       end if
     case (LAYOUT_DIRECTION_LEFT)
       call process_table_cycle_sort_key(session%process_state, -1)
@@ -1801,6 +1943,7 @@ contains
       return
     else if (navigation_delta /= 0) then
       call process_table_select_delta(session%process_state, navigation_delta)
+      call reset_horizontal_text_state(session)
     else
       if (.not. ascii_alnum_text(text)) return
       call process_table_append_fuzzy_text(session%process_state, text)
@@ -1904,6 +2047,7 @@ contains
         call mark_process_fuzzy_activity(session)
       else
         call process_table_select_delta(session%process_state, -1)
+        call reset_horizontal_text_state(session)
       end if
     case (FGOF_KEY_DOWN)
       if (session%process_state%fuzzy_query_length > 0) then
@@ -1911,19 +2055,26 @@ contains
         call mark_process_fuzzy_activity(session)
       else
         call process_table_select_delta(session%process_state, 1)
+        call reset_horizontal_text_state(session)
       end if
     case (FGOF_KEY_PAGEUP)
       call process_table_page_delta(session%process_state, -1)
+      call reset_horizontal_text_state(session)
     case (FGOF_KEY_PAGEDOWN)
       call process_table_page_delta(session%process_state, 1)
+      call reset_horizontal_text_state(session)
     case (FGOF_KEY_HOME)
       call process_table_select_delta(session%process_state, -session%process_state%row_count)
+      call reset_horizontal_text_state(session)
     case (FGOF_KEY_END)
       call process_table_select_delta(session%process_state, session%process_state%row_count)
+      call reset_horizontal_text_state(session)
     case (FGOF_KEY_LEFT)
       call process_table_cycle_sort_key(session%process_state, -1)
+      call reset_horizontal_text_state(session)
     case (FGOF_KEY_RIGHT)
       call process_table_cycle_sort_key(session%process_state, 1)
+      call reset_horizontal_text_state(session)
     case default
       return
     end select
@@ -2145,6 +2296,29 @@ contains
     end select
   end function handle_network_quick_named_key
 
+  logical function handle_gpu_process_printable_key(session, text) result(handled)
+    type(terminal_session), intent(inout) :: session
+    character(len=*), intent(in) :: text
+    integer :: vertical_delta
+
+    handled = .false.
+    if (.not. gpu_widget_focused(session)) return
+    if (.not. session%zoomed .and. .not. session%gpu_process_active) return
+    if (text_input_active(session)) return
+
+    select case (text)
+    case ("j", "k", "g", "G")
+      vertical_delta = vim_navigation_delta(text, session%gpu_state%row_count)
+      call gpu_process_select_delta(session%gpu_state, vertical_delta)
+      call reset_horizontal_text_state(session)
+    case default
+      return
+    end select
+
+    handled = .true.
+    call set_status(session, "gpu process navigate " // gpu_process_status(session%gpu_state))
+  end function handle_gpu_process_printable_key
+
   logical function handle_network_printable_key(session, text) result(handled)
     type(terminal_session), intent(inout) :: session
     character(len=*), intent(in) :: text
@@ -2155,13 +2329,16 @@ contains
     select case (text)
     case ("j", "k", "g", "G")
       call network_table_select_delta(session%network_state, vim_navigation_delta(text, session%network_state%row_count))
+      call reset_horizontal_text_state(session)
       status = network_table_status(session%network_state)
     case ("f")
       call network_table_cycle_state_filter(session%network_state)
+      call reset_horizontal_text_state(session)
       status = network_table_status(session%network_state)
       if (.not. session%zoomed) status = status // " (preview updated; zoom for full table)"
     case ("s")
       call network_table_toggle_sort_direction(session%network_state)
+      call reset_horizontal_text_state(session)
       status = "network table sort " // network_table_sort_key_label(session%network_state) // " " // &
                network_table_sort_direction_label(session%network_state)
       if (.not. session%zoomed) status = status // " (preview updated; zoom for full table)"
@@ -2184,20 +2361,28 @@ contains
       call network_table_clear_state_filter(session%network_state)
     case (FGOF_KEY_UP)
       call network_table_select_delta(session%network_state, -1)
+      call reset_horizontal_text_state(session)
     case (FGOF_KEY_DOWN)
       call network_table_select_delta(session%network_state, 1)
+      call reset_horizontal_text_state(session)
     case (FGOF_KEY_PAGEUP)
       call network_table_page_delta(session%network_state, -1)
+      call reset_horizontal_text_state(session)
     case (FGOF_KEY_PAGEDOWN)
       call network_table_page_delta(session%network_state, 1)
+      call reset_horizontal_text_state(session)
     case (FGOF_KEY_HOME)
       call network_table_select_delta(session%network_state, -session%network_state%row_count)
+      call reset_horizontal_text_state(session)
     case (FGOF_KEY_END)
       call network_table_select_delta(session%network_state, session%network_state%row_count)
+      call reset_horizontal_text_state(session)
     case (FGOF_KEY_LEFT)
       call network_table_cycle_sort_key(session%network_state, -1)
+      call reset_horizontal_text_state(session)
     case (FGOF_KEY_RIGHT)
       call network_table_cycle_sort_key(session%network_state, 1)
+      call reset_horizontal_text_state(session)
     case default
       return
     end select
@@ -2614,6 +2799,7 @@ contains
 
     session%current = allocate_screen(columns, rows)
     session%previous = allocate_screen(columns, rows)
+    call reset_horizontal_text_state(session)
     session%needs_full_render = .true.
     session%dirty = .true.
   end subroutine resize_session_to_terminal

@@ -24,7 +24,12 @@ module ftop_dashboard
     process_table_sort_key_label, &
     process_table_state, &
     render_process_panel
-  use ftop_text, only : TEXT_ALIGN_CENTER, render_text
+  use ftop_text, only : &
+    TEXT_ALIGN_CENTER, &
+    horizontal_text_begin_frame, &
+    horizontal_text_end_frame, &
+    horizontal_text_state, &
+    render_text
   use ftop_widgets, only : widget_rect
   implicit none
   private
@@ -38,7 +43,7 @@ contains
   subroutine render_dashboard(buffer, snapshot, refresh_ms, frame_count, status_text, grid, focused_widget, zoomed, render_fps, &
                                process_state, network_state, disk_state, layout_name, paused, cpu_core_scroll_offset, &
                                cpu_core_active, process_tree_active, network_table_active, disk_table_active, gpu_state, &
-                               gpu_process_active)
+                               gpu_process_active, horizontal_state)
     type(screen_buffer), intent(inout) :: buffer
     type(collector_snapshot), intent(in) :: snapshot
     integer, intent(in) :: refresh_ms
@@ -60,6 +65,7 @@ contains
     logical, intent(in), optional :: disk_table_active
     type(gpu_process_state), intent(inout), optional :: gpu_state
     logical, intent(in), optional :: gpu_process_active
+    type(horizontal_text_state), intent(inout), optional :: horizontal_state
     type(dashboard_layout) :: layout
     type(screen_style) :: border_style
     type(screen_style) :: cpu_border_style
@@ -86,9 +92,13 @@ contains
     logical :: network_active
     logical :: process_active
 
+    if (present(horizontal_state)) call horizontal_text_begin_frame(horizontal_state, frame_count)
     width = buffer%size%width
     height = buffer%size%height
-    if (width <= 0 .or. height <= 0) return
+    if (width <= 0 .or. height <= 0) then
+      if (present(horizontal_state)) call horizontal_text_end_frame(horizontal_state)
+      return
+    end if
 
     border_style = style_from_rgb(fg=COLOR_UI_BORDER)
     focus_style = style_from_rgb(fg=COLOR_UI_ACCENT, bold=.true.)
@@ -118,6 +128,7 @@ contains
 
     if (width < 8 .or. height < 4) then
       call render_text(buffer, widget_rect(1, 1, width, 1), "ftop", title_style, TEXT_ALIGN_CENTER)
+      if (present(horizontal_state)) call horizontal_text_end_frame(horizontal_state)
       return
     end if
 
@@ -135,8 +146,9 @@ contains
     if (is_zoomed) then
       zoom_rect = widget_rect(3, 3, max(0, width - 4), max(0, height - 5))
       call render_dashboard_panel(buffer, zoom_rect, focus, snapshot, focus_style, title_style, dim_style, .true., &
-                                   process_state=process_state, network_state=network_state, disk_state=disk_state, &
-                                   cpu_core_scroll_offset=cpu_offset, gpu_state=gpu_state, gpu_process_active=.true.)
+                                    process_state=process_state, network_state=network_state, disk_state=disk_state, &
+                                    cpu_core_scroll_offset=cpu_offset, gpu_state=gpu_state, gpu_process_active=.true., &
+                                    horizontal_state=horizontal_state)
     else
       cpu_border_style = border_style
       disk_border_style = border_style
@@ -151,41 +163,89 @@ contains
       if (focus == "network") network_border_style = focus_style
       if (focus == "process") process_border_style = focus_style
       if (layout%cpu_panel%height >= 3) then
-        call render_cpu_panel(buffer, layout%cpu_panel, snapshot, cpu_border_style, title_style, dim_style, &
-                              core_scroll_offset=cpu_offset)
+        if (focus == "cpu") then
+          call render_cpu_panel(buffer, layout%cpu_panel, snapshot, cpu_border_style, title_style, dim_style, &
+                                core_scroll_offset=cpu_offset, horizontal_state=horizontal_state)
+        else
+          call render_cpu_panel(buffer, layout%cpu_panel, snapshot, cpu_border_style, title_style, dim_style, &
+                                core_scroll_offset=cpu_offset)
+        end if
       end if
       if (layout%memory_panel%height >= 3) then
-        call render_memory_panel(buffer, layout%memory_panel, snapshot, memory_border_style, title_style, dim_style, &
-                                 expanded=.false.)
+        if (focus == "memory") then
+          call render_memory_panel(buffer, layout%memory_panel, snapshot, memory_border_style, title_style, dim_style, &
+                                   expanded=.false., horizontal_state=horizontal_state)
+        else
+          call render_memory_panel(buffer, layout%memory_panel, snapshot, memory_border_style, title_style, dim_style, &
+                                   expanded=.false.)
+        end if
       end if
       if (layout%network_panel%height >= 3) then
-        if (present(network_state)) then
-          call render_network_panel(buffer, layout%network_panel, snapshot, network_border_style, title_style, dim_style, &
-                                    network_state, expanded=.false.)
+        if (focus == "network") then
+          if (present(network_state)) then
+            call render_network_panel(buffer, layout%network_panel, snapshot, network_border_style, title_style, dim_style, &
+                                      network_state, expanded=.false., horizontal_state=horizontal_state, &
+                                      table_active=network_active)
+          else
+            call render_network_panel(buffer, layout%network_panel, snapshot, network_border_style, title_style, dim_style, &
+                                      expanded=.false., horizontal_state=horizontal_state, table_active=network_active)
+          end if
         else
-          call render_network_panel(buffer, layout%network_panel, snapshot, network_border_style, title_style, dim_style, &
-                                    expanded=.false.)
+          if (present(network_state)) then
+            call render_network_panel(buffer, layout%network_panel, snapshot, network_border_style, title_style, dim_style, &
+                                      network_state, expanded=.false.)
+          else
+            call render_network_panel(buffer, layout%network_panel, snapshot, network_border_style, title_style, dim_style, &
+                                      expanded=.false.)
+          end if
         end if
       end if
       if (layout%disk_panel%height >= 3) then
-        call render_disk_panel(buffer, layout%disk_panel, snapshot, disk_border_style, title_style, dim_style, &
-                               state=disk_state, expanded=.false.)
+        if (focus == "disk") then
+          call render_disk_panel(buffer, layout%disk_panel, snapshot, disk_border_style, title_style, dim_style, &
+                                 state=disk_state, expanded=.false., horizontal_state=horizontal_state, &
+                                 table_active=disk_active)
+        else
+          call render_disk_panel(buffer, layout%disk_panel, snapshot, disk_border_style, title_style, dim_style, &
+                                 state=disk_state, expanded=.false.)
+        end if
       end if
       if (layout%gpu_panel%height >= 3) then
-        if (present(gpu_state)) then
-          call render_gpu_panel(buffer, layout%gpu_panel, snapshot, gpu_border_style, title_style, dim_style, &
-                                expanded=.false., state=gpu_state, process_active=gpu_active)
+        if (focus == "gpu") then
+          if (present(gpu_state)) then
+            call render_gpu_panel(buffer, layout%gpu_panel, snapshot, gpu_border_style, title_style, dim_style, &
+                                  expanded=.false., state=gpu_state, process_active=gpu_active, &
+                                  horizontal_state=horizontal_state)
+          else
+            call render_gpu_panel(buffer, layout%gpu_panel, snapshot, gpu_border_style, title_style, dim_style, &
+                                  expanded=.false., process_active=gpu_active, horizontal_state=horizontal_state)
+          end if
         else
-          call render_gpu_panel(buffer, layout%gpu_panel, snapshot, gpu_border_style, title_style, dim_style, &
-                                expanded=.false., process_active=gpu_active)
+          if (present(gpu_state)) then
+            call render_gpu_panel(buffer, layout%gpu_panel, snapshot, gpu_border_style, title_style, dim_style, &
+                                  expanded=.false., state=gpu_state, process_active=gpu_active)
+          else
+            call render_gpu_panel(buffer, layout%gpu_panel, snapshot, gpu_border_style, title_style, dim_style, &
+                                  expanded=.false., process_active=gpu_active)
+          end if
         end if
       end if
       if (layout%process_panel%height >= 3) then
-        if (present(process_state)) then
-          call render_process_panel(buffer, layout%process_panel, snapshot, process_border_style, title_style, dim_style, &
-                                    process_state)
+        if (focus == "process") then
+          if (present(process_state)) then
+            call render_process_panel(buffer, layout%process_panel, snapshot, process_border_style, title_style, dim_style, &
+                                      process_state, horizontal_state=horizontal_state, rows_active=process_active)
+          else
+            call render_process_panel(buffer, layout%process_panel, snapshot, process_border_style, title_style, dim_style, &
+                                      horizontal_state=horizontal_state, rows_active=process_active)
+          end if
         else
-          call render_process_panel(buffer, layout%process_panel, snapshot, process_border_style, title_style, dim_style)
+          if (present(process_state)) then
+            call render_process_panel(buffer, layout%process_panel, snapshot, process_border_style, title_style, dim_style, &
+                                      process_state)
+          else
+            call render_process_panel(buffer, layout%process_panel, snapshot, process_border_style, title_style, dim_style)
+          end if
         end if
       end if
     end if
@@ -203,12 +263,13 @@ contains
                         paused=is_paused, cpu_core_active=cpu_active, process_tree_active=process_active, &
                         network_table_active=network_active, disk_table_active=disk_active, &
                         gpu_process_active=gpu_active, process_state=process_state, network_state=network_state, &
-                        disk_state=disk_state, gpu_state=gpu_state)
+                         disk_state=disk_state, gpu_state=gpu_state)
+    if (present(horizontal_state)) call horizontal_text_end_frame(horizontal_state)
   end subroutine render_dashboard
 
   subroutine render_dashboard_panel(buffer, rect, widget, snapshot, border_style, title_style, dim_style, expanded, &
                                     process_state, network_state, disk_state, cpu_core_scroll_offset, gpu_state, &
-                                    gpu_process_active)
+                                    gpu_process_active, horizontal_state)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: rect
     character(len=*), intent(in) :: widget
@@ -223,6 +284,7 @@ contains
     integer, intent(in), optional :: cpu_core_scroll_offset
     type(gpu_process_state), intent(inout), optional :: gpu_state
     logical, intent(in), optional :: gpu_process_active
+    type(horizontal_text_state), intent(inout), optional :: horizontal_state
     logical :: active_gpu_processes
 
     if (rect%height < 3 .or. rect%width <= 0) return
@@ -231,30 +293,36 @@ contains
     select case (trim(widget))
     case ("cpu")
       call render_cpu_panel(buffer, rect, snapshot, border_style, title_style, dim_style, &
-                            core_scroll_offset=cpu_core_scroll_offset)
+                            core_scroll_offset=cpu_core_scroll_offset, horizontal_state=horizontal_state)
     case ("memory")
-      call render_memory_panel(buffer, rect, snapshot, border_style, title_style, dim_style, expanded=expanded)
+      call render_memory_panel(buffer, rect, snapshot, border_style, title_style, dim_style, expanded=expanded, &
+                               horizontal_state=horizontal_state)
     case ("network")
       if (present(network_state)) then
-        call render_network_panel(buffer, rect, snapshot, border_style, title_style, dim_style, network_state, expanded)
+        call render_network_panel(buffer, rect, snapshot, border_style, title_style, dim_style, network_state, expanded, &
+                                  horizontal_state, table_active=expanded)
       else
-        call render_network_panel(buffer, rect, snapshot, border_style, title_style, dim_style, expanded=expanded)
+        call render_network_panel(buffer, rect, snapshot, border_style, title_style, dim_style, expanded=expanded, &
+                                  horizontal_state=horizontal_state, table_active=expanded)
       end if
     case ("disk")
-      call render_disk_panel(buffer, rect, snapshot, border_style, title_style, dim_style, state=disk_state, expanded=expanded)
+      call render_disk_panel(buffer, rect, snapshot, border_style, title_style, dim_style, state=disk_state, &
+                             expanded=expanded, horizontal_state=horizontal_state, table_active=expanded)
     case ("gpu")
       if (present(gpu_state)) then
         call render_gpu_panel(buffer, rect, snapshot, border_style, title_style, dim_style, expanded=expanded, &
-                              state=gpu_state, process_active=active_gpu_processes)
+                              state=gpu_state, process_active=active_gpu_processes, horizontal_state=horizontal_state)
       else
         call render_gpu_panel(buffer, rect, snapshot, border_style, title_style, dim_style, expanded=expanded, &
-                              process_active=active_gpu_processes)
+                              process_active=active_gpu_processes, horizontal_state=horizontal_state)
       end if
     case ("process")
       if (present(process_state)) then
-        call render_process_panel(buffer, rect, snapshot, border_style, title_style, dim_style, process_state)
+        call render_process_panel(buffer, rect, snapshot, border_style, title_style, dim_style, process_state, &
+                                  horizontal_state=horizontal_state, rows_active=expanded)
       else
-        call render_process_panel(buffer, rect, snapshot, border_style, title_style, dim_style)
+        call render_process_panel(buffer, rect, snapshot, border_style, title_style, dim_style, &
+                                  horizontal_state=horizontal_state, rows_active=expanded)
       end if
     end select
   end subroutine render_dashboard_panel
@@ -384,7 +452,7 @@ contains
       if (present(process_state)) then
         text = process_footer_actions(zoomed, process_tree_active, process_state)
       else if (zoomed .or. process_tree_active) then
-        text = "Up/Down rows  Left/Right sort  F5 flip  Esc grid"
+        text = "Up/Down rows  Left/Right reveal  h/l  F5 flip  Esc grid"
       else
         text = "Enter tree  Down tree  z zoom  F4 filter  F9 signal"
       end if
@@ -392,9 +460,9 @@ contains
       if (present(network_state)) then
         text = network_footer_actions(zoomed, network_table_active, network_state)
       else if (zoomed) then
-        text = "Up/Down rows  :port/ip jump  Left/Right sort  f state  Esc grid"
+        text = "Up/Down rows  :port/ip jump  Left/Right reveal  h/l  f state  Esc grid"
       else if (network_table_active) then
-        text = "Up/Down rows  :port/ip jump  Left/Right sort  Enter zoom  Esc focus"
+        text = "Up/Down rows  :port/ip jump  Left/Right reveal  h/l  Enter zoom  Esc focus"
       else
         text = "f state  s sort  z zoom  arrows panes  q quit"
       end if
@@ -406,17 +474,17 @@ contains
       end if
     case ("disk")
       if (zoomed) then
-        text = "Up/Down rows  Page rows  Enter grid  Esc grid  q quit"
+        text = "Up/Down rows  Page rows  Left/Right reveal  h/l  Enter grid  Esc grid"
       else if (disk_table_active) then
-        text = "Up/Down rows  Page rows  Enter zoom  Esc focus"
+        text = "Up/Down rows  Page rows  Left/Right reveal  h/l  Enter zoom  Esc focus"
       else
         text = "Enter table  z zoom  arrows panes  Tab focus  q quit"
       end if
     case ("gpu")
       if (zoomed) then
-        text = "Up/Down rows  Page rows  Enter grid  Esc grid  q quit"
+        text = "Up/Down rows  Left/Right reveal  h/l  Enter grid  Esc grid"
       else if (gpu_process_active) then
-        text = "Up/Down rows  Page rows  Enter zoom  Esc focus"
+        text = "Up/Down rows  Left/Right reveal  h/l  Enter zoom  Esc focus"
       else
         text = "Enter processes  z zoom  arrows panes  Tab focus  q quit"
       end if
@@ -438,9 +506,9 @@ contains
     else if (state%fuzzy_query_length > 0) then
       text = "type find  Up/Down match  Backspace edit  Esc clear"
     else if (zoomed) then
-      text = "Up/Down rows  Left/Right sort  F5 flip  F3 tree  F4 filter  Esc grid"
+      text = "Up/Down rows  Left/Right reveal  h/l  F5 flip  F3 tree  F4 filter  Esc grid"
     else if (process_tree_active) then
-      text = "Up/Down rows  Left/Right sort  F5 flip  Enter zoom  Esc focus"
+      text = "Up/Down rows  Left/Right reveal  h/l  F5 flip  Enter zoom  Esc focus"
     else
       text = "Enter tree  Down tree  z zoom  F4 filter  F9 signal"
     end if
@@ -455,9 +523,9 @@ contains
     associate(unused_state => state)
     end associate
     if (zoomed) then
-      text = "Up/Down rows  :port/ip jump  Left/Right sort  f filter  Esc grid"
+      text = "Up/Down rows  :port/ip jump  Left/Right reveal  h/l  f filter  Esc grid"
     else if (network_table_active) then
-      text = "Up/Down rows  :port/ip jump  Left/Right sort  Enter zoom  Esc focus"
+      text = "Up/Down rows  :port/ip jump  Left/Right reveal  h/l  Enter zoom  Esc focus"
     else
       text = "Enter table  z zoom  s sort  f filter  arrows panes  q quit"
     end if
