@@ -18,10 +18,24 @@ module ftop_text
     procedure :: min_size => text_widget_min_size
   end type text_widget
 
+  type, public :: horizontal_text_state
+    integer :: offset = 0
+    integer :: limit = 0
+    integer :: ticker_offset = 0
+    integer :: ticker_limit = 0
+  end type horizontal_text_state
+
   public :: format_bytes
   public :: format_percent
+  public :: horizontal_text_begin_frame
+  public :: horizontal_text_end_frame
+  public :: horizontal_text_scroll
+  public :: horizontal_text_status
+  public :: horizontal_truncated_text
+  public :: render_horizontal_text
   public :: render_text
   public :: text_cell_width
+  public :: text_horizontal_scroll_limit
   public :: truncated_text
   public :: utf8_glyph_bytes
 
@@ -68,6 +82,100 @@ contains
     end do
   end subroutine render_text
 
+  subroutine render_horizontal_text(buffer, rect, text, style, state, alignment, active, ticker)
+    type(screen_buffer), intent(inout) :: buffer
+    type(widget_rect), intent(in) :: rect
+    character(len=*), intent(in) :: text
+    type(screen_style), intent(in), optional :: style
+    type(horizontal_text_state), intent(inout), optional :: state
+    integer, intent(in), optional :: alignment
+    logical, intent(in), optional :: active
+    logical, intent(in), optional :: ticker
+    character(len=:), allocatable :: clipped
+    integer :: limit
+    logical :: manual
+    logical :: ticker_enabled
+
+    if (.not. present(state)) then
+      call render_text(buffer, rect, text, style, alignment)
+      return
+    end if
+
+    manual = .false.
+    if (present(active)) manual = active
+    ticker_enabled = .true.
+    if (present(ticker)) ticker_enabled = ticker
+    limit = text_horizontal_scroll_limit(text, rect%width)
+    if (manual) then
+      state%limit = max(state%limit, limit)
+      clipped = horizontal_truncated_text(text, rect%width, state%offset)
+    else if (ticker_enabled) then
+      state%ticker_limit = max(state%ticker_limit, limit)
+      clipped = horizontal_truncated_text(text, rect%width, horizontal_text_ticker_offset(state, limit))
+    else
+      clipped = horizontal_truncated_text(text, rect%width, 0)
+    end if
+    call render_text(buffer, rect, clipped, style, alignment)
+  end subroutine render_horizontal_text
+
+  subroutine horizontal_text_begin_frame(state, ticker_offset)
+    type(horizontal_text_state), intent(inout) :: state
+    integer, intent(in), optional :: ticker_offset
+
+    state%limit = 0
+    state%ticker_limit = 0
+    state%offset = max(0, state%offset)
+    state%ticker_offset = max(0, state%ticker_offset)
+    if (present(ticker_offset)) state%ticker_offset = max(0, ticker_offset)
+  end subroutine horizontal_text_begin_frame
+
+  subroutine horizontal_text_end_frame(state)
+    type(horizontal_text_state), intent(inout) :: state
+
+    state%limit = max(0, state%limit)
+    state%ticker_limit = max(0, state%ticker_limit)
+    state%offset = max(0, min(state%limit, state%offset))
+    if (state%ticker_limit <= 0) state%ticker_offset = 0
+  end subroutine horizontal_text_end_frame
+
+  subroutine horizontal_text_scroll(state, delta)
+    type(horizontal_text_state), intent(inout) :: state
+    integer, intent(in) :: delta
+
+    state%limit = max(0, state%limit)
+    if (state%limit <= 0) then
+      state%offset = 0
+      return
+    end if
+
+    state%offset = max(0, min(state%limit, state%offset + delta))
+  end subroutine horizontal_text_scroll
+
+  function horizontal_text_status(label, state) result(text)
+    character(len=*), intent(in) :: label
+    type(horizontal_text_state), intent(in) :: state
+    character(len=:), allocatable :: text
+
+    if (state%limit > 0) then
+      text = trim(label) // " text col " // integer_text(max(0, state%offset) + 1) // "/" // &
+             integer_text(max(0, state%limit) + 1)
+    else
+      text = trim(label) // " text fits"
+    end if
+  end function horizontal_text_status
+
+  integer function horizontal_text_ticker_offset(state, limit) result(offset)
+    type(horizontal_text_state), intent(in) :: state
+    integer, intent(in) :: limit
+    integer :: cycle_length
+
+    offset = 0
+    if (limit <= 0) return
+    cycle_length = limit + 4
+    offset = modulo(max(0, state%ticker_offset), cycle_length)
+    if (offset > limit) offset = 0
+  end function horizontal_text_ticker_offset
+
   integer function text_cell_width(text) result(width)
     character(len=*), intent(in) :: text
     integer :: glyph_bytes
@@ -106,6 +214,56 @@ contains
       clipped = first_cells(original, content_width) // "..."
     end if
   end function truncated_text
+
+  integer function text_horizontal_scroll_limit(text, width) result(limit)
+    character(len=*), intent(in) :: text
+    integer, intent(in) :: width
+    integer :: full_width
+
+    limit = 0
+    if (width <= 0) return
+    full_width = text_cell_width(text)
+    if (full_width <= width) return
+    if (width <= 3) then
+      limit = max(0, full_width - width)
+    else
+      limit = max(0, full_width - (width - 3))
+    end if
+  end function text_horizontal_scroll_limit
+
+  function horizontal_truncated_text(text, width, offset) result(clipped)
+    character(len=*), intent(in) :: text
+    integer, intent(in) :: width
+    integer, intent(in) :: offset
+    character(len=:), allocatable :: clipped
+    integer :: actual_offset
+    integer :: content_width
+    integer :: limit
+
+    if (width <= 0) then
+      clipped = ""
+      return
+    end if
+    if (text_cell_width(text) <= width) then
+      clipped = text
+      return
+    end if
+
+    limit = text_horizontal_scroll_limit(text, width)
+    actual_offset = max(0, min(limit, offset))
+    if (actual_offset <= 0) then
+      clipped = truncated_text(text, width)
+    else if (width <= 3) then
+      clipped = cells_from(text, actual_offset + 1, width)
+    else if (actual_offset >= limit) then
+      clipped = "..." // last_cells(text, width - 3)
+    else if (width <= 6) then
+      clipped = cells_from(text, actual_offset + 1, width)
+    else
+      content_width = width - 6
+      clipped = "..." // cells_from(text, actual_offset + 1, content_width) // "..."
+    end if
+  end function horizontal_truncated_text
 
   function format_percent(value) result(text)
     real, intent(in) :: value
@@ -199,6 +357,51 @@ contains
     end do
   end function first_cells
 
+  function last_cells(text, width) result(clipped)
+    character(len=*), intent(in) :: text
+    integer, intent(in) :: width
+    character(len=:), allocatable :: clipped
+    integer :: start_cell
+
+    if (width <= 0) then
+      clipped = ""
+      return
+    end if
+
+    start_cell = max(1, text_cell_width(text) - width + 1)
+    clipped = cells_from(text, start_cell, width)
+  end function last_cells
+
+  function cells_from(text, start_cell, width) result(clipped)
+    character(len=*), intent(in) :: text
+    integer, intent(in) :: start_cell
+    integer, intent(in) :: width
+    character(len=:), allocatable :: clipped
+    integer :: cell_index
+    integer :: glyph_bytes
+    integer :: glyph_count
+    integer :: i
+
+    clipped = ""
+    if (width <= 0) return
+
+    cell_index = 1
+    i = 1
+    do while (i <= len(text) .and. cell_index < max(1, start_cell))
+      glyph_bytes = utf8_glyph_bytes(text, i)
+      i = i + glyph_bytes
+      cell_index = cell_index + 1
+    end do
+
+    glyph_count = 0
+    do while (i <= len(text) .and. glyph_count < width)
+      glyph_bytes = utf8_glyph_bytes(text, i)
+      clipped = clipped // text(i:i + glyph_bytes - 1)
+      i = i + glyph_bytes
+      glyph_count = glyph_count + 1
+    end do
+  end function cells_from
+
   integer function utf8_glyph_bytes(text, start) result(byte_count)
     character(len=*), intent(in) :: text
     integer, intent(in) :: start
@@ -223,5 +426,14 @@ contains
     end if
     byte_count = max(1, min(byte_count, len(text) - start + 1))
   end function utf8_glyph_bytes
+
+  function integer_text(value) result(text)
+    integer, intent(in) :: value
+    character(len=:), allocatable :: text
+    character(len=32) :: scratch
+
+    write(scratch, '(i0)') value
+    text = trim(scratch)
+  end function integer_text
 
 end module ftop_text

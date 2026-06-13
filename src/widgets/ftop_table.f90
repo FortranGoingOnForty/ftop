@@ -2,9 +2,10 @@ module ftop_table
   use fgof_screen, only : clear_screen_style, put_glyph
   use fgof_screen_types, only : screen_buffer, screen_style
   use ftop_text, only : &
+    horizontal_text_state, &
     TEXT_ALIGN_LEFT, &
     TEXT_ALIGN_RIGHT, &
-    render_text, &
+    render_horizontal_text, &
     text_cell_width
   use ftop_widgets, only : widget, widget_rect, widget_size
   implicit none
@@ -78,7 +79,7 @@ contains
 
   subroutine render_table(buffer, rect, columns, cells, scroll_row, selected_row, separator, &
                           show_header, striped, style, header_style, selected_style, &
-                          alternate_style, separator_style)
+                          alternate_style, separator_style, horizontal_state, active_selected_row)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: rect
     type(table_column), intent(in) :: columns(:)
@@ -93,6 +94,8 @@ contains
     type(screen_style), intent(in), optional :: selected_style
     type(screen_style), intent(in), optional :: alternate_style
     type(screen_style), intent(in), optional :: separator_style
+    type(horizontal_text_state), intent(inout), optional :: horizontal_state
+    logical, intent(in), optional :: active_selected_row
     integer, allocatable :: widths(:)
     type(screen_style) :: active_alternate_style
     type(screen_style) :: active_header_style
@@ -111,6 +114,7 @@ contains
     integer :: table_row
     logical :: actual_show_header
     logical :: actual_striped
+    logical :: selected_row_active
 
     if (rect%width <= 0 .or. rect%height <= 0) return
     if (buffer%size%width <= 0 .or. buffer%size%height <= 0) return
@@ -121,11 +125,13 @@ contains
     actual_separator = TABLE_SEPARATOR_SPACE
     actual_show_header = .true.
     actual_striped = .false.
+    selected_row_active = .true.
     if (present(scroll_row)) actual_scroll_row = max(1, scroll_row)
     if (present(selected_row)) actual_selected_row = selected_row
     if (present(separator)) actual_separator = separator
     if (present(show_header)) actual_show_header = show_header
     if (present(striped)) actual_striped = striped
+    if (present(active_selected_row)) selected_row_active = active_selected_row
 
     active_style = clear_screen_style()
     active_header_style = clear_screen_style()
@@ -145,7 +151,7 @@ contains
     draw_row = rect%row
     if (actual_show_header) then
       call render_header(buffer, widget_rect(draw_row, rect%col, rect%width, 1), columns, widths, &
-                         actual_separator, active_header_style, active_separator_style)
+                         actual_separator, active_header_style, active_separator_style, horizontal_state)
       draw_row = draw_row + 1
     end if
 
@@ -161,7 +167,7 @@ contains
       if (data_row == actual_selected_row) row_style = active_selected_style
       call render_data_row(buffer, widget_rect(draw_row + table_row - 1, rect%col, rect%width, 1), &
                            columns, cells, data_row, widths, actual_separator, row_style, &
-                           active_separator_style)
+                           active_separator_style, horizontal_state, selected_row_active .and. data_row == actual_selected_row)
     end do
   end subroutine render_table
 
@@ -305,7 +311,7 @@ contains
     if (allocated(self%cells)) size_value%height = size_value%height + min(1, size(self%cells, 1))
   end function table_widget_min_size
 
-  subroutine render_header(buffer, rect, columns, widths, separator, header_style, separator_style)
+  subroutine render_header(buffer, rect, columns, widths, separator, header_style, separator_style, horizontal_state)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: rect
     type(table_column), intent(in) :: columns(:)
@@ -313,14 +319,16 @@ contains
     integer, intent(in) :: separator
     type(screen_style), intent(in) :: header_style
     type(screen_style), intent(in) :: separator_style
+    type(horizontal_text_state), intent(inout), optional :: horizontal_state
     integer :: col
     integer :: draw_col
 
     draw_col = rect%col
     do col = 1, size(columns)
       if (widths(col) > 0) then
-        call render_text(buffer, widget_rect(rect%row, draw_col, widths(col), 1), &
-                         column_header_text(columns(col)), header_style, columns(col)%alignment)
+        call render_horizontal_text(buffer, widget_rect(rect%row, draw_col, widths(col), 1), &
+                                    column_header_text(columns(col)), header_style, horizontal_state, &
+                                    columns(col)%alignment)
       end if
       draw_col = draw_col + widths(col)
       if (col < size(columns)) call render_separator(buffer, rect%row, draw_col, separator, separator_style)
@@ -328,7 +336,8 @@ contains
     end do
   end subroutine render_header
 
-  subroutine render_data_row(buffer, rect, columns, cells, row_index, widths, separator, row_style, separator_style)
+  subroutine render_data_row(buffer, rect, columns, cells, row_index, widths, separator, row_style, separator_style, &
+                             horizontal_state, active_row)
     type(screen_buffer), intent(inout) :: buffer
     type(widget_rect), intent(in) :: rect
     type(table_column), intent(in) :: columns(:)
@@ -338,6 +347,8 @@ contains
     integer, intent(in) :: separator
     type(screen_style), intent(in) :: row_style
     type(screen_style), intent(in) :: separator_style
+    type(horizontal_text_state), intent(inout), optional :: horizontal_state
+    logical, intent(in) :: active_row
     type(screen_style) :: cell_style
     integer :: col
     integer :: draw_col
@@ -347,8 +358,9 @@ contains
       if (widths(col) > 0) then
         cell_style = row_style
         if (cells(row_index, col)%style_set) cell_style = cells(row_index, col)%style
-        call render_text(buffer, widget_rect(rect%row, draw_col, widths(col), 1), &
-                         table_cell_text(cells, row_index, col), cell_style, columns(col)%alignment)
+        call render_horizontal_text(buffer, widget_rect(rect%row, draw_col, widths(col), 1), &
+                                    table_cell_text(cells, row_index, col), cell_style, horizontal_state, &
+                                    columns(col)%alignment, active=active_row, ticker=.false.)
       end if
       draw_col = draw_col + widths(col)
       if (col < size(columns)) call render_separator(buffer, rect%row, draw_col, separator, separator_style)
